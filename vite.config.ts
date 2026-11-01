@@ -20,6 +20,10 @@ export default defineConfig(({ command, mode }) => {
   }
 
   return {
+    // The desktop build keeps the default root base. The web
+    // version (GitHub Pages) builds with WEB_BASE=/desktop/ so
+    // asset paths resolve under the repository's Pages subpath.
+    base: process.env.WEB_BASE || "/",
     define: {
       __APP_VERSION__: JSON.stringify(pkg.version),
     },
