@@ -24,6 +24,12 @@ export class Deck {
    * moments of a track that is leaving without a blend.
    */
   readonly echoSend: GainNode;
+  /**
+   * Per-track level matching: a static gain set when a track loads,
+   * so quiet and loud masters play at comparable loudness. It sits
+   * before everything else; no automation ever writes to it.
+   */
+  readonly level: GainNode;
 
   private source: AudioBufferSourceNode | null = null;
   private buffer: AudioBuffer | null = null;
@@ -49,6 +55,10 @@ export class Deck {
     this.echoSend = context.createGain();
     this.echoSend.gain.value = 0;
 
+    this.level = context.createGain();
+    this.level.gain.value = 1;
+
+    this.level.connect(this.bass);
     this.bass.connect(this.bassTrim);
     this.bassTrim.connect(this.gain);
     this.gain.connect(destination);
@@ -60,6 +70,11 @@ export class Deck {
 
   load(buffer: AudioBuffer): void {
     this.buffer = buffer;
+  }
+
+  /** Sets this deck's level-matching gain (see levelMatch). */
+  setLevel(gainValue: number): void {
+    this.level.gain.value = gainValue;
   }
 
   get loaded(): boolean {
@@ -76,7 +91,7 @@ export class Deck {
     const source = this.context.createBufferSource();
     source.buffer = this.buffer;
     source.playbackRate.value = rate;
-    source.connect(this.bass);
+    source.connect(this.level);
     source.start(when, Math.max(0, offsetSec));
     this.source = source;
   }

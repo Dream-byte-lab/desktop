@@ -120,6 +120,7 @@ describe("candidateFromAnalysis", () => {
       drops: [],
       key: C_MAJOR,
       vocalRanges: [],
+      loudness: 0.4,
     };
     const result = candidateFromAnalysis("t1", analysis);
     expect(result.bpm).toBe(126);

@@ -170,9 +170,10 @@ export class TwoDeckMixer {
    * Starts a track on the current deck, full volume, natural tempo.
    * Returns the audio-clock time at which it starts.
    */
-  playNow(buffer: AudioBuffer, offsetSec = 0): number {
+  playNow(buffer: AudioBuffer, offsetSec = 0, levelGain = 1): number {
     const deck = this.currentDeck;
     deck.load(buffer);
+    deck.setLevel(levelGain);
     const now = this.context.currentTime;
     deck.gain.gain.setValueAtTime(1, now);
     deck.bass.gain.setValueAtTime(BASS_FLAT_DB, now);
@@ -200,10 +201,12 @@ export class TwoDeckMixer {
   transitionTo(
     nextBuffer: AudioBuffer,
     plan: TransitionPlan,
+    levelGain = 1,
   ): { blendStartCtxTime: number; blendEndCtxTime: number } {
     const outgoing = this.currentDeck;
     const incoming = this.nextDeck;
     incoming.load(nextBuffer);
+    incoming.setLevel(levelGain);
 
     const blendStart =
       this.context.currentTime + Math.max(SCHEDULE_AHEAD_SEC, plan.startsInSec);

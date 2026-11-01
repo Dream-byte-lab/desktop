@@ -10,6 +10,7 @@ function analysis(partial: Partial<TrackAnalysis>): TrackAnalysis {
     drops: [],
     key: null,
     vocalRanges: [],
+    loudness: 0.4,
     ...partial,
   };
 }

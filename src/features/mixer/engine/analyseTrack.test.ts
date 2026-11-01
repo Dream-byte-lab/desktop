@@ -79,6 +79,21 @@ describe("analyseTrack", () => {
     expect(analysis!.drops[0].timeSec).toBeLessThan(17);
   });
 
+  it("measures absolute loudness that scales with the recording level", () => {
+    const loud = analyseTrack(
+      syntheticSong({ bpm: 120, seconds: 20, firstBeatSec: 0.1 }),
+      SAMPLE_RATE,
+    );
+    const base = syntheticSong({ bpm: 120, seconds: 20, firstBeatSec: 0.1 });
+    const quietSamples = base.map((s) => s * 0.25);
+    const quiet = analyseTrack(quietSamples, SAMPLE_RATE);
+    expect(loud).not.toBeNull();
+    expect(quiet).not.toBeNull();
+    // Same song recorded a quarter as loud: a quarter of the RMS.
+    expect(loud!.loudness / quiet!.loudness).toBeCloseTo(4, 1);
+    expect(loud!.loudness).toBeGreaterThan(0);
+  });
+
   it("returns null for silence", () => {
     const samples = new Float32Array(SAMPLE_RATE * 10);
     expect(analyseTrack(samples, SAMPLE_RATE)).toBeNull();

@@ -39,6 +39,13 @@ export interface TrackAnalysis {
   key: KeyEstimate | null;
   /** Where someone is singing — the planner must not overlap two of these. */
   vocalRanges: VocalRange[];
+  /**
+   * The track's overall loudness: RMS across the whole track, absolute
+   * (not normalised). This is what lets the session level-match tracks
+   * against each other, so a quiet master doesn't sound like the party
+   * suddenly lost its energy.
+   */
+  loudness: number;
 }
 
 export interface AnalyseOptions {
@@ -268,6 +275,13 @@ export function analyseTrack(
 
   const vocalRanges = detectVocalRanges(samples, sampleRate);
 
+  // Overall loudness: one absolute RMS pass over the whole track.
+  let sumSquares = 0;
+  for (let i = 0; i < samples.length; i += 1) {
+    sumSquares += samples[i] * samples[i];
+  }
+  const loudness = Math.sqrt(sumSquares / Math.max(1, samples.length));
+
   return {
     beatMap,
     tempoConfidence: tempo.confidence,
@@ -275,6 +289,7 @@ export function analyseTrack(
     drops,
     key,
     vocalRanges,
+    loudness,
   };
 }
 

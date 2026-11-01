@@ -1,6 +1,7 @@
 import type { Track } from "@/shared/types";
 import { usePlayerStore } from "../../player/store/playerStore";
 import { assembleSet, candidateFromAnalysis } from "./curatedSet";
+import { levelGainFor } from "./levelMatch";
 import { decideTransition } from "./transitionStyle";
 import { recordListen } from "./tasteTracker";
 import { loadTrackForMixing, type PreparedTrack } from "./trackSource";
@@ -229,7 +230,11 @@ export class DjSession {
     this.clearTimers();
     this.transitionPlanned = false;
     this.mixer.stopAll();
-    const startAt = this.mixer.playNow(this.current.buffer, target);
+    const startAt = this.mixer.playNow(
+      this.current.buffer,
+      target,
+      levelGainFor(this.current.analysis.loudness),
+    );
     this.segments = [
       { fromCtxTime: startAt, trackTimeAtStart: target, rate: 1 },
     ];
@@ -299,7 +304,11 @@ export class DjSession {
     this.blendingNow = false;
     this.onBlendChange?.(false);
 
-    const startAt = this.mixer.playNow(prepared.buffer, offsetSec);
+    const startAt = this.mixer.playNow(
+      prepared.buffer,
+      offsetSec,
+      levelGainFor(prepared.analysis.loudness),
+    );
     this.segments = [
       { fromCtxTime: startAt, trackTimeAtStart: offsetSec, rate: 1 },
     ];
@@ -412,7 +421,11 @@ export class DjSession {
     const incoming = this.next;
     this.blendingNow = true;
     this.onBlendChange?.(true);
-    const times = this.mixer.transitionTo(incoming.buffer, plan);
+    const times = this.mixer.transitionTo(
+      incoming.buffer,
+      plan,
+      levelGainFor(incoming.analysis.loudness),
+    );
 
     const blendSpan = plan.blendDurationSec * plan.incomingRate;
     const entryTrackTime = plan.incomingStartSec + blendSpan;
