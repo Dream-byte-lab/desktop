@@ -46,6 +46,9 @@ export class DjSession {
   private transitionPlanned = false;
   private lastVolume = -1;
 
+  /** Notified whenever the session starts or stops, for UI state. */
+  onRunningChange: ((running: boolean) => void) | null = null;
+
   get isRunning(): boolean {
     return this.mixer !== null;
   }
@@ -72,6 +75,7 @@ export class DjSession {
     }
     this.beginTrack(first, startIndex);
     this.ticker = setInterval(() => this.tick(), TICK_MS);
+    this.onRunningChange?.(true);
   }
 
   pause(): void {
@@ -114,6 +118,7 @@ export class DjSession {
     this.next = null;
     this.segments = [];
     this.transitionPlanned = false;
+    this.onRunningChange?.(false);
   }
 
   private beginTrack(prepared: PreparedTrack, index: number): void {
