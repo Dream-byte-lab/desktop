@@ -1,3 +1,20 @@
-<svg width="45" height="35" viewBox="0 0 45 35" fill="none" xmlns="http://www.w3.org/2000/svg">
-<path d="M4 0C1.79086 0 0 1.79086 0 4V27.2081C0 30.2751 3.30951 32.201 5.97608 30.6859L13.9629 26.1478C16.6295 24.6327 19.939 26.5587 19.939 29.6256V31C19.939 33.2091 21.7298 35 23.939 35H41C43.2091 35 45 33.2091 45 31V27.5586C45 25.3494 43.2091 23.5586 41 23.5586H35.2783C33.0691 23.5586 31.2783 21.7677 31.2783 19.5586V10.0519C31.2783 6.98497 27.9688 5.05899 25.3022 6.57411L17.3153 11.1121C14.6488 12.6273 11.3393 10.7013 11.3393 7.63433V4C11.3393 1.79086 9.54843 0 7.33929 0H4Z" fill="white"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#171233"/>
+      <stop offset="1" stop-color="#241b52"/>
+    </linearGradient>
+    <linearGradient id="bars" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0" stop-color="#22d3ee"/>
+      <stop offset="1" stop-color="#a3e635"/>
+    </linearGradient>
+  </defs>
+  <rect x="16" y="16" width="480" height="480" rx="112" fill="url(#bg)"/>
+  <g fill="url(#bars)">
+    <rect x="70" y="250" width="52" height="150" rx="26"/>
+    <rect x="150" y="140" width="52" height="260" rx="26"/>
+    <rect x="230" y="80" width="52" height="320" rx="26"/>
+    <rect x="310" y="190" width="52" height="210" rx="26"/>
+    <rect x="390" y="270" width="52" height="130" rx="26"/>
+  </g>
 </svg>

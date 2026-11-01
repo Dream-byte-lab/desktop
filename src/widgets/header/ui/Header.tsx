@@ -77,15 +77,15 @@ export const Header = forwardRef<HTMLElement, HeaderProps>(function Header(
         <Link
           to="/"
           data-no-window-drag
-          title="Liner"
+          title="Linerave"
           className="flex items-center justify-center cursor-pointer active:scale-95 transition-transform"
         >
           <img
             src={logo}
-            alt="Liner"
+            alt="Linerave"
             width={39}
             height={30}
-            className="h-[30px] w-auto object-contain theme-logo invert dark:invert-0 select-none"
+            className="h-[30px] w-auto object-contain rounded-[7px] select-none"
             draggable={false}
           />
         </Link>

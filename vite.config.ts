@@ -26,6 +26,10 @@ export default defineConfig(({ command, mode }) => {
     base: process.env.WEB_BASE || "/",
     define: {
       __APP_VERSION__: JSON.stringify(pkg.version),
+      // True only for the GitHub Pages build (WEB_BASE set): the
+      // web version is intentional there, so the "should run
+      // inside Electron" heads-up stays hidden.
+      __LINERAVE_WEB__: JSON.stringify(Boolean(process.env.WEB_BASE)),
     },
     plugins: [
       react(),

@@ -17,6 +17,10 @@ export default function EnvironmentWarning() {
   });
 
   if (typeof window !== "undefined" && window.linerElectron) return null;
+  // The published web version runs in a browser on purpose.
+  if (typeof __LINERAVE_WEB__ !== "undefined" && __LINERAVE_WEB__) {
+    return null;
+  }
   if (skipped) return null;
 
   const skip = () => {

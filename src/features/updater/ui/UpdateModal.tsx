@@ -32,7 +32,7 @@ export default function UpdateModal() {
           description={
             <>
               {t("updater.modal_desc", { version: updateInfo.version }) ||
-                `A new version of Liner (v${updateInfo.version}) is ready.`}{" "}
+                `A new version of Linerave (v${updateInfo.version}) is ready.`}{" "}
               <a
                 href={changelogUrl}
                 target="_blank"
