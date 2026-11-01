@@ -1,0 +1,122 @@
+name: Build Windows installer
+
+# Manual only: press "Run workflow" on the Actions tab.
+# Builds the Linerave Windows installer on GitHub's Windows machines,
+# the same way the original Liner is built, instead of on the Surface.
+# Produces two installers as downloadable artifacts:
+#   linerave-windows-x64    - the standard build, native add-on included
+#   linerave-windows-arm64  - native build for ARM Surfaces (no add-on;
+#                             the app uses its built-in fallback preview)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows-x64:
+    name: Windows installer (x64)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Note if the Linerave icon files are missing
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "build/icon.ico")) {
+            Write-Host "::warning::build/icon.ico is not in the repository yet, so this installer will carry the default Electron icon. The app itself is unaffected."
+          }
+
+      - name: Build the native snap preview add-on
+        run: pnpm run native:build
+
+      - name: Build the app
+        run: pnpm run build
+
+      - name: Package the Windows installer (NSIS, x64)
+        run: pnpm exec electron-builder --win --x64 -p never
+        env:
+          VITE_API_URL: https://api.tryliner.fun
+          VITE_COVERS_PROXY_URL: https://covers.tryliner.fun
+
+      # Upstream's own rule: never ship an installer without this add-on.
+      # It must be in the package, load, and export what the app calls.
+      - name: Verify native snap preview add-on is packaged
+        shell: pwsh
+        run: |
+          $addon = "release/win-unpacked/resources/app.asar.unpacked/native/snap-preview/build/Release/snap_preview.node"
+          if (-not (Test-Path $addon)) { throw "snap_preview.node missing from the package: $addon" }
+          Write-Host "ok: $addon ($((Get-Item $addon).Length) bytes)"
+          node scripts/verify-native-addon.cjs $addon
+
+      - name: Upload the x64 installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: linerave-windows-x64
+          path: release/*.exe
+          if-no-files-found: error
+
+  build-windows-arm64:
+    name: Windows installer (ARM64)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Note if the Linerave icon files are missing
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "build/icon.ico")) {
+            Write-Host "::warning::build/icon.ico is not in the repository yet, so this installer will carry the default Electron icon. The app itself is unaffected."
+          }
+
+      # No native:build here on purpose: the snap preview add-on is an
+      # x64 binary; an ARM64 package must not carry the wrong-arch copy.
+      # The app falls back to its built-in preview when the add-on is absent.
+      - name: Build the app
+        run: pnpm run build
+
+      - name: Package the Windows installer (NSIS, ARM64)
+        run: pnpm exec electron-builder --win --arm64 -p never --config.directories.output=release-arm64
+        env:
+          VITE_API_URL: https://api.tryliner.fun
+          VITE_COVERS_PROXY_URL: https://covers.tryliner.fun
+
+      - name: Upload the ARM64 installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: linerave-windows-arm64
+          path: release-arm64/*.exe
+          if-no-files-found: error
