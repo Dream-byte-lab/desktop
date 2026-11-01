@@ -68,7 +68,9 @@ export function useRecentlyPlayed(limit = 20) {
   const owner = useSessionOwner();
   const { data, isLoading } = useCachedResource(
     `home:recent:${owner}:${limit}`,
-    () => loadRecentlyPlayed(limit),
+    // Guests have no listening history on the server — skip the call
+    // entirely instead of failing against an account-only endpoint.
+    () => (owner ? loadRecentlyPlayed(limit) : Promise.resolve(EMPTY_ITEMS)),
     RECENT_POLICY,
   );
   return { data: data ?? EMPTY_ITEMS, isLoading };

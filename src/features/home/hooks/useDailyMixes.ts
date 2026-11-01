@@ -121,11 +121,15 @@ export function useDailyMixes() {
   const owner = useSessionOwner();
   const { data, isLoading } = useCachedResource(
     dailyMixesCacheKey(owner),
+    // Daily mixes are personalised per account; guests skip the call and
+    // the section simply stays hidden.
     () =>
-      loadWithRetry(
-        () => api.getDailyMixes(),
-        () => true,
-      ).then((res) => toDailyMixes(res.items)),
+      owner
+        ? loadWithRetry(
+            () => api.getDailyMixes(),
+            () => true,
+          ).then((res) => toDailyMixes(res.items))
+        : Promise.resolve(EMPTY_MIXES),
     DAILY_MIXES_POLICY,
   );
 

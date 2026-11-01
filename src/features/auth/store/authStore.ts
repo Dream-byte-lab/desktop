@@ -13,7 +13,14 @@ import { playerEngine } from "@/features/player";
 import { queryCache } from "@/shared/cache/queryCache";
 import { clearScreenCache } from "@/shared/cache/screenCache";
 
-export type AuthStatus = "initializing" | "authenticated" | "anonymous";
+export type AuthStatus =
+  | "initializing"
+  | "authenticated"
+  // No account: the app runs as a guest (local files, on-device playlists,
+  // public catalogue sections). "anonymous" is kept only for compatibility
+  // with older states and is treated exactly like "guest" everywhere.
+  | "guest"
+  | "anonymous";
 export type AuthState = {
   status: AuthStatus;
   user: AuthUser | null;
@@ -35,7 +42,7 @@ export const useAuthStore = create<AuthState>((set) => ({
   initialize: async () => {
     const stored = getAuthSession();
     if (!stored) {
-      set({ status: "anonymous", user: null });
+      set({ status: "guest", user: null });
       return;
     }
     // Optimistically authenticate if stored user is present
@@ -89,14 +96,14 @@ export const useAuthStore = create<AuthState>((set) => ({
           return;
         }
         setAuthSession(null);
-        set({ status: "anonymous", user: null });
+        set({ status: "guest", user: null });
       } else {
         // If it's a network error, timeout, or transient 5xx, preserve authenticated state if we have a stored session
         if (stored.user || stored.accessToken) {
           set({ status: "authenticated", user: stored.user });
         } else {
           setAuthSession(null);
-          set({ status: "anonymous", user: null });
+          set({ status: "guest", user: null });
         }
       }
     }
@@ -141,7 +148,7 @@ export const useAuthStore = create<AuthState>((set) => ({
     await clearAuthSession();
     queryCache.clear();
     clearScreenCache();
-    set({ status: "anonymous", user: null });
+    set({ status: "guest", user: null });
     if (typeof window !== "undefined") {
       window.dispatchEvent(new Event("library:changed"));
     }
@@ -163,7 +170,11 @@ async function clearPlayback(): Promise<void> {
 }
 
 useAuthStore.subscribe((state, previous) => {
-  if (state.status === "anonymous" && previous.status !== "anonymous") {
+  if (
+    (state.status === "guest" || state.status === "anonymous") &&
+    previous.status !== "guest" &&
+    previous.status !== "anonymous"
+  ) {
     void clearPlayback();
   }
 });

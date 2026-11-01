@@ -9,7 +9,7 @@ vi.mock("@/shared/api", () => ({
   api: {
     getHistory: vi.fn(),
   },
-  getAuthSession: () => null,
+  getAuthSession: () => ({ user: { id: "user-1" } }),
   toClientTrack: (track: any) => ({
     id: track.id,
     title: track.title,

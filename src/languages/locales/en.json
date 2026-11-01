@@ -310,6 +310,7 @@
     "placeholder_confirm": "Repeat your password",
     "btn_sign_in": "Sign in",
     "btn_signing_in": "Signing in…",
+    "btn_continue_guest": "Continue without an account",
     "btn_create_account": "Create account",
     "btn_creating_account": "Creating account…",
     "separator_or": "or",
@@ -583,6 +584,8 @@
     "docs": "Docs",
     "support": "Support",
     "manage_account": "Manage account",
+    "guest": "Guest",
+    "guest_hint": "Sign in to sync likes, playlists and history",
     "tabs": {
       "general": "General",
       "appearance": "Appearance",

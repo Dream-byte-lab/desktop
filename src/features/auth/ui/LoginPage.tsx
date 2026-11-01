@@ -588,6 +588,17 @@ export default function LoginPage() {
                     </motion.div>
                   )}
                 </AnimatePresence>
+
+                {/* No account needed: guests go straight into the app */}
+                <div className="mt-[16px] text-center">
+                  <button
+                    type="button"
+                    onClick={() => navigate("/")}
+                    className="cursor-pointer text-[12px] font-[500] text-text-secondary underline underline-offset-2 transition-colors hover:text-text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-text-primary rounded-xs"
+                  >
+                    {t("login.btn_continue_guest")}
+                  </button>
+                </div>
               </form>
             </div>
           </div>

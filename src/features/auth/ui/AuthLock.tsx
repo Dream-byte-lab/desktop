@@ -26,10 +26,11 @@ export function AuthLock({ children }: { children: React.ReactNode }) {
     return () => window.removeEventListener("auth:changed", syncExpiredSession);
   }, [initialize]);
 
+  // Linerave is usable without an account: guests (and the legacy "anonymous"
+  // state) go straight into the app. Signing in is optional — it only adds
+  // sync (likes, history, cloud playlists). The login page stays reachable
+  // for guests who want it, and signed-in users are bounced off it.
   useEffect(() => {
-    if (status === "anonymous" && pathname !== "/login") {
-      navigate("/login", { replace: true });
-    }
     if (status === "authenticated" && pathname === "/login") {
       navigate("/", { replace: true });
     }
@@ -37,7 +38,6 @@ export function AuthLock({ children }: { children: React.ReactNode }) {
 
   if (
     status === "initializing" ||
-    (status === "anonymous" && pathname !== "/login") ||
     (status === "authenticated" && pathname === "/login")
   ) {
     return (

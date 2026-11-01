@@ -52,7 +52,7 @@ describe("authStore.initialize — expired access token at launch", () => {
 
     await useAuthStore.getState().initialize();
 
-    expect(useAuthStore.getState().status).toBe("anonymous");
+    expect(useAuthStore.getState().status).toBe("guest");
     expect(getAuthSession()).toBeNull();
   });
 
@@ -92,13 +92,13 @@ describe("signing out clears the player", () => {
 
     expect(sessionDuringStop).toMatchObject({ refreshToken: "refresh-1" });
     expect(getAuthSession()).toBeNull();
-    expect(useAuthStore.getState().status).toBe("anonymous");
+    expect(useAuthStore.getState().status).toBe("guest");
   });
 
   it("clears the player whenever the app ends up signed out", async () => {
     useAuthStore.setState({ status: "initializing", user: null });
     await useAuthStore.getState().initialize();
-    expect(useAuthStore.getState().status).toBe("anonymous");
+    expect(useAuthStore.getState().status).toBe("guest");
     expect(player.stopAndClear).toHaveBeenCalled();
   });
 
@@ -114,7 +114,7 @@ describe("signing out clears the player", () => {
       const loggingOut = useAuthStore.getState().logout();
       await vi.advanceTimersByTimeAsync(3_000);
       await loggingOut;
-      expect(useAuthStore.getState().status).toBe("anonymous");
+      expect(useAuthStore.getState().status).toBe("guest");
     } finally {
       vi.useRealTimers();
     }
