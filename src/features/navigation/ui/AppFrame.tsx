@@ -49,6 +49,7 @@ import {
   usePlayerStore,
   useGlassBlur,
 } from "@/features/player";
+import { WelcomeGreeting } from "@/features/greeting/ui/WelcomeGreeting";
 import { DjProView } from "@/features/mixer/ui/DjProView";
 import { DjSimpleView } from "@/features/mixer/ui/DjSimpleView";
 import SearchResultsList from "@/features/search/ui/SearchResultsList";
@@ -93,6 +94,7 @@ const LEGACY_LAYOUT_STORAGE_KEYS = [
 const AppOverlays = memo(function AppOverlays() {
   return (
     <>
+      <WelcomeGreeting />
       <AddToPlaylistModal />
       <AddToLibraryModal />
       <RemoveFromPlaylistModal />
