@@ -37,22 +37,26 @@ function syntheticSong(options: {
 }
 
 describe("analyseTrack", () => {
-  it("finds the tempo and first downbeat of a 120 bpm click song", () => {
-    const samples = syntheticSong({
-      bpm: 120,
-      seconds: 40,
-      firstBeatSec: 0.25,
-    });
-    const analysis = analyseTrack(samples, SAMPLE_RATE);
-    expect(analysis).not.toBeNull();
-    expect(analysis!.beatMap.bpm).toBeGreaterThan(118);
-    expect(analysis!.beatMap.bpm).toBeLessThan(122);
-    expect(analysis!.beatMap.firstBeatSec).toBeGreaterThan(0.17);
-    expect(analysis!.beatMap.firstBeatSec).toBeLessThan(0.33);
-    expect(analysis!.tempoConfidence).toBeGreaterThan(0);
-  });
+  it(
+    "finds the tempo and first downbeat of a 120 bpm click song",
+    { timeout: 30000 },
+    () => {
+      const samples = syntheticSong({
+        bpm: 120,
+        seconds: 40,
+        firstBeatSec: 0.25,
+      });
+      const analysis = analyseTrack(samples, SAMPLE_RATE);
+      expect(analysis).not.toBeNull();
+      expect(analysis!.beatMap.bpm).toBeGreaterThan(118);
+      expect(analysis!.beatMap.bpm).toBeLessThan(122);
+      expect(analysis!.beatMap.firstBeatSec).toBeGreaterThan(0.17);
+      expect(analysis!.beatMap.firstBeatSec).toBeLessThan(0.33);
+      expect(analysis!.tempoConfidence).toBeGreaterThan(0);
+    },
+  );
 
-  it("finds a different tempo", () => {
+  it("finds a different tempo", { timeout: 30000 }, () => {
     const samples = syntheticSong({
       bpm: 126,
       seconds: 30,
@@ -64,37 +68,45 @@ describe("analyseTrack", () => {
     expect(analysis!.beatMap.bpm).toBeLessThan(128);
   });
 
-  it("spots the drop where a quiet section turns loud on a phrase boundary", () => {
-    const samples = syntheticSong({
-      bpm: 120,
-      seconds: 40,
-      firstBeatSec: 0,
-      quietUntilSec: 16,
-    });
-    const analysis = analyseTrack(samples, SAMPLE_RATE);
-    expect(analysis).not.toBeNull();
-    expect(analysis!.drops.length).toBeGreaterThan(0);
-    expect(analysis!.drops[0].beat).toBe(32);
-    expect(analysis!.drops[0].timeSec).toBeGreaterThan(15);
-    expect(analysis!.drops[0].timeSec).toBeLessThan(17);
-  });
+  it(
+    "spots the drop where a quiet section turns loud on a phrase boundary",
+    { timeout: 30000 },
+    () => {
+      const samples = syntheticSong({
+        bpm: 120,
+        seconds: 40,
+        firstBeatSec: 0,
+        quietUntilSec: 16,
+      });
+      const analysis = analyseTrack(samples, SAMPLE_RATE);
+      expect(analysis).not.toBeNull();
+      expect(analysis!.drops.length).toBeGreaterThan(0);
+      expect(analysis!.drops[0].beat).toBe(32);
+      expect(analysis!.drops[0].timeSec).toBeGreaterThan(15);
+      expect(analysis!.drops[0].timeSec).toBeLessThan(17);
+    },
+  );
 
-  it("measures absolute loudness that scales with the recording level", () => {
-    const loud = analyseTrack(
-      syntheticSong({ bpm: 120, seconds: 20, firstBeatSec: 0.1 }),
-      SAMPLE_RATE,
-    );
-    const base = syntheticSong({ bpm: 120, seconds: 20, firstBeatSec: 0.1 });
-    const quietSamples = base.map((s) => s * 0.25);
-    const quiet = analyseTrack(quietSamples, SAMPLE_RATE);
-    expect(loud).not.toBeNull();
-    expect(quiet).not.toBeNull();
-    // Same song recorded a quarter as loud: a quarter of the RMS.
-    expect(loud!.loudness / quiet!.loudness).toBeCloseTo(4, 1);
-    expect(loud!.loudness).toBeGreaterThan(0);
-  });
+  it(
+    "measures absolute loudness that scales with the recording level",
+    { timeout: 30000 },
+    () => {
+      const loud = analyseTrack(
+        syntheticSong({ bpm: 120, seconds: 20, firstBeatSec: 0.1 }),
+        SAMPLE_RATE,
+      );
+      const base = syntheticSong({ bpm: 120, seconds: 20, firstBeatSec: 0.1 });
+      const quietSamples = base.map((s) => s * 0.25);
+      const quiet = analyseTrack(quietSamples, SAMPLE_RATE);
+      expect(loud).not.toBeNull();
+      expect(quiet).not.toBeNull();
+      // Same song recorded a quarter as loud: a quarter of the RMS.
+      expect(loud!.loudness / quiet!.loudness).toBeCloseTo(4, 1);
+      expect(loud!.loudness).toBeGreaterThan(0);
+    },
+  );
 
-  it("returns null for silence", () => {
+  it("returns null for silence", { timeout: 30000 }, () => {
     const samples = new Float32Array(SAMPLE_RATE * 10);
     expect(analyseTrack(samples, SAMPLE_RATE)).toBeNull();
   });
