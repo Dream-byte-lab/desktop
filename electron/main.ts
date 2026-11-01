@@ -51,6 +51,7 @@ import {
 import { TouchBarManager } from "./touchbar.js";
 import { registerAuthSessionIpc } from "./auth-session-ipc.js";
 import { registerPartyIpc } from "./liverave/ipc.js";
+import { initStartupLog, slog } from "./startupLog.js";
 import { ThumbarController } from "./thumbar.js";
 import { OverlayManager } from "./overlay.js";
 import { detectCompositor } from "./compositor/index.js";
@@ -99,11 +100,21 @@ process.on("unhandledRejection", (reason) => {
   console.error("\x1b[41;37m main error \x1b[0m unhandled rejection:", reason);
 });
 
-// gpu & performance switches (keeps cpu low inside vms / budget laptops)
-app.commandLine.appendSwitch("enable-gpu-rasterization");
-app.commandLine.appendSwitch("enable-zero-copy");
-app.commandLine.appendSwitch("ignore-gpu-blocklist");
-app.commandLine.appendSwitch("enable-native-gpu-memory-buffers");
+// LINERAVE DIAGNOSTIC (temporary): upstream forced aggressive GPU
+// switches here (enable-gpu-rasterization, enable-zero-copy,
+// ignore-gpu-blocklist, enable-native-gpu-memory-buffers). On some
+// ARM/Qualcomm graphics stacks those produce a window that never
+// presents. This build turns GPU acceleration off entirely and keeps
+// a startup log, so a silent launch failure leaves evidence behind.
+initStartupLog();
+slog("diagnostic build: GPU acceleration disabled, embedded frontend forced");
+app.disableHardwareAcceleration();
+process.on("uncaughtException", (error) =>
+  slog(`uncaught exception: ${String(error)}`),
+);
+process.on("unhandledRejection", (reason) =>
+  slog(`unhandled rejection: ${String(reason)}`),
+);
 // forces resilient http/1.1 to prevent chromium err_http2_ping_failed on dropped network frames
 app.commandLine.appendSwitch("disable-http2");
 if (detectCompositor() !== "none") {
@@ -255,9 +266,11 @@ function createWindow() {
     minWidth: MIN_WINDOW_WIDTH,
     minHeight: MIN_WINDOW_HEIGHT,
     frame: false,
-    transparent: true,
-    backgroundColor: "#00000000",
-    hasShadow: false,
+    // LINERAVE DIAGNOSTIC (temporary): a solid window instead of upstream's
+    // transparent one, so a failure to paint is visible, never a ghost.
+    transparent: false,
+    backgroundColor: "#0e0e13",
+    hasShadow: true,
     fullscreenable: true,
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
@@ -437,16 +450,43 @@ function createWindow() {
       defaultRendererDist: RENDERER_DIST,
     });
     bundleManager.setMainWindow(mainWindow);
-    const manager = bundleManager;
-    const win = mainWindow;
-    void (async () => {
-      if (app.isPackaged)
-        await manager.updateBeforeLaunch().catch(() => undefined);
-      if (!win.isDestroyed()) win.loadFile(manager.getEffectiveIndexPath());
-    })();
+    // LINERAVE DIAGNOSTIC (temporary): upstream awaits a network update
+    // check (updateBeforeLaunch) before loading the first screen, so a
+    // hanging fetch can leave the window blank forever. This build logs
+    // what the bundle system would have served, then skips that gate and
+    // loads the built-in screen directly, logging every step the
+    // renderer takes so a silent failure names its own step.
+    slog(
+      `bundle would serve: ${bundleManager.getEffectiveIndexPath()} (userData: ${app.getPath("userData")})`,
+    );
+    const embeddedIndex = path.join(RENDERER_DIST, "index.html");
+    slog(`loading embedded frontend instead: ${embeddedIndex}`);
+    mainWindow.webContents.on("did-finish-load", () =>
+      slog("renderer: did-finish-load"),
+    );
+    mainWindow.webContents.on("did-fail-load", (_event, code, description) =>
+      slog(`renderer: did-fail-load ${code} ${description}`),
+    );
+    mainWindow.webContents.on("render-process-gone", (_event, details) =>
+      slog(
+        `renderer: render-process-gone reason=${details.reason} exit=${details.exitCode}`,
+      ),
+    );
+    const heartbeatWin = mainWindow;
+    setTimeout(
+      () =>
+        slog(
+          `heartbeat 20s: window destroyed=${heartbeatWin.isDestroyed()} visible=${heartbeatWin.isVisible()}`,
+        ),
+      20_000,
+    );
+    void mainWindow
+      .loadFile(embeddedIndex)
+      .catch((error) => slog(`loadFile rejected: ${String(error)}`));
   }
 
   mainWindow.once("ready-to-show", () => {
+    slog("window: ready-to-show — showing");
     mainWindow?.show();
     mainWindow?.focus();
   });

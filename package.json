@@ -1,6 +1,6 @@
 {
   "name": "linerave",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "private": true,
   "description": "Linerave \u2014 a DJ edition built on Liner",
@@ -55,7 +55,8 @@
     "files": [
       "dist/**/*",
       "dist-electron/**/*",
-      "native/snap-preview/build/Release/snap_preview.node"
+      "native/snap-preview/build/Release/snap_preview.node",
+      "!**/node_modules/**"
     ],
     "linux": {
       "executableName": "linerave",
