@@ -5,6 +5,8 @@ import {
   type RepeatMode,
   type PlayerState,
 } from "../store/playerStore";
+import { routeDjCommand } from "@/features/mixer/engine/djCommandRouter";
+import { djSession } from "@/features/mixer/engine/djSession";
 import { playerRuntime } from "./playerRuntime";
 import { isRadioContext, shouldRefillRadio } from "./radioMode";
 import { pitchShifter } from "./pitchShifter";
@@ -330,7 +332,13 @@ class PlayerEngine {
 
   constructor() {
     usePlayerStore.setState({
-      dispatch: this.dispatch.bind(this),
+      // While a DJ session runs, it gets first claim on transport
+      // commands; everything else reaches this engine unchanged.
+      dispatch: (command) => {
+        if (!routeDjCommand(command, djSession)) {
+          this.dispatch(command);
+        }
+      },
     });
 
     if (typeof window !== "undefined") {

@@ -53,6 +53,10 @@ export class DjSession {
     return this.mixer !== null;
   }
 
+  get isPaused(): boolean {
+    return this.context?.state === "suspended";
+  }
+
   async start(queue: Track[], startIndex = 0): Promise<void> {
     this.stop();
     if (queue.length === 0 || startIndex >= queue.length) return;
@@ -92,10 +96,69 @@ export class DjSession {
 
   /** Cuts straight to the next track, abandoning any planned blend. */
   skipNext(): void {
-    if (!this.next || !this.mixer) return;
+    if (!this.mixer || !this.current) return;
+    if (this.next) {
+      const next = this.next;
+      this.clearTimers();
+      this.mixer.stopAll();
+      this.beginTrack(next, this.index + 1);
+      return;
+    }
+    const nextTrack = this.queue[this.index + 1];
+    if (!nextTrack) return;
+    void loadTrackForMixing(nextTrack).then((prepared) => {
+      if (!prepared || !this.mixer) return;
+      this.clearTimers();
+      this.mixer.stopAll();
+      this.beginTrack(prepared, this.index + 1);
+    });
+  }
+
+  /**
+   * Back to the previous track — or, as players conventionally do,
+   * back to the start of the current one when it has barely begun or
+   * there is no previous track.
+   */
+  skipPrevious(): void {
+    if (!this.mixer || !this.current) return;
+    if (this.index <= 0 || this.positionNow() > 3) {
+      this.restartCurrent();
+      return;
+    }
+    const previousTrack = this.queue[this.index - 1];
+    void loadTrackForMixing(previousTrack).then((prepared) => {
+      if (!prepared || !this.mixer) return;
+      this.clearTimers();
+      this.mixer.stopAll();
+      this.beginTrack(prepared, this.index - 1);
+    });
+  }
+
+  /** Restarts the current track from the beginning. */
+  restartCurrent(): void {
+    if (!this.mixer || !this.current) return;
     this.clearTimers();
     this.mixer.stopAll();
-    this.beginTrack(this.next, this.index + 1);
+    this.beginTrack(this.current, this.index);
+  }
+
+  /**
+   * Jumps to a position inside the current track. Any planned or
+   * in-progress blend is abandoned; planning resumes from the new
+   * position on the next tick.
+   */
+  seekTo(positionMs: number): void {
+    if (!this.mixer || !this.context || !this.current) return;
+    const duration = this.current.buffer.duration;
+    const target = Math.min(Math.max(0, positionMs / 1000), duration - 0.1);
+    this.clearTimers();
+    this.transitionPlanned = false;
+    this.mixer.stopAll();
+    const startAt = this.mixer.playNow(this.current.buffer, target);
+    this.segments = [
+      { fromCtxTime: startAt, trackTimeAtStart: target, rate: 1 },
+    ];
+    usePlayerStore.getState().setPosition(Math.round(target * 1000));
   }
 
   stop(): void {
