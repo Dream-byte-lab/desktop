@@ -1,14 +1,14 @@
 {
-  "name": "@liner/client",
-  "version": "0.2.10",
+  "name": "linerave",
+  "version": "0.1.0",
   "type": "module",
   "private": true,
-  "description": "Liner Music Player",
+  "description": "Linerave — a DJ edition built on Liner",
   "author": {
     "name": "hkamori",
     "email": "dev@tryliner.fun"
   },
-  "desktopName": "liner",
+  "desktopName": "linerave",
   "main": "dist-electron/main.js",
   "scripts": {
     "dev": "vite",
@@ -30,14 +30,14 @@
     "native:build": "node scripts/build-native-addon.cjs"
   },
   "build": {
-    "appId": "com.hkamori.liner",
-    "productName": "Liner",
-    "executableName": "liner",
+    "appId": "lab.dreambyte.linerave",
+    "productName": "Linerave",
+    "executableName": "linerave",
     "artifactName": "${productName}-${version}-${arch}.${ext}",
     "publish": [
       {
         "provider": "github",
-        "owner": "tryliner",
+        "owner": "Dream-byte-lab",
         "repo": "desktop"
       }
     ],
@@ -46,7 +46,7 @@
     },
     "protocols": [
       {
-        "name": "Liner",
+        "name": "Linerave",
         "schemes": [
           "liner"
         ]
@@ -58,7 +58,7 @@
       "native/snap-preview/build/Release/snap_preview.node"
     ],
     "linux": {
-      "executableName": "liner",
+      "executableName": "linerave",
       "syncDesktopName": true,
       "maintainer": "hkamori <dev@tryliner.fun>",
       "icon": "build/icons",
@@ -69,21 +69,21 @@
       "category": "Audio"
     },
     "deb": {
-      "packageName": "liner",
-      "artifactName": "liner_${version}_${arch}.${ext}"
+      "packageName": "linerave",
+      "artifactName": "linerave_${version}_${arch}.${ext}"
     },
     "appImage": {
-      "artifactName": "Liner-${version}.${ext}"
+      "artifactName": "Linerave-${version}.${ext}"
     },
     "win": {
-      "executableName": "liner",
+      "executableName": "linerave",
       "icon": "build/icon.ico",
       "target": [
         "nsis"
       ]
     },
     "nsis": {
-      "artifactName": "Liner-Setup-${version}.${ext}",
+      "artifactName": "Linerave-Setup-${version}.${ext}",
       "allowToChangeInstallationDirectory": true,
       "oneClick": false
     },
