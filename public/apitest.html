@@ -69,7 +69,7 @@
           "https://api.tryliner.fun/health",
           {
             cache: "no-store",
-            signal: AbortSignal.timeout(6000),
+            signal: AbortSignal.timeout(20000),
           },
         );
         await attempt(
@@ -78,6 +78,28 @@
           { mode: "no-cors" },
         );
         await attempt("4 covers root", "https://covers.tryliner.fun/");
+        await attempt(
+          "5 api health (no Referer sent)",
+          "https://api.tryliner.fun/health",
+          { referrerPolicy: "no-referrer" },
+        );
+        await attempt(
+          "6 api /v1/me (no Referer sent)",
+          "https://api.tryliner.fun/v1/me",
+          { referrerPolicy: "no-referrer" },
+        );
+        await attempt(
+          "7 login POST (fake account, unsigned, exactly as the web app sends it)",
+          "https://api.tryliner.fun/v1/auth/login",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              email: "diagnosis-probe@example.invalid",
+              password: "not-a-real-password",
+            }),
+          },
+        );
         log("done");
       });
     </script>
