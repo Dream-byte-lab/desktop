@@ -1,5 +1,7 @@
 import { Pause, Play, SkipNext, SkipPrevious } from "@solar-icons/react";
+import { useState } from "react";
 import { usePlayerStore } from "../../player/store/playerStore";
+import { djSession } from "../engine/djSession";
 import { useDjModeStore } from "../store/djModeStore";
 
 // The Simple deck view: the same two decks and the same DJ session,
@@ -27,6 +29,8 @@ function formatMs(ms: number): string {
 const controlButtonClass =
   "inline-flex h-11 w-11 items-center justify-center rounded-full bg-black/[0.05] dark:bg-white/[0.09] text-text-primary transition-transform active:scale-95 border-none cursor-pointer";
 
+type CurateState = "idle" | "working" | "done" | "refused";
+
 export function DjSimpleView() {
   const active = useDjModeStore((state) => state.active);
   const blending = useDjModeStore((state) => state.blending);
@@ -34,11 +38,21 @@ export function DjSimpleView() {
   const nextTrack = usePlayerStore(
     (state) => state.queue[state.currentIndex + 1] ?? null,
   );
+  const remaining = usePlayerStore(
+    (state) => state.queue.length - state.currentIndex - 1,
+  );
   const status = usePlayerStore((state) => state.status);
   const positionMs = usePlayerStore((state) => state.positionMs);
   const durationMs = usePlayerStore((state) => state.durationMs);
+  const [curate, setCurate] = useState<CurateState>("idle");
 
   if (!active || !currentTrack) return null;
+
+  const onCurate = async () => {
+    setCurate("working");
+    const done = await djSession.curateRemaining();
+    setCurate(done ? "done" : "refused");
+  };
 
   const dispatch = usePlayerStore.getState().dispatch;
   const progress =
@@ -91,6 +105,23 @@ export function DjSimpleView() {
           >
             {blending ? "Blending…" : "DJ mode"}
           </span>
+          {remaining >= 2 ? (
+            <button
+              type="button"
+              className="rounded-full bg-black/[0.05] px-2.5 py-1 text-[11px] font-semibold text-text-secondary transition-transform active:scale-95 border-none cursor-pointer dark:bg-white/[0.09]"
+              disabled={curate === "working"}
+              onClick={() => void onCurate()}
+              title="Reorder everything still to come into a DJ set: an energy arc with joins that fit"
+            >
+              {curate === "working"
+                ? "Curating…"
+                : curate === "done"
+                  ? "Set order on"
+                  : curate === "refused"
+                    ? "Too close to a blend"
+                    : "Reorder rest as a DJ set"}
+            </button>
+          ) : null}
           <button
             type="button"
             aria-label="Previous track"

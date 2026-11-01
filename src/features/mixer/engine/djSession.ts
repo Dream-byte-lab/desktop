@@ -1,5 +1,6 @@
 import type { Track } from "@/shared/types";
 import { usePlayerStore } from "../../player/store/playerStore";
+import { assembleSet, candidateFromAnalysis } from "./curatedSet";
 import { decideTransition } from "./transitionStyle";
 import { recordListen } from "./tasteTracker";
 import { loadTrackForMixing, type PreparedTrack } from "./trackSource";
@@ -45,6 +46,7 @@ export class DjSession {
   private ticker: ReturnType<typeof setInterval> | null = null;
   private timers = new Set<ReturnType<typeof setTimeout>>();
   private transitionPlanned = false;
+  private blendingNow = false;
   private lastVolume = -1;
 
   /** Notified whenever the session starts or stops, for UI state. */
@@ -116,6 +118,55 @@ export class DjSession {
     if (!this.context) return;
     void this.context.resume();
     usePlayerStore.getState().setStatus("playing");
+  }
+
+  /**
+   * Reorders everything still to come into a curated set — the
+   * remaining tracks get their own energy arc and compatible joins,
+   * assembled from their analyses. The pool is only ever this queue,
+   * so the owner's own selection (their Playlist Genre) is respected
+   * by construction; the current track and anything already played
+   * are untouched. Refused while a transition is planned or a blend
+   * is sounding, because reordering under a live join is how joins
+   * break. Returns whether the reorder happened.
+   */
+  async curateRemaining(): Promise<boolean> {
+    if (!this.current || this.transitionPlanned || this.blendingNow) {
+      return false;
+    }
+    const tail = this.queue.slice(this.index + 1);
+    if (tail.length < 2) return false;
+
+    const prepared: PreparedTrack[] = [];
+    for (const track of tail) {
+      const ready = await loadTrackForMixing(track);
+      if (ready) prepared.push(ready);
+    }
+    // The session may have moved on while tracks were loading.
+    if (!this.current || this.transitionPlanned || this.blendingNow) {
+      return false;
+    }
+    if (prepared.length < 2) return false;
+
+    const byId = new Map(prepared.map((item) => [item.track.id, item]));
+    const order = assembleSet(
+      prepared.map((item) =>
+        candidateFromAnalysis(item.track.id, item.analysis),
+      ),
+    );
+    const newTail = order
+      .map((id) => byId.get(id)?.track)
+      .filter((track) => track !== undefined);
+    const unpreparable = tail.filter((track) => !byId.has(track.id));
+    this.queue = [
+      ...this.queue.slice(0, this.index + 1),
+      ...newTail,
+      ...unpreparable,
+    ];
+    usePlayerStore.getState().setQueue(this.queue);
+    this.next = null;
+    void this.prepareNext();
+    return true;
   }
 
   /** Cuts straight to the next track, abandoning any planned blend. */
@@ -206,6 +257,7 @@ export class DjSession {
     this.next = null;
     this.segments = [];
     this.transitionPlanned = false;
+    this.blendingNow = false;
     this.onBlendChange?.(false);
     this.onRunningChange?.(false);
   }
@@ -244,6 +296,7 @@ export class DjSession {
     this.next = null;
     this.index = index;
     this.transitionPlanned = false;
+    this.blendingNow = false;
     this.onBlendChange?.(false);
 
     const startAt = this.mixer.playNow(prepared.buffer, offsetSec);
@@ -357,6 +410,7 @@ export class DjSession {
   private executeTransition(plan: TransitionPlan): void {
     if (!this.mixer || !this.next || !this.context) return;
     const incoming = this.next;
+    this.blendingNow = true;
     this.onBlendChange?.(true);
     const times = this.mixer.transitionTo(incoming.buffer, plan);
 
@@ -390,6 +444,7 @@ export class DjSession {
       this.next = null;
       this.index += 1;
       this.transitionPlanned = false;
+      this.blendingNow = false;
       this.onBlendChange?.(false);
       const store = usePlayerStore.getState();
       store.setCurrentTrack(incoming.track, this.index);
