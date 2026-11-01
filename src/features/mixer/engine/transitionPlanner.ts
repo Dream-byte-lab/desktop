@@ -89,6 +89,7 @@ export function planTransition(
   const bars = request.phraseBars ?? 4;
 
   const spbOut = secondsPerBeat(outgoing.bpm);
+  const spbIn = secondsPerBeat(incoming.bpm);
   const phrase = phraseBeats(outgoing, bars);
   const nowBeat = beatsAtTime(outgoing, request.outgoingPositionSec);
 
@@ -108,11 +109,13 @@ export function planTransition(
   }
   if (exitBeat - nowBeat < 1) return null;
 
-  // The incoming track plays at the outgoing tempo during the blend, so
-  // walking back `blend` beats from its entry beat must not land before
-  // the start of the file. Shorten the blend until it fits.
+  // Walking back `blend` beats from the entry beat must not land before
+  // the start of the incoming file. Those beats are measured in the
+  // incoming track's own time — at the matched playback rate they take
+  // exactly the blend's wall-clock length, but the position inside the
+  // file is counted with the incoming track's own seconds-per-beat.
   const incomingStartSec = () =>
-    incoming.firstBeatSec + (request.incomingEntryBeat - blend) * spbOut;
+    incoming.firstBeatSec + (request.incomingEntryBeat - blend) * spbIn;
   while (blend > MIN_BLEND_BEATS && incomingStartSec() < 0) {
     blend -= 1;
   }

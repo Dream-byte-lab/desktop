@@ -53,22 +53,41 @@ export class TwoDeckMixer {
     return this.decks[1 - this.current];
   }
 
-  /** Starts a track on the current deck, full volume, natural tempo. */
-  playNow(buffer: AudioBuffer, offsetSec = 0): void {
+  /**
+   * Starts a track on the current deck, full volume, natural tempo.
+   * Returns the audio-clock time at which it starts.
+   */
+  playNow(buffer: AudioBuffer, offsetSec = 0): number {
     const deck = this.currentDeck;
     deck.load(buffer);
     const now = this.context.currentTime;
     deck.gain.gain.setValueAtTime(1, now);
     deck.bass.gain.setValueAtTime(BASS_FLAT_DB, now);
-    deck.play(now + SCHEDULE_AHEAD_SEC, offsetSec, 1);
+    const startAt = now + SCHEDULE_AHEAD_SEC;
+    deck.play(startAt, offsetSec, 1);
+    return startAt;
+  }
+
+  /** Stops both decks and silences them. */
+  stopAll(): void {
+    const now = this.context.currentTime;
+    for (const deck of this.decks) {
+      deck.gain.gain.cancelScheduledValues(now);
+      deck.gain.gain.setValueAtTime(0, now);
+      deck.stop(now);
+    }
   }
 
   /**
    * Performs a planned transition into a new track on the idle deck.
    * The plan's times are relative to the moment it was made; this call
-   * anchors them to the audio clock.
+   * anchors them to the audio clock and returns the anchored blend
+   * start/end so callers can track positions against the same clock.
    */
-  transitionTo(nextBuffer: AudioBuffer, plan: TransitionPlan): void {
+  transitionTo(
+    nextBuffer: AudioBuffer,
+    plan: TransitionPlan,
+  ): { blendStartCtxTime: number; blendEndCtxTime: number } {
     const outgoing = this.currentDeck;
     const incoming = this.nextDeck;
     incoming.load(nextBuffer);
@@ -113,5 +132,6 @@ export class TwoDeckMixer {
     }
 
     this.current = 1 - this.current;
+    return { blendStartCtxTime: blendStart, blendEndCtxTime: blendEnd };
   }
 }

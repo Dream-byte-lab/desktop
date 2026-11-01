@@ -56,6 +56,22 @@ describe("planTransition", () => {
     expect(plan!.tempoComfortable).toBe(true);
   });
 
+  it("measures the incoming start position in the incoming track's own time", () => {
+    const plan = planTransition({
+      outgoing: track({ bpm: 126 }),
+      outgoingPositionSec: 10,
+      incoming: track({ bpm: 120, firstBeatSec: 0.25 }),
+      incomingEntryBeat: 32,
+      blendBeats: 16,
+    });
+    expect(plan).not.toBeNull();
+    // 16 beats before the entry beat, at the incoming track's own
+    // 120 bpm (0.5s per beat): 0.25 + 16 * 0.5
+    expect(plan!.incomingStartSec).toBeCloseTo(8.25, 6);
+    // …while the blend itself lasts 16 beats at the outgoing 126 bpm
+    expect(plan!.blendDurationSec).toBeCloseTo(16 * (60 / 126), 6);
+  });
+
   it("flags a stretch beyond the comfortable tolerance", () => {
     const plan = planTransition({
       outgoing: track({ bpm: 128 }),
