@@ -1,6 +1,7 @@
 import type { Track } from "@/shared/types";
 import { usePlayerStore } from "../../player/store/playerStore";
 import { chooseEntryBeat } from "./entryBeat";
+import { recordListen } from "./tasteTracker";
 import { loadTrackForMixing, type PreparedTrack } from "./trackSource";
 import { planTransition, type TransitionPlan } from "./transitionPlanner";
 import { TwoDeckMixer, type DeckIndex } from "./twoDeckMixer";
@@ -185,6 +186,7 @@ export class DjSession {
   }
 
   stop(): void {
+    if (this.current) this.reportOutgoing(false);
     this.clearTimers();
     if (this.ticker) {
       clearInterval(this.ticker);
@@ -208,8 +210,32 @@ export class DjSession {
     this.onRunningChange?.(false);
   }
 
+  /**
+   * Feeds the taste profile: the outgoing track leaves with the
+   * fraction of it that was actually heard. Skips report themselves
+   * through beginTrack, blends through the transition commit, and a
+   * stopped session through stop().
+   */
+  private reportOutgoing(completed: boolean): void {
+    const outgoing = this.current;
+    if (!outgoing) return;
+    const duration = outgoing.buffer.duration;
+    if (duration <= 0) return;
+    const heard = completed
+      ? duration
+      : Math.min(Math.max(this.positionNow(), 0), duration);
+    recordListen({
+      track: outgoing.track,
+      playedRatio: heard / duration,
+      completed,
+    });
+  }
+
   private beginTrack(prepared: PreparedTrack, index: number): void {
     if (!this.mixer || !this.context) return;
+    if (this.current && this.current.track.id !== prepared.track.id) {
+      this.reportOutgoing(false);
+    }
     this.current = prepared;
     this.next = null;
     this.index = index;
@@ -330,6 +356,7 @@ export class DjSession {
     ];
 
     this.after(plan.blendDurationSec * 1000, () => {
+      this.reportOutgoing(true);
       this.segments = pendingSegments;
       this.current = incoming;
       this.next = null;
