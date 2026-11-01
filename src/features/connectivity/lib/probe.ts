@@ -1,7 +1,15 @@
 import { DIAG_ENDPOINTS } from "./diagnostics";
 import type { ConnectionProbe } from "./classify";
 
-const API_PROBE_TIMEOUT_MS = 6000;
+// The API can be very slow to answer a cold browser request —
+// measured ~20 s for a first fetch from the published web
+// version while the same call eventually returns 200 — so the
+// original 6 s desktop budget declared healthy servers dead.
+// The health probe waits long enough to hear the real answer;
+// the control check below stays brisk because its only job is
+// "did anything answer at all".
+const API_PROBE_TIMEOUT_MS = 20000;
+const CONTROL_PROBE_TIMEOUT_MS = 6000;
 
 async function probeApi(): Promise<ConnectionProbe["api"]> {
   try {
@@ -29,7 +37,7 @@ async function probeInternetFallback(): Promise<boolean> {
   try {
     await fetch(`${DIAG_ENDPOINTS.covers}/`, {
       cache: "no-store",
-      signal: AbortSignal.timeout(API_PROBE_TIMEOUT_MS),
+      signal: AbortSignal.timeout(CONTROL_PROBE_TIMEOUT_MS),
     });
     return true;
   } catch {
