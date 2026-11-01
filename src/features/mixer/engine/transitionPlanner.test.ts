@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { BeatMap } from "./beatMap";
-import { planTransition } from "./transitionPlanner";
+import { planTransition, planTransitionWithReferee } from "./transitionPlanner";
 
 function track(partial: Partial<BeatMap>): BeatMap {
   return {
@@ -150,6 +150,59 @@ describe("planTransition", () => {
 
     const unknown = planTransition(base);
     expect(unknown?.vocalOverlap).toBe(false);
+  });
+
+  describe("planTransitionWithReferee", () => {
+    // Same geometry as above: at 120 bpm from 10s in, a 16-beat blend
+    // covers 16s–24s of the outgoing track and 8s–16s of the incoming.
+    const base = {
+      outgoing: track({ bpm: 120 }),
+      outgoingPositionSec: 10,
+      incoming: track({ bpm: 120 }),
+      incomingEntryBeat: 32,
+    };
+
+    it("keeps the full blend when no voices collide", () => {
+      const plan = planTransitionWithReferee({
+        ...base,
+        outgoingVocals: [{ startSec: 40, endSec: 50 }],
+        incomingVocals: [{ startSec: 30, endSec: 40 }],
+      });
+      expect(plan?.blendBeats).toBe(16);
+      expect(plan?.vocalOverlap).toBe(false);
+    });
+
+    it("shortens the blend to end before a late outgoing line", () => {
+      // The outgoing singer's line at 22s–30s only clips the tail of
+      // the 16-beat window (16s–24s); a 12-beat blend ends at 22s.
+      const plan = planTransitionWithReferee({
+        ...base,
+        outgoingVocals: [{ startSec: 22, endSec: 30 }],
+        incomingVocals: [{ startSec: 8, endSec: 20 }],
+      });
+      expect(plan).not.toBeNull();
+      expect(plan!.vocalOverlap).toBe(false);
+      expect(plan!.blendBeats).toBeLessThan(16);
+    });
+
+    it("refuses the blend when every length overlaps two voices", () => {
+      const plan = planTransitionWithReferee({
+        ...base,
+        outgoingVocals: [{ startSec: 16, endSec: 40 }],
+        incomingVocals: [{ startSec: 0, endSec: 40 }],
+      });
+      expect(plan).toBeNull();
+    });
+
+    it("still returns null when no blend exists at all", () => {
+      const plan = planTransitionWithReferee({
+        outgoing: track({ bpm: 120, durationSec: 12 }),
+        outgoingPositionSec: 10,
+        incoming: track({ bpm: 120 }),
+        incomingEntryBeat: 32,
+      });
+      expect(plan).toBeNull();
+    });
   });
 
   it("flags a stretch beyond the comfortable tolerance", () => {

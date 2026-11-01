@@ -205,3 +205,31 @@ export function planTransition(
     vocalOverlap,
   };
 }
+
+/**
+ * The referee: planTransition with the hard rule enforced — never
+ * overlap two voices. If the natural blend would put both singers on
+ * air together, the blend is retried shorter (a shorter window can
+ * end before the outgoing voice's late line, or before the incoming
+ * voice arrives). If every workable length still overlaps, there is
+ * no honest blend for this pair from here, and the answer is null —
+ * the caller falls back to a cut, which is what a DJ does when a
+ * blend would clash. Key fit stays a report, never a veto: the
+ * listener's chosen order is respected.
+ */
+export function planTransitionWithReferee(
+  request: TransitionRequest,
+): TransitionPlan | null {
+  const start = request.blendBeats ?? 16;
+  const attempts = [start, 12, 8, MIN_BLEND_BEATS].filter(
+    (beats, index, all) =>
+      beats <= start &&
+      beats >= MIN_BLEND_BEATS &&
+      all.indexOf(beats) === index,
+  );
+  for (const blendBeats of attempts) {
+    const plan = planTransition({ ...request, blendBeats });
+    if (plan && !plan.vocalOverlap) return plan;
+  }
+  return null;
+}

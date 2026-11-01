@@ -3,7 +3,10 @@ import { usePlayerStore } from "../../player/store/playerStore";
 import { chooseEntryBeat } from "./entryBeat";
 import { recordListen } from "./tasteTracker";
 import { loadTrackForMixing, type PreparedTrack } from "./trackSource";
-import { planTransition, type TransitionPlan } from "./transitionPlanner";
+import {
+  planTransitionWithReferee,
+  type TransitionPlan,
+} from "./transitionPlanner";
 import { TwoDeckMixer, type DeckIndex } from "./twoDeckMixer";
 
 // The DJ session: a whole queue played on the two decks, blended
@@ -307,7 +310,7 @@ export class DjSession {
     if (this.transitionPlanned || !this.next) return;
     if (remaining > PLAN_WHEN_REMAINING_SEC) return;
 
-    const plan = planTransition({
+    const plan = planTransitionWithReferee({
       outgoing: this.current.analysis.beatMap,
       outgoingPositionSec: position,
       incoming: this.next.analysis.beatMap,
