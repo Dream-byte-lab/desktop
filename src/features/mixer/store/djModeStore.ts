@@ -6,10 +6,15 @@ import { create } from "zustand";
 
 interface DjModeState {
   active: boolean;
+  /** True while a blend between two tracks is actually sounding. */
+  blending: boolean;
   setActive: (active: boolean) => void;
+  setBlending: (blending: boolean) => void;
 }
 
 export const useDjModeStore = create<DjModeState>((set) => ({
   active: false,
+  blending: false,
   setActive: (active) => set({ active }),
+  setBlending: (blending) => set({ blending }),
 }));

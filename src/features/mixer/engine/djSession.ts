@@ -49,6 +49,9 @@ export class DjSession {
   /** Notified whenever the session starts or stops, for UI state. */
   onRunningChange: ((running: boolean) => void) | null = null;
 
+  /** Notified when a blend starts sounding and when it completes. */
+  onBlendChange: ((blending: boolean) => void) | null = null;
+
   get isRunning(): boolean {
     return this.mixer !== null;
   }
@@ -181,6 +184,7 @@ export class DjSession {
     this.next = null;
     this.segments = [];
     this.transitionPlanned = false;
+    this.onBlendChange?.(false);
     this.onRunningChange?.(false);
   }
 
@@ -190,6 +194,7 @@ export class DjSession {
     this.next = null;
     this.index = index;
     this.transitionPlanned = false;
+    this.onBlendChange?.(false);
 
     const startAt = this.mixer.playNow(prepared.buffer, 0);
     this.segments = [{ fromCtxTime: startAt, trackTimeAtStart: 0, rate: 1 }];
@@ -276,6 +281,7 @@ export class DjSession {
   private executeTransition(plan: TransitionPlan): void {
     if (!this.mixer || !this.next || !this.context) return;
     const incoming = this.next;
+    this.onBlendChange?.(true);
     const times = this.mixer.transitionTo(incoming.buffer, plan);
 
     const blendSpan = plan.blendDurationSec * plan.incomingRate;
@@ -307,6 +313,7 @@ export class DjSession {
       this.next = null;
       this.index += 1;
       this.transitionPlanned = false;
+      this.onBlendChange?.(false);
       const store = usePlayerStore.getState();
       store.setCurrentTrack(incoming.track, this.index);
       store.setDuration(

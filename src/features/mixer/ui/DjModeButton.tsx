@@ -12,6 +12,10 @@ djSession.onRunningChange = (running) => {
   useDjModeStore.getState().setActive(running);
 };
 
+djSession.onBlendChange = (blending) => {
+  useDjModeStore.getState().setBlending(blending);
+};
+
 interface DjModeButtonProps {
   className?: string;
   activeClassName?: string;
