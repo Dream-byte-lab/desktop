@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { crossfadeGains } from "./twoDeckMixer";
+import { crossfadeGains, echoDelaySec } from "./twoDeckMixer";
 
 describe("crossfadeGains", () => {
   it("is transparent in the centre", () => {
@@ -25,5 +25,19 @@ describe("crossfadeGains", () => {
   it("clamps positions beyond the ends", () => {
     expect(crossfadeGains(5)).toEqual(crossfadeGains(1));
     expect(crossfadeGains(-5)).toEqual(crossfadeGains(-1));
+  });
+});
+
+describe("echoDelaySec", () => {
+  it("is a dotted eighth at the track's tempo", () => {
+    expect(echoDelaySec(120)).toBeCloseTo(0.375);
+    expect(echoDelaySec(60)).toBeCloseTo(0.75);
+    expect(echoDelaySec(160)).toBeCloseTo(0.28125);
+  });
+
+  it("clamps extremes and survives a nonsense tempo", () => {
+    expect(echoDelaySec(20)).toBe(1.2);
+    expect(echoDelaySec(1000)).toBe(0.08);
+    expect(echoDelaySec(0)).toBe(0.3);
   });
 });

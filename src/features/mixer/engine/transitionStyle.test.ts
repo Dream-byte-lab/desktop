@@ -40,9 +40,30 @@ describe("decideTransition", () => {
     }
   });
 
-  it("plain-cuts when there is no blend and no usable drop", () => {
+  it("echoes out when the outgoing track is still alive at its end", () => {
     const decision = decideTransition({
-      outgoing: analysis({ vocalRanges: [{ startSec: 0, endSec: 400 }] }),
+      outgoing: analysis({
+        vocalRanges: [{ startSec: 0, endSec: 400 }],
+        energyCurve: [
+          { timeSec: 298, energy: 0.7 },
+          { timeSec: 299, energy: 0.65 },
+        ],
+      }),
+      outgoingPositionSec: 10,
+      incoming: analysis({ vocalRanges: [{ startSec: 0, endSec: 400 }] }),
+    });
+    expect(decision.kind).toBe("echo-out");
+  });
+
+  it("plain-cuts when the outgoing track already ends quietly", () => {
+    const decision = decideTransition({
+      outgoing: analysis({
+        vocalRanges: [{ startSec: 0, endSec: 400 }],
+        energyCurve: [
+          { timeSec: 298, energy: 0.03 },
+          { timeSec: 299, energy: 0.02 },
+        ],
+      }),
       outgoingPositionSec: 10,
       incoming: analysis({ vocalRanges: [{ startSec: 0, endSec: 400 }] }),
     });
@@ -51,7 +72,13 @@ describe("decideTransition", () => {
 
   it("ignores a drop that lands too early to be a landing", () => {
     const decision = decideTransition({
-      outgoing: analysis({ vocalRanges: [{ startSec: 0, endSec: 400 }] }),
+      outgoing: analysis({
+        vocalRanges: [{ startSec: 0, endSec: 400 }],
+        energyCurve: [
+          { timeSec: 298, energy: 0.02 },
+          { timeSec: 299, energy: 0.02 },
+        ],
+      }),
       outgoingPositionSec: 10,
       incoming: analysis({
         vocalRanges: [{ startSec: 0, endSec: 400 }],

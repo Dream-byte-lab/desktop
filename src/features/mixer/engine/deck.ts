@@ -18,6 +18,12 @@ export class Deck {
    * the automated shelf, so a hand on it can never fight a blend.
    */
   readonly bassTrim: BiquadFilterNode;
+  /**
+   * Post-fader send into the mixer's shared echo network, for
+   * echo-outs. Normally 0 (silent); the mixer raises it for the last
+   * moments of a track that is leaving without a blend.
+   */
+  readonly echoSend: GainNode;
 
   private source: AudioBufferSourceNode | null = null;
   private buffer: AudioBuffer | null = null;
@@ -25,6 +31,7 @@ export class Deck {
   constructor(
     private readonly context: AudioContext,
     destination: AudioNode,
+    echoInput?: AudioNode,
   ) {
     this.bass = context.createBiquadFilter();
     this.bass.type = "lowshelf";
@@ -39,9 +46,16 @@ export class Deck {
     this.gain = context.createGain();
     this.gain.gain.value = 0;
 
+    this.echoSend = context.createGain();
+    this.echoSend.gain.value = 0;
+
     this.bass.connect(this.bassTrim);
     this.bassTrim.connect(this.gain);
     this.gain.connect(destination);
+    if (echoInput) {
+      this.gain.connect(this.echoSend);
+      this.echoSend.connect(echoInput);
+    }
   }
 
   load(buffer: AudioBuffer): void {

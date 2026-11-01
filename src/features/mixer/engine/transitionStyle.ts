@@ -18,8 +18,12 @@ import {
 //                real drop — cut straight into that drop as the
 //                outgoing track ends, so the energy lands instead of
 //                the join sagging (the classic drop swap);
-//   - cut:       nothing better is available — a clean cut at the
-//                outgoing track's end.
+//   - echo-out:  no blend and no drop to land on, but the outgoing
+//                track is still alive at its end — dissolve it into
+//                a beat-synced echo that rings over the next track's
+//                start instead of stopping dead;
+//   - cut:       the outgoing track already ends quietly (a fade, a
+//                soft tail) — a clean cut respects that ending.
 //
 // The decisions are driven by the analysis (the code-level "ears")
 // today; metadata and context (arc position, taste) are further
@@ -28,9 +32,20 @@ import {
 export type TransitionDecision =
   | { kind: "blend"; plan: TransitionPlan }
   | { kind: "drop-cut"; entrySec: number }
+  | { kind: "echo-out" }
   | { kind: "cut" };
 
 const MIN_DROP_BEAT = 8;
+/** Below this mean tail energy, a track is treated as ending quietly. */
+const QUIET_TAIL = 0.08;
+
+/** Mean energy of the outgoing track's last two seconds (0 if unknown). */
+function tailEnergy(analysis: TrackAnalysis): number | null {
+  const curve = analysis.energyCurve;
+  if (curve.length === 0) return null;
+  const tail = curve.slice(-2);
+  return tail.reduce((sum, point) => sum + point.energy, 0) / tail.length;
+}
 
 export function decideTransition(input: {
   outgoing: TrackAnalysis;
@@ -59,5 +74,8 @@ export function decideTransition(input: {
       entrySec: timeAtBeat(input.incoming.beatMap, entryBeat),
     };
   }
+
+  const tail = tailEnergy(input.outgoing);
+  if (tail === null || tail >= QUIET_TAIL) return { kind: "echo-out" };
   return { kind: "cut" };
 }

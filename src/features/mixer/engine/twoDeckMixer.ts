@@ -44,10 +44,20 @@ export function crossfadeGains(position: number): [number, number] {
 
 export type DeckIndex = 0 | 1;
 
+/**
+ * The echo's delay time for a tempo: a dotted eighth note (¾ of a
+ * beat) — the classic echo-out spacing — clamped to a sane range.
+ */
+export function echoDelaySec(bpm: number): number {
+  if (bpm <= 0) return 0.3;
+  return Math.min(1.2, Math.max(0.08, 0.75 * (60 / bpm)));
+}
+
 export class TwoDeckMixer {
   readonly master: GainNode;
   private readonly decks: [Deck, Deck];
   private readonly trims: [GainNode, GainNode];
+  private readonly echoDelay: DelayNode;
   private current = 0;
   private crossfadePosition = 0;
   private readonly deckTrimLevels: [number, number] = [1, 1];
@@ -56,6 +66,28 @@ export class TwoDeckMixer {
     this.master = context.createGain();
     this.master.gain.value = 1;
     this.master.connect(context.destination);
+
+    // The shared echo network: a feedback delay with a low-pass in
+    // the loop, so each repeat comes back darker and softer than the
+    // last and the tail dissolves instead of ringing forever. Both
+    // decks can send into it (post-fader); the wet signal returns
+    // straight to the master, so a tail keeps sounding across a deck
+    // change — which is exactly what an echo-out needs.
+    this.echoDelay = context.createDelay(2);
+    this.echoDelay.delayTime.value = 0.3;
+    const echoFilter = context.createBiquadFilter();
+    echoFilter.type = "lowpass";
+    echoFilter.frequency.value = 1200;
+    const echoFeedback = context.createGain();
+    echoFeedback.gain.value = 0.38;
+    const echoWet = context.createGain();
+    echoWet.gain.value = 0.55;
+    this.echoDelay.connect(echoFilter);
+    echoFilter.connect(echoFeedback);
+    echoFeedback.connect(this.echoDelay);
+    this.echoDelay.connect(echoWet);
+    echoWet.connect(this.master);
+
     // The manual stage: each deck runs through its own trim gain before
     // the master. The automation writes the decks' own gains; hands
     // (the Pro layer) write these trims and the crossfader. Because the
@@ -64,9 +96,24 @@ export class TwoDeckMixer {
     this.trims = [context.createGain(), context.createGain()];
     for (const trim of this.trims) trim.connect(this.master);
     this.decks = [
-      new Deck(context, this.trims[0]),
-      new Deck(context, this.trims[1]),
+      new Deck(context, this.trims[0], this.echoDelay),
+      new Deck(context, this.trims[1], this.echoDelay),
     ];
+  }
+
+  /**
+   * Opens the current deck's echo send, beat-synced to its tempo, for
+   * about a second of capture; the delay network then rings the tail
+   * out over whatever plays next. The send closes itself so later
+   * tracks are never echoed by accident.
+   */
+  echoOutCurrent(bpm: number): void {
+    const now = this.context.currentTime;
+    this.echoDelay.delayTime.setValueAtTime(echoDelaySec(bpm), now);
+    const send = this.currentDeck.echoSend.gain;
+    send.cancelScheduledValues(now);
+    send.setTargetAtTime(0.9, now, 0.03);
+    send.setTargetAtTime(0, now + 0.9, 0.1);
   }
 
   /** Which physical deck currently holds the playing track. */

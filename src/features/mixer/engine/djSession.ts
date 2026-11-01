@@ -341,6 +341,14 @@ export class DjSession {
       this.after(Math.max(0, remaining * 1000 - 50), () =>
         this.cutToNextAtEntry(decision.entrySec),
       );
+    } else if (decision.kind === "echo-out") {
+      // Open the echo send for the outgoing track's last moments,
+      // then hand over as usual; the tail rings over the next track.
+      const bpm = this.current.analysis.beatMap.bpm;
+      this.after(Math.max(0, remaining * 1000 - 500), () =>
+        this.mixer?.echoOutCurrent(bpm),
+      );
+      this.after(Math.max(0, remaining * 1000 - 50), () => this.skipNext());
     } else {
       this.after(Math.max(0, remaining * 1000 - 50), () => this.skipNext());
     }
