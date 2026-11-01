@@ -64,6 +64,7 @@ import {
   RemoveFromLibraryModal,
   ImportLikesModal,
   ImportReviewModal,
+  FailedImportsModal,
   LocalDropZone,
   CreatePlaylistModal,
   useModalStore,
@@ -103,6 +104,7 @@ const AppOverlays = memo(function AppOverlays() {
       <ImportLikesModal />
       <CreatePlaylistModal />
       <ImportReviewModal />
+      <FailedImportsModal />
       <LocalDropZone />
       <SettingsModal />
       <UpdateModal />

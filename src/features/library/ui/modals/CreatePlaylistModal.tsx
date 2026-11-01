@@ -12,6 +12,7 @@ import {
   DialogHeader,
 } from "@/shared/ui";
 import { useTranslation } from "@/languages";
+import { listFailedImports } from "../../services/import/failures/failedImportsStore";
 import { useModalStore } from "../../store/modalStore";
 import { useImportStore } from "../../store/importStore";
 import { resolveApiErrorMessage } from "@/shared/api";
@@ -57,6 +58,8 @@ export default function CreatePlaylistModal() {
     (state) => state.createPlaylistPendingTrack,
   );
   const close = useModalStore((state) => state.closeCreatePlaylist);
+  const openFailedImports = useModalStore((state) => state.openFailedImports);
+  const [failedCount, setFailedCount] = useState(0);
 
   const [tab, setTab] = useState<Tab>("create");
   const [title, setTitle] = useState("");
@@ -78,6 +81,7 @@ export default function CreatePlaylistModal() {
 
   useEffect(() => {
     if (open) {
+      setFailedCount(listFailedImports().length);
       setTab(initialUrl ? "import" : "create");
       setTitle("");
       setDescription("");
@@ -319,6 +323,19 @@ export default function CreatePlaylistModal() {
               </DialogButton>
             </DialogActions>
           </form>
+        )}
+        {!isCreate && (
+          <button
+            type="button"
+            onClick={() => {
+              close();
+              openFailedImports();
+            }}
+            className="mt-3 self-start text-[13px] font-medium text-text-secondary transition-colors hover:text-text-primary"
+          >
+            Failed imports{failedCount > 0 ? ` (${failedCount})` : ""} — songs
+            that could not come across are kept here
+          </button>
         )}
       </div>
     </Dialog>

@@ -100,6 +100,11 @@ interface ModalState {
   ) => void;
   closeImportReview: () => void;
 
+  // Failed Imports (the holding collection for songs that could not import)
+  failedImportsOpen: boolean;
+  openFailedImports: () => void;
+  closeFailedImports: () => void;
+
   // Search modal / panel
   searchOpen: boolean;
   openSearch: () => void;
@@ -188,6 +193,10 @@ export const useModalStore = create<ModalState>((set) => ({
     set({
       importReviewOpen: false,
     }),
+
+  failedImportsOpen: false,
+  openFailedImports: () => set({ failedImportsOpen: true }),
+  closeFailedImports: () => set({ failedImportsOpen: false }),
 
   searchOpen: false,
   openSearch: () => set({ searchOpen: true }),
