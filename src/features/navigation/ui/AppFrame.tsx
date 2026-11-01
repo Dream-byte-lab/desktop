@@ -49,6 +49,7 @@ import {
   usePlayerStore,
   useGlassBlur,
 } from "@/features/player";
+import { DjProView } from "@/features/mixer/ui/DjProView";
 import { DjSimpleView } from "@/features/mixer/ui/DjSimpleView";
 import SearchResultsList from "@/features/search/ui/SearchResultsList";
 import { SearchHistoryList, useSearchHistoryStore } from "@/features/search";
@@ -835,6 +836,7 @@ export default function AppFrame({ children }: AppFrameProps) {
               // popups, which live in this stacking context, aren't hidden by it.
               className={`relative z-[55] w-full shrink-0 ${hasPageBackdrop ? "-mt-[70px]" : ""}`}
             >
+              <DjProView />
               <DjSimpleView />
               <MiniPlayer
                 embedded

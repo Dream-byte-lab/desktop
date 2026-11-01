@@ -3,7 +3,7 @@ import { usePlayerStore } from "../../player/store/playerStore";
 import { chooseEntryBeat } from "./entryBeat";
 import { loadTrackForMixing, type PreparedTrack } from "./trackSource";
 import { planTransition, type TransitionPlan } from "./transitionPlanner";
-import { TwoDeckMixer } from "./twoDeckMixer";
+import { TwoDeckMixer, type DeckIndex } from "./twoDeckMixer";
 
 // The DJ session: a whole queue played on the two decks, blended
 // automatically. It is a guest in Liner's house, and behaves like one:
@@ -58,6 +58,26 @@ export class DjSession {
 
   get isPaused(): boolean {
     return this.context?.state === "suspended";
+  }
+
+  /** Which physical deck holds the playing track (for Pro readouts). */
+  get currentDeckIndex(): DeckIndex {
+    return this.mixer?.currentDeckIndex ?? 0;
+  }
+
+  // The manual stage (Pro layer). These lean on the mix through the
+  // mixer's trim stage; they never touch the automation's scheduling.
+
+  setCrossfade(position: number): void {
+    this.mixer?.setCrossfade(position);
+  }
+
+  setDeckTrim(index: DeckIndex, level: number): void {
+    this.mixer?.setDeckTrim(index, level);
+  }
+
+  setDeckBassCut(index: DeckIndex, cut: boolean): void {
+    this.mixer?.setDeckBassCut(index, cut);
   }
 
   async start(queue: Track[], startIndex = 0): Promise<void> {

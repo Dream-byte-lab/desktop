@@ -8,13 +8,18 @@ interface DjModeState {
   active: boolean;
   /** True while a blend between two tracks is actually sounding. */
   blending: boolean;
+  /** Whether the Pro controls panel is open. */
+  proOpen: boolean;
   setActive: (active: boolean) => void;
   setBlending: (blending: boolean) => void;
+  setProOpen: (proOpen: boolean) => void;
 }
 
 export const useDjModeStore = create<DjModeState>((set) => ({
   active: false,
   blending: false,
+  proOpen: false,
   setActive: (active) => set({ active }),
   setBlending: (blending) => set({ blending }),
+  setProOpen: (proOpen) => set({ proOpen }),
 }));

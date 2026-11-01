@@ -32,6 +32,7 @@ import { usePlayerStore } from "../store/playerStore";
 import { toVolumeGain, toVolumeLevel } from "../engine/volume";
 import { VolumeColumn } from "./VolumeColumn";
 import { DjModeButton } from "@/features/mixer/ui/DjModeButton";
+import { DjProToggle } from "@/features/mixer/ui/DjProView";
 import { SpeedPitchPicker } from "./SpeedPitchPicker";
 import { EqualizerPicker } from "./EqualizerPicker";
 import { isEqActive } from "../engine/equalizer";
@@ -879,6 +880,10 @@ function MiniPlayer({
                 {repeatIcon}
               </button>
               <DjModeButton
+                className={iconButtonClass}
+                activeClassName={activeToggleClass}
+              />
+              <DjProToggle
                 className={iconButtonClass}
                 activeClassName={activeToggleClass}
               />

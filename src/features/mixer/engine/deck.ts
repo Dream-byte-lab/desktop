@@ -12,6 +12,12 @@ export class Deck {
   readonly gain: GainNode;
   /** Low-shelf gain in dB; the mixer writes the bass swap onto it. */
   readonly bass: BiquadFilterNode;
+  /**
+   * A second low-shelf the automation never touches — the manual bass
+   * control (the Pro layer's bass kill / trim). It sits in series with
+   * the automated shelf, so a hand on it can never fight a blend.
+   */
+  readonly bassTrim: BiquadFilterNode;
 
   private source: AudioBufferSourceNode | null = null;
   private buffer: AudioBuffer | null = null;
@@ -25,10 +31,16 @@ export class Deck {
     this.bass.frequency.value = 160;
     this.bass.gain.value = BASS_FLAT_DB;
 
+    this.bassTrim = context.createBiquadFilter();
+    this.bassTrim.type = "lowshelf";
+    this.bassTrim.frequency.value = 160;
+    this.bassTrim.gain.value = BASS_FLAT_DB;
+
     this.gain = context.createGain();
     this.gain.gain.value = 0;
 
-    this.bass.connect(this.gain);
+    this.bass.connect(this.bassTrim);
+    this.bassTrim.connect(this.gain);
     this.gain.connect(destination);
   }
 

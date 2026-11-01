@@ -28,19 +28,85 @@ function equalPowerCurves(): { outCurve: Float32Array; inCurve: Float32Array } {
   return { outCurve, inCurve };
 }
 
+/**
+ * Crossfader gains for a position in -1..1. This crossfader is a lean
+ * control layered over the automation, not the primary fader, so the
+ * centre is transparent (both decks at full) — an untouched crossfader
+ * must never change what the automatic blends sound like. Moving it
+ * fades the opposite deck out along a cosine curve.
+ */
+export function crossfadeGains(position: number): [number, number] {
+  const p = Math.min(1, Math.max(-1, position));
+  const deck1 = p <= 0 ? 1 : Math.cos((p * Math.PI) / 2);
+  const deck2 = p >= 0 ? 1 : Math.cos((-p * Math.PI) / 2);
+  return [deck1, deck2];
+}
+
+export type DeckIndex = 0 | 1;
+
 export class TwoDeckMixer {
   readonly master: GainNode;
   private readonly decks: [Deck, Deck];
+  private readonly trims: [GainNode, GainNode];
   private current = 0;
+  private crossfadePosition = 0;
+  private readonly deckTrimLevels: [number, number] = [1, 1];
 
   constructor(private readonly context: AudioContext) {
     this.master = context.createGain();
     this.master.gain.value = 1;
     this.master.connect(context.destination);
+    // The manual stage: each deck runs through its own trim gain before
+    // the master. The automation writes the decks' own gains; hands
+    // (the Pro layer) write these trims and the crossfader. Because the
+    // two multiply rather than share one control, a hand on the mixer
+    // can lean on a blend but can never corrupt its scheduling.
+    this.trims = [context.createGain(), context.createGain()];
+    for (const trim of this.trims) trim.connect(this.master);
     this.decks = [
-      new Deck(context, this.master),
-      new Deck(context, this.master),
+      new Deck(context, this.trims[0]),
+      new Deck(context, this.trims[1]),
     ];
+  }
+
+  /** Which physical deck currently holds the playing track. */
+  get currentDeckIndex(): DeckIndex {
+    return this.current as DeckIndex;
+  }
+
+  /** Manual crossfader, -1 (deck 1 only) .. 1 (deck 2 only). */
+  setCrossfade(position: number): void {
+    this.crossfadePosition = Math.min(1, Math.max(-1, position));
+    this.applyManualStage();
+  }
+
+  /** Manual per-deck volume trim, 0..1.25. */
+  setDeckTrim(index: DeckIndex, level: number): void {
+    this.deckTrimLevels[index] = Math.min(1.25, Math.max(0, level));
+    this.applyManualStage();
+  }
+
+  /** Manual bass kill for one physical deck. */
+  setDeckBassCut(index: DeckIndex, cut: boolean): void {
+    this.decks[index].bassTrim.gain.setValueAtTime(
+      cut ? BASS_CUT_DB : BASS_FLAT_DB,
+      this.context.currentTime,
+    );
+  }
+
+  private applyManualStage(): void {
+    const [a, b] = crossfadeGains(this.crossfadePosition);
+    const levels: [number, number] = [
+      a * this.deckTrimLevels[0],
+      b * this.deckTrimLevels[1],
+    ];
+    for (let i = 0; i < 2; i += 1) {
+      this.trims[i].gain.setTargetAtTime(
+        levels[i],
+        this.context.currentTime,
+        0.03,
+      );
+    }
   }
 
   /** The deck currently playing (or next to play). */
