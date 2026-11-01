@@ -1,12 +1,9 @@
 import type { Track } from "@/shared/types";
 import { usePlayerStore } from "../../player/store/playerStore";
-import { chooseEntryBeat } from "./entryBeat";
+import { decideTransition } from "./transitionStyle";
 import { recordListen } from "./tasteTracker";
 import { loadTrackForMixing, type PreparedTrack } from "./trackSource";
-import {
-  planTransitionWithReferee,
-  type TransitionPlan,
-} from "./transitionPlanner";
+import type { TransitionPlan } from "./transitionPlanner";
 import { TwoDeckMixer, type DeckIndex } from "./twoDeckMixer";
 
 // The DJ session: a whole queue played on the two decks, blended
@@ -234,7 +231,11 @@ export class DjSession {
     });
   }
 
-  private beginTrack(prepared: PreparedTrack, index: number): void {
+  private beginTrack(
+    prepared: PreparedTrack,
+    index: number,
+    offsetSec = 0,
+  ): void {
     if (!this.mixer || !this.context) return;
     if (this.current && this.current.track.id !== prepared.track.id) {
       this.reportOutgoing(false);
@@ -245,18 +246,33 @@ export class DjSession {
     this.transitionPlanned = false;
     this.onBlendChange?.(false);
 
-    const startAt = this.mixer.playNow(prepared.buffer, 0);
-    this.segments = [{ fromCtxTime: startAt, trackTimeAtStart: 0, rate: 1 }];
+    const startAt = this.mixer.playNow(prepared.buffer, offsetSec);
+    this.segments = [
+      { fromCtxTime: startAt, trackTimeAtStart: offsetSec, rate: 1 },
+    ];
 
     const store = usePlayerStore.getState();
     store.setCurrentTrack(prepared.track, index);
     store.setDuration(
       prepared.track.durationMs ?? Math.round(prepared.buffer.duration * 1000),
     );
-    store.setPosition(0);
+    store.setPosition(Math.round(offsetSec * 1000));
     store.setStatus("playing");
 
     void this.prepareNext();
+  }
+
+  /**
+   * The drop-cut: the outgoing track ends and the incoming one starts
+   * exactly at its drop, so the join lands with energy instead of
+   * sagging through an intro the moment didn't want.
+   */
+  private cutToNextAtEntry(entrySec: number): void {
+    if (!this.mixer || !this.next) return;
+    const next = this.next;
+    this.clearTimers();
+    this.mixer.stopAll();
+    this.beginTrack(next, this.index + 1, entrySec);
   }
 
   private async prepareNext(): Promise<void> {
@@ -310,21 +326,22 @@ export class DjSession {
     if (this.transitionPlanned || !this.next) return;
     if (remaining > PLAN_WHEN_REMAINING_SEC) return;
 
-    const plan = planTransitionWithReferee({
-      outgoing: this.current.analysis.beatMap,
+    // The style is chosen per pair, from the two tracks' own facts —
+    // never one fixed formula.
+    const decision = decideTransition({
+      outgoing: this.current.analysis,
       outgoingPositionSec: position,
-      incoming: this.next.analysis.beatMap,
-      incomingEntryBeat: chooseEntryBeat(this.next.analysis),
-      outgoingKey: this.current.analysis.key,
-      incomingKey: this.next.analysis.key,
-      outgoingVocals: this.current.analysis.vocalRanges,
-      incomingVocals: this.next.analysis.vocalRanges,
+      incoming: this.next.analysis,
     });
     this.transitionPlanned = true;
-    if (plan) {
+    if (decision.kind === "blend") {
+      const plan = decision.plan;
       this.after(plan.startsInSec * 1000, () => this.executeTransition(plan));
+    } else if (decision.kind === "drop-cut") {
+      this.after(Math.max(0, remaining * 1000 - 50), () =>
+        this.cutToNextAtEntry(decision.entrySec),
+      );
     } else {
-      // No honest blend from here: cut at the end of the track.
       this.after(Math.max(0, remaining * 1000 - 50), () => this.skipNext());
     }
   }
