@@ -1,7 +1,9 @@
 import type { Track } from "@/shared/types";
 import { usePlayerStore } from "../../player/store/playerStore";
-import { assembleSet, candidateFromAnalysis } from "./curatedSet";
+import { arcTarget, assembleSet, candidateFromAnalysis } from "./curatedSet";
 import { levelGainFor } from "./levelMatch";
+import type { RaveDecision, RaveRequest, RaveTrackInfo } from "./liveRave";
+import { LiveRaveQueue, type RaveQueueEntry } from "./liveRaveQueue";
 import { decideTransition } from "./transitionStyle";
 import { recordListen } from "./tasteTracker";
 import { loadTrackForMixing, type PreparedTrack } from "./trackSource";
@@ -36,6 +38,26 @@ const TICK_MS = 250;
 /** Start planning a transition once the current track has less than this left. */
 const PLAN_WHEN_REMAINING_SEC = 150;
 
+/** A guest request carrying the playable track the guest chose. */
+export interface LiveRaveRequestInput {
+  id: string;
+  guestId: string;
+  track: Track;
+  requestedAtSec: number;
+}
+
+function raveQueueEntry(prepared: PreparedTrack): RaveQueueEntry<Track> {
+  const candidate = candidateFromAnalysis(prepared.track.id, prepared.analysis);
+  const info: RaveTrackInfo = {
+    trackId: prepared.track.id,
+    artist: prepared.track.artists,
+    bpm: candidate.bpm,
+    key: candidate.key,
+    energy: candidate.energy,
+  };
+  return { track: prepared.track, info };
+}
+
 export class DjSession {
   private context: AudioContext | null = null;
   private mixer: TwoDeckMixer | null = null;
@@ -49,6 +71,9 @@ export class DjSession {
   private transitionPlanned = false;
   private blendingNow = false;
   private lastVolume = -1;
+  private readonly liveRaveQueue = new LiveRaveQueue<Track>();
+  private readonly liveRavePlayedTrackIds = new Set<string>();
+  private liveRaveDoNotPlay: string[] = [];
 
   /** Notified whenever the session starts or stops, for UI state. */
   onRunningChange: ((running: boolean) => void) | null = null;
@@ -170,6 +195,115 @@ export class DjSession {
     return true;
   }
 
+  /** Sets the host's liveRave do-not-play list for this session. */
+  setLiveRaveDoNotPlay(values: readonly string[]): void {
+    this.liveRaveDoNotPlay = [...values];
+  }
+
+  /** The liveRave requests still open in this session. */
+  get liveRaveOpenRequests(): RaveRequest[] {
+    return this.liveRaveQueue.openRequests;
+  }
+
+  /**
+   * Accepts a guest's request into liveRave's open pool. The track is
+   * prepared first, so an unplayable request is refused immediately
+   * (null) instead of being promised to the guest and failing later.
+   * Duplicate requests for the same track become votes on the open
+   * request rather than separate entries.
+   */
+  async submitLiveRaveRequest(
+    input: LiveRaveRequestInput,
+  ): Promise<RaveRequest | null> {
+    const prepared = await loadTrackForMixing(input.track);
+    if (!prepared) return null;
+    return this.liveRaveQueue.submit({
+      id: input.id,
+      guestId: input.guestId,
+      requestedAtSec: input.requestedAtSec,
+      entry: raveQueueEntry(prepared),
+    });
+  }
+
+  /**
+   * Lets liveRave act on the session: the open requests are weighed
+   * against the rest of tonight's queue, and the approved ones are
+   * inserted at the scheduler's chosen slots. The current track is
+   * never touched. While a transition is planned or a blend is
+   * sounding, the queue is held exactly as it is and every open
+   * request is told to wait — a locked join is never rearranged.
+   */
+  async evaluateLiveRaveQueue(
+    nowSec: number,
+    phaseEnergy?: number,
+  ): Promise<RaveDecision[]> {
+    if (!this.current || this.liveRaveQueue.openRequests.length === 0) {
+      return [];
+    }
+    const context = {
+      nowSec,
+      phaseEnergy:
+        phaseEnergy ??
+        arcTarget((this.index + 1) / Math.max(1, this.queue.length)),
+      doNotPlay: [...this.liveRaveDoNotPlay],
+      playedTrackIds: [...this.liveRavePlayedTrackIds],
+    };
+    if (this.transitionPlanned || this.blendingNow) {
+      return this.liveRaveQueue.evaluate(
+        [],
+        context,
+        "Waiting — the next blend is already locked",
+      ).decisions;
+    }
+
+    const startIndex = this.index;
+    const currentTrackId = this.current.track.id;
+    const tail = this.queue.slice(this.index + 1);
+    const preparedTail = await Promise.all(
+      tail.map((track) => loadTrackForMixing(track)),
+    );
+
+    // The session may have moved on while tonight's tracks loaded.
+    if (
+      !this.current ||
+      this.current.track.id !== currentTrackId ||
+      this.index !== startIndex
+    ) {
+      return this.liveRaveQueue.evaluate(
+        [],
+        context,
+        "Waiting for the next safe moment",
+      ).decisions;
+    }
+    if (this.transitionPlanned || this.blendingNow) {
+      return this.liveRaveQueue.evaluate(
+        [],
+        context,
+        "Waiting — the next blend is already locked",
+      ).decisions;
+    }
+    if (preparedTail.some((prepared) => !prepared)) {
+      return this.liveRaveQueue.evaluate(
+        [],
+        context,
+        "Waiting while tonight's tracks are prepared",
+      ).decisions;
+    }
+
+    const entries = preparedTail.map((prepared) => raveQueueEntry(prepared!));
+    const result = this.liveRaveQueue.evaluate(entries, context);
+    if (result.changed) {
+      this.queue = [
+        ...this.queue.slice(0, this.index + 1),
+        ...result.upcoming.map((entry) => entry.track),
+      ];
+      usePlayerStore.getState().setQueue(this.queue);
+      this.next = null;
+      void this.prepareNext();
+    }
+    return result.decisions;
+  }
+
   /** Cuts straight to the next track, abandoning any planned blend. */
   skipNext(): void {
     if (!this.mixer || !this.current) return;
@@ -263,6 +397,8 @@ export class DjSession {
     this.segments = [];
     this.transitionPlanned = false;
     this.blendingNow = false;
+    this.liveRaveQueue.clear();
+    this.liveRavePlayedTrackIds.clear();
     this.onBlendChange?.(false);
     this.onRunningChange?.(false);
   }
@@ -298,6 +434,7 @@ export class DjSession {
       this.reportOutgoing(false);
     }
     this.current = prepared;
+    this.liveRavePlayedTrackIds.add(prepared.track.id);
     this.next = null;
     this.index = index;
     this.transitionPlanned = false;
@@ -454,6 +591,7 @@ export class DjSession {
       this.reportOutgoing(true);
       this.segments = pendingSegments;
       this.current = incoming;
+      this.liveRavePlayedTrackIds.add(incoming.track.id);
       this.next = null;
       this.index += 1;
       this.transitionPlanned = false;
