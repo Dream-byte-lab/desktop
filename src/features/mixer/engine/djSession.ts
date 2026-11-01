@@ -261,6 +261,8 @@ export class DjSession {
       outgoingPositionSec: position,
       incoming: this.next.analysis.beatMap,
       incomingEntryBeat: chooseEntryBeat(this.next.analysis),
+      outgoingKey: this.current.analysis.key,
+      incomingKey: this.next.analysis.key,
     });
     this.transitionPlanned = true;
     if (plan) {

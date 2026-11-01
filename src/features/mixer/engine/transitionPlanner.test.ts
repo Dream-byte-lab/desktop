@@ -72,6 +72,59 @@ describe("planTransition", () => {
     expect(plan!.blendDurationSec).toBeCloseTo(16 * (60 / 126), 6);
   });
 
+  it("reports the pair's key fit on the plan", () => {
+    const plan = planTransition({
+      outgoing: track({ bpm: 120 }),
+      outgoingPositionSec: 10,
+      incoming: track({ bpm: 120 }),
+      incomingEntryBeat: 32,
+      outgoingKey: {
+        tonic: "C",
+        mode: "major",
+        pitchClass: 0,
+        camelot: "8B",
+        confidence: 0.9,
+      },
+      incomingKey: {
+        tonic: "A",
+        mode: "minor",
+        pitchClass: 9,
+        camelot: "8A",
+        confidence: 0.9,
+      },
+    });
+    expect(plan).not.toBeNull();
+    expect(plan!.keyCompatibility?.relation).toBe("relative");
+    expect(plan!.keyCompatibility?.compatible).toBe(true);
+  });
+
+  it("refuses a clashing pair only when key compatibility is required", () => {
+    const clash = {
+      outgoing: track({ bpm: 120 }),
+      outgoingPositionSec: 10,
+      incoming: track({ bpm: 120 }),
+      incomingEntryBeat: 32,
+      outgoingKey: {
+        tonic: "C",
+        mode: "major",
+        pitchClass: 0,
+        camelot: "8B",
+        confidence: 0.9,
+      } as const,
+      incomingKey: {
+        tonic: "F#",
+        mode: "major",
+        pitchClass: 6,
+        camelot: "2B",
+        confidence: 0.9,
+      } as const,
+    };
+    expect(planTransition(clash)).not.toBeNull();
+    expect(
+      planTransition({ ...clash, requireKeyCompatibility: true }),
+    ).toBeNull();
+  });
+
   it("flags a stretch beyond the comfortable tolerance", () => {
     const plan = planTransition({
       outgoing: track({ bpm: 128 }),

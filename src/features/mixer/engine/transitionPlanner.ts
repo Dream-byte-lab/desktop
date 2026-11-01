@@ -5,6 +5,8 @@ import {
   timeAtBeat,
   type BeatMap,
 } from "./beatMap";
+import type { KeyEstimate } from "./detectKey";
+import { keyCompatibility, type KeyCompatibility } from "./keyCompatibility";
 
 // Plans one beatmatched blend between the track that is playing and the
 // track that comes next. Pure arithmetic on beat maps — no audio, no clock —
@@ -45,6 +47,15 @@ export interface TransitionRequest {
    * comfortable beatmatch. Larger stretches are planned but flagged.
    */
   tempoTolerance?: number;
+  /** Estimated keys, when the analyser produced them — used for the plan's harmonic report. */
+  outgoingKey?: KeyEstimate | null;
+  incomingKey?: KeyEstimate | null;
+  /**
+   * When true, a harmonically clashing pair gets no blend (null), so
+   * the caller falls back to a cut or echo-out. Off by default: a clash
+   * is reported on the plan, not treated as fatal.
+   */
+  requireKeyCompatibility?: boolean;
 }
 
 export interface TransitionPlan {
@@ -74,6 +85,8 @@ export interface TransitionPlan {
   bassSwapInSec: number;
   /** Seconds the incoming track takes to glide back to rate 1 afterwards. */
   rateReturnDurationSec: number;
+  /** Harmonic fit of the pair, when both keys are known. */
+  keyCompatibility: KeyCompatibility | null;
 }
 
 const MIN_BLEND_BEATS = 4;
@@ -139,6 +152,14 @@ export function planTransition(
     timeAtBeat(outgoing, exitBeat) - request.outgoingPositionSec;
   const blendDurationSec = blend * spbOut;
 
+  const keyFit = keyCompatibility(
+    request.outgoingKey ?? null,
+    request.incomingKey ?? null,
+  );
+  if (request.requireKeyCompatibility && keyFit && !keyFit.compatible) {
+    return null;
+  }
+
   return {
     blendBeats: blend,
     startsInSec,
@@ -153,5 +174,6 @@ export function planTransition(
     bassSwapBeatOffset,
     bassSwapInSec: startsInSec + bassSwapBeatOffset * spbOut,
     rateReturnDurationSec: phrase * secondsPerBeat(incoming.bpm),
+    keyCompatibility: keyFit,
   };
 }
