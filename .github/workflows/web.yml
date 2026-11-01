@@ -1,0 +1,72 @@
+name: Web version
+
+# Builds the browser version of Linerave and publishes it to
+# GitHub Pages: https://dream-byte-lab.github.io/desktop/
+# Nothing to install — the app runs in the browser. Features that
+# need the desktop shell (local files, the liveRave party server,
+# deeplinks, Discord) stay desktop-only; the player, the DJ brain,
+# imports and the library live in the renderer and work on the web.
+# The desktop build is untouched: the web build only sets WEB_BASE
+# so asset paths resolve under the /desktop/ subpath.
+#
+# One-time setup (repo owner): Settings -> Pages -> Build and
+# deployment -> Source: GitHub Actions.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: web-version
+  cancel-in-progress: true
+
+jobs:
+  build-and-deploy:
+    name: Build and deploy the web version
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build the web version
+        run: pnpm build
+        env:
+          WEB_BASE: /desktop/
+
+      - name: SPA fallback for GitHub Pages
+        run: cp dist/index.html dist/404.html
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload the web build
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
