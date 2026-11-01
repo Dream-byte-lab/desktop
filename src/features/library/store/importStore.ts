@@ -3,6 +3,7 @@ import type { ImportJob, ImportReview } from "@/shared/api";
 import type { ImportSource, Track } from "@/shared/contracts";
 import { notifyLibraryChanged } from "../hooks/usePlaylists";
 import { detectImportSource } from "../services/import";
+import { recordFailedImports } from "../services/import/failures/failedImportsStore";
 import {
   runClientImport,
   type ImportProgress,
@@ -115,6 +116,22 @@ export const useImportStore = create<ActiveImportState>((set, get) => ({
         };
 
         if (outcome.reviewItems.length > 0) {
+          if (outcome.failedTracks.length > 0) {
+            // Matching failures are final the moment matching ends —
+            // keep them whatever the review below decides. (When
+            // there is no review, finalizeLocalImport keeps them.)
+            const failedAt = new Date().toISOString();
+            recordFailedImports(
+              outcome.failedTracks.map((failure) => ({
+                source,
+                sourceTrack: failure.sourceTrack,
+                reason: failure.reason,
+                stage: "matching" as const,
+                importTitle: outcome.title,
+                failedAt,
+              })),
+            );
+          }
           updateLocalImportJob(
             job.id,
             { ...meta, status: "awaiting_decision", requiresDecision: true },
@@ -145,6 +162,7 @@ export const useImportStore = create<ActiveImportState>((set, get) => ({
           outcome.approvedTracks,
           outcome.title,
           outcome.description,
+          outcome.failedTracks,
         );
         set({ isPolling: false });
         notifyLibraryChanged();

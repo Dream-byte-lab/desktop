@@ -24,12 +24,23 @@ export interface ImportProgress {
   result: ImportResult;
 }
 
+/**
+ * A track that neither matched nor reached review: it failed, and
+ * the import must say WHICH song and WHY — never just count it.
+ */
+export interface FailedImportTrack {
+  sourceTrack: ClientImportedTrack;
+  reason: string;
+}
+
 export interface ClientImportOutcome {
   source: ImportSource;
   title: string;
   description?: string;
   approvedTracks: Track[];
   reviewItems: ImportReview[];
+  /** Every song that failed to match, named — the import still completes. */
+  failedTracks: FailedImportTrack[];
   result: ImportResult;
 }
 
@@ -158,11 +169,24 @@ async function matchPlaylist(
   const reviewItems = outcomes
     .map((outcome, index) => reviewItem(playlist.tracks[index], index, outcome))
     .filter((item): item is ImportReview => Boolean(item));
+  const reviewedIndexes = new Set(reviewItems.map((item) => item.position));
+  const failedTracks = outcomes.flatMap((outcome, index) => {
+    if (outcome.status === "approved" || reviewedIndexes.has(index)) {
+      return [];
+    }
+    return [
+      {
+        sourceTrack: playlist.tracks[index],
+        reason: outcome.status === "pending" ? outcome.reason : "unknown",
+      },
+    ];
+  });
   return {
     source: playlist.source,
     ...header,
     approvedTracks,
     reviewItems,
+    failedTracks,
     result,
   };
 }
@@ -191,6 +215,7 @@ export async function runClientImport(
         canonicalTrack(playlist.source, track),
       ),
       reviewItems: [],
+      failedTracks: [],
       result: { total, imported: total, skipped: 0 },
     };
   }

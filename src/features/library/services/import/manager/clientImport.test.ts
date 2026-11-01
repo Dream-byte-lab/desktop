@@ -82,6 +82,30 @@ describe("runClientImport", () => {
     expect(progress[progress.length - 1]).toBe(2);
   });
 
+  it("names every song that failed instead of only counting it", async () => {
+    mocks.parseImportSource.mockResolvedValue(spotifyPlaylist);
+    mocks.searchRaw.mockImplementation(async (query: string) =>
+      query.toLowerCase().includes("blinding")
+        ? [searchTrack("4NRXx6U8ABQ", "Blinding Lights", "The Weeknd", 200_000)]
+        : [],
+    );
+
+    const outcome = await runClientImport(spotifyPlaylist.sourceUrl);
+
+    // The good song still imports; the failed one is named, with why.
+    expect(outcome.approvedTracks).toHaveLength(1);
+    expect(outcome.result).toEqual({ total: 2, imported: 1, skipped: 1 });
+    expect(outcome.failedTracks).toEqual([
+      {
+        sourceTrack: expect.objectContaining({
+          sourceId: "sp2",
+          title: "Some Obscure Demo",
+        }),
+        reason: "no_catalog_candidates",
+      },
+    ]);
+  });
+
   it("sends ambiguous matches with a candidate to review", async () => {
     mocks.parseImportSource.mockResolvedValue({
       ...spotifyPlaylist,
@@ -154,7 +178,7 @@ describe("finalizeImportedPlaylist", () => {
 
     await expect(
       finalizeImportedPlaylist("Mine", undefined, [track, track]),
-    ).resolves.toEqual({ playlistId: "pl_1", saved: 1 });
+    ).resolves.toEqual({ playlistId: "pl_1", saved: 1, failedTracks: [] });
     expect(bulk).toHaveBeenCalledWith("pl_1", [track]);
   });
 
@@ -171,7 +195,29 @@ describe("finalizeImportedPlaylist", () => {
 
     await expect(
       finalizeImportedPlaylist("Mine", undefined, [track]),
-    ).resolves.toEqual({ playlistId: "pl_1", saved: 1 });
+    ).resolves.toEqual({ playlistId: "pl_1", saved: 1, failedTracks: [] });
     expect(single).toHaveBeenCalledWith("pl_1", track.id, track);
+  });
+
+  it("survives a bulk failure and a bad song, naming what could not be saved", async () => {
+    const badTrack = { ...track, id: "bad_id", title: "Unsavable" };
+    vi.spyOn(api, "createPlaylist").mockResolvedValue(playlist);
+    vi.spyOn(api, "addPlaylistTrackSnapshots").mockRejectedValue(
+      new ApiError(500, "Server Error"),
+    );
+    vi.spyOn(api, "addPlaylistTrack").mockImplementation(
+      async (_playlistId: string, trackId: string) => {
+        if (trackId === "bad_id") throw new ApiError(422, "Unprocessable");
+        return {} as Awaited<ReturnType<typeof api.addPlaylistTrack>>;
+      },
+    );
+
+    await expect(
+      finalizeImportedPlaylist("Mine", undefined, [track, badTrack]),
+    ).resolves.toEqual({
+      playlistId: "pl_1",
+      saved: 1,
+      failedTracks: [badTrack],
+    });
   });
 });

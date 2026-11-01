@@ -8,6 +8,8 @@ import type {
   ImportSource,
   Track,
 } from "@/shared/contracts";
+import { recordFailedImports } from "../failures/failedImportsStore";
+import type { FailedImportTrack } from "./clientImportManager";
 import { finalizeImportedPlaylist } from "./finalizeImport";
 
 interface LocalImportRecord {
@@ -69,18 +71,47 @@ export async function finalizeLocalImport(
   tracks: Track[],
   title?: string,
   description?: string,
+  matchingFailures: FailedImportTrack[] = [],
 ): Promise<{ finalized: boolean }> {
   const record = records.get(jobId);
   if (!record) throw new Error("Import was not found.");
   if (record.job.status === "completed") return { finalized: true };
   const total = record.job.result?.total ?? tracks.length;
+  const importTitle = title || record.job.title || "Imported playlist";
   updateLocalImportJob(jobId, { status: "finalizing" });
   try {
-    const { playlistId, saved } = await finalizeImportedPlaylist(
-      title || record.job.title || "Imported playlist",
+    const { playlistId, saved, failedTracks } = await finalizeImportedPlaylist(
+      importTitle,
       description ?? record.job.description,
       tracks,
     );
+    // Every song that failed — at matching or at saving — is kept
+    // in the failed-imports collection, automatically. The import
+    // itself completes with whatever succeeded.
+    const failedAt = new Date().toISOString();
+    recordFailedImports([
+      ...matchingFailures.map((failure) => ({
+        source: record.job.source,
+        sourceTrack: failure.sourceTrack,
+        reason: failure.reason,
+        stage: "matching" as const,
+        importTitle,
+        failedAt,
+      })),
+      ...failedTracks.map((track) => ({
+        source: record.job.source,
+        sourceTrack: {
+          sourceId: track.id,
+          title: track.title,
+          artists: track.artists.map((artist) => artist.name),
+          ...(track.durationMs ? { durationMs: track.durationMs } : {}),
+        },
+        reason: "save_failed",
+        stage: "saving" as const,
+        importTitle,
+        failedAt,
+      })),
+    ]);
     updateLocalImportJob(
       jobId,
       {

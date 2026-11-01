@@ -6,6 +6,8 @@ const FALLBACK_CONCURRENCY = 4;
 export interface FinalizedPlaylist {
   playlistId: string;
   saved: number;
+  /** Tracks that could not be saved, named — a save failure is never silent and never fatal to the rest. */
+  failedTracks: Track[];
 }
 
 function uniqueTracks(tracks: Track[]): Track[] {
@@ -21,8 +23,9 @@ function uniqueTracks(tracks: Track[]): Track[] {
 async function addOneByOne(
   playlistId: string,
   tracks: Track[],
-): Promise<number> {
+): Promise<{ saved: number; failedTracks: Track[] }> {
   let saved = 0;
+  const failedTracks: Track[] = [];
   let cursor = 0;
   const worker = async () => {
     while (cursor < tracks.length) {
@@ -31,7 +34,11 @@ async function addOneByOne(
         await api.addPlaylistTrack(playlistId, track.id, track);
         saved += 1;
       } catch (error) {
-        if (error instanceof ApiError && error.status === 409) saved += 1;
+        if (error instanceof ApiError && error.status === 409) {
+          saved += 1;
+        } else {
+          failedTracks.push(track);
+        }
       }
     }
   };
@@ -41,21 +48,24 @@ async function addOneByOne(
       worker,
     ),
   );
-  return saved;
+  return { saved, failedTracks };
 }
 
-async function addTracks(playlistId: string, tracks: Track[]): Promise<number> {
+async function addTracks(
+  playlistId: string,
+  tracks: Track[],
+): Promise<{ saved: number; failedTracks: Track[] }> {
   try {
     const result = await api.addPlaylistTrackSnapshots(playlistId, tracks);
-    return result.added;
-  } catch (error) {
-    if (
-      error instanceof ApiError &&
-      (error.status === 404 || error.status === 405)
-    ) {
-      return addOneByOne(playlistId, tracks);
-    }
-    throw error;
+    if (result.added >= tracks.length)
+      return { saved: result.added, failedTracks: [] };
+    // The batch claims a partial save but cannot say which tracks
+    // landed; settle it per track instead of guessing or failing.
+    return addOneByOne(playlistId, tracks);
+  } catch {
+    // Any batch failure degrades to per-track saving: one bad song
+    // (or one bad batch) must never orphan the whole playlist.
+    return addOneByOne(playlistId, tracks);
   }
 }
 
@@ -71,6 +81,9 @@ export async function finalizeImportedPlaylist(
       : {}),
   });
   const unique = uniqueTracks(tracks);
-  const saved = unique.length > 0 ? await addTracks(playlist.id, unique) : 0;
-  return { playlistId: playlist.id, saved };
+  const { saved, failedTracks } =
+    unique.length > 0
+      ? await addTracks(playlist.id, unique)
+      : { saved: 0, failedTracks: [] as Track[] };
+  return { playlistId: playlist.id, saved, failedTracks };
 }
