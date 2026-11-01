@@ -14,6 +14,7 @@ function analysis(partial: Partial<TrackAnalysis>): TrackAnalysis {
     energyCurve: [],
     drops: [],
     key: null,
+    vocalRanges: [],
     ...partial,
   };
 }

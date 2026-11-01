@@ -268,6 +268,8 @@ export class DjSession {
       incomingEntryBeat: chooseEntryBeat(this.next.analysis),
       outgoingKey: this.current.analysis.key,
       incomingKey: this.next.analysis.key,
+      outgoingVocals: this.current.analysis.vocalRanges,
+      incomingVocals: this.next.analysis.vocalRanges,
     });
     this.transitionPlanned = true;
     if (plan) {

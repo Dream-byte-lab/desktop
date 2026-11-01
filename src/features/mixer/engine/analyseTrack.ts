@@ -1,5 +1,6 @@
 import type { BeatMap } from "./beatMap";
 import { detectKey, type KeyEstimate } from "./detectKey";
+import { detectVocalRanges, type VocalRange } from "./detectVocals";
 
 // The analyser: listens to a track's raw audio and writes down what the
 // mixer needs to know — its tempo, where the first downbeat falls, how its
@@ -36,6 +37,8 @@ export interface TrackAnalysis {
   drops: DropCandidate[];
   /** Estimated musical key (Camelot-labelled), for harmonic mixing. */
   key: KeyEstimate | null;
+  /** Where someone is singing — the planner must not overlap two of these. */
+  vocalRanges: VocalRange[];
 }
 
 export interface AnalyseOptions {
@@ -263,12 +266,15 @@ export function analyseTrack(
   const keySampleCount = Math.min(samples.length, Math.floor(45 * sampleRate));
   const key = detectKey(samples.subarray(0, keySampleCount), sampleRate);
 
+  const vocalRanges = detectVocalRanges(samples, sampleRate);
+
   return {
     beatMap,
     tempoConfidence: tempo.confidence,
     energyCurve,
     drops,
     key,
+    vocalRanges,
   };
 }
 

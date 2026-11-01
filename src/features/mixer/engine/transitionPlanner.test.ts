@@ -125,6 +125,33 @@ describe("planTransition", () => {
     ).toBeNull();
   });
 
+  it("reports when both tracks would sing through the blend", () => {
+    // At 120 bpm from 10s in, the blend runs 16s–24s of the outgoing
+    // track and 8s–16s of the incoming one.
+    const base = {
+      outgoing: track({ bpm: 120 }),
+      outgoingPositionSec: 10,
+      incoming: track({ bpm: 120 }),
+      incomingEntryBeat: 32,
+    };
+    const both = planTransition({
+      ...base,
+      outgoingVocals: [{ startSec: 15, endSec: 25 }],
+      incomingVocals: [{ startSec: 10, endSec: 14 }],
+    });
+    expect(both?.vocalOverlap).toBe(true);
+
+    const incomingQuiet = planTransition({
+      ...base,
+      outgoingVocals: [{ startSec: 15, endSec: 25 }],
+      incomingVocals: [{ startSec: 30, endSec: 40 }],
+    });
+    expect(incomingQuiet?.vocalOverlap).toBe(false);
+
+    const unknown = planTransition(base);
+    expect(unknown?.vocalOverlap).toBe(false);
+  });
+
   it("flags a stretch beyond the comfortable tolerance", () => {
     const plan = planTransition({
       outgoing: track({ bpm: 128 }),

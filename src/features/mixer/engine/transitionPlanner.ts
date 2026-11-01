@@ -6,6 +6,7 @@ import {
   type BeatMap,
 } from "./beatMap";
 import type { KeyEstimate } from "./detectKey";
+import { overlapsVocals, type VocalRange } from "./detectVocals";
 import { keyCompatibility, type KeyCompatibility } from "./keyCompatibility";
 
 // Plans one beatmatched blend between the track that is playing and the
@@ -56,6 +57,9 @@ export interface TransitionRequest {
    * is reported on the plan, not treated as fatal.
    */
   requireKeyCompatibility?: boolean;
+  /** Where each track's vocals are, when the analyser found them. */
+  outgoingVocals?: VocalRange[];
+  incomingVocals?: VocalRange[];
 }
 
 export interface TransitionPlan {
@@ -87,6 +91,12 @@ export interface TransitionPlan {
   rateReturnDurationSec: number;
   /** Harmonic fit of the pair, when both keys are known. */
   keyCompatibility: KeyCompatibility | null;
+  /**
+   * True when BOTH tracks are singing during the blend — the one
+   * overlap listeners always hear. False when either side is
+   * instrumental through the blend, or when vocals are unknown.
+   */
+  vocalOverlap: boolean;
 }
 
 const MIN_BLEND_BEATS = 4;
@@ -160,6 +170,23 @@ export function planTransition(
     return null;
   }
 
+  // The blend windows in each track's own time: the outgoing side from
+  // its exit beat to its end beat; the incoming side from where it
+  // starts to the track-time it consumes during the blend (its wall
+  // clock length stretched by the matched rate).
+  const blendStartSec = Math.max(0, incomingStartSec());
+  const vocalOverlap =
+    overlapsVocals(
+      request.outgoingVocals ?? [],
+      timeAtBeat(outgoing, exitBeat),
+      timeAtBeat(outgoing, exitBeat + blend),
+    ) &&
+    overlapsVocals(
+      request.incomingVocals ?? [],
+      blendStartSec,
+      blendStartSec + blendDurationSec * incomingRate,
+    );
+
   return {
     blendBeats: blend,
     startsInSec,
@@ -175,5 +202,6 @@ export function planTransition(
     bassSwapInSec: startsInSec + bassSwapBeatOffset * spbOut,
     rateReturnDurationSec: phrase * secondsPerBeat(incoming.bpm),
     keyCompatibility: keyFit,
+    vocalOverlap,
   };
 }
