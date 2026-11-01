@@ -6,6 +6,13 @@ import type {
 import { startPoTokenWorker } from "./youtube/potoken-preload";
 import type { TvSession as YoutubeTvSession } from "./youtube/tv-session";
 import type { SolveResult as YoutubeSolveResult } from "./youtube/n-solver";
+import type {
+  PartyInfo,
+  PartyPublicState,
+  PartyReaction,
+  PartyRequestRecord,
+  PartyRequestStatusUpdate,
+} from "./liverave/types";
 import type { MainNetResult } from "./netdiag";
 import type { NetProbeResult } from "./netprobe/types";
 import type {
@@ -200,6 +207,14 @@ export interface LinerElectronApi {
   discordUpdateState: (state: any) => void;
   discordUpdateSettings: (settings: any) => void;
   getDiscordStatus: () => Promise<DiscordStatus>;
+  // liveRave party hosting (guest server in the main process)
+  partyStart: () => Promise<PartyInfo>;
+  partyStop: () => Promise<PartyInfo>;
+  partyInfo: () => Promise<PartyInfo>;
+  partySetState: (state: PartyPublicState) => void;
+  partySetRequestStatus: (update: PartyRequestStatusUpdate) => void;
+  onPartyRequest: (cb: (record: PartyRequestRecord) => void) => () => void;
+  onPartyReaction: (cb: (reaction: PartyReaction) => void) => () => void;
   mintPoToken: (identifier: string) => Promise<string>;
   youtubeTvSession: () => Promise<YoutubeTvSession>;
   youtubeSolveN: (
@@ -475,6 +490,30 @@ const api: LinerElectronApi = {
     ipcRenderer.send("discord:update-settings", settings);
   },
   getDiscordStatus: () => ipcRenderer.invoke("discord:get-status"),
+  partyStart: () => ipcRenderer.invoke("liverave:start-party"),
+  partyStop: () => ipcRenderer.invoke("liverave:stop-party"),
+  partyInfo: () => ipcRenderer.invoke("liverave:party-info"),
+  partySetState: (state) => {
+    ipcRenderer.send("liverave:set-state", state);
+  },
+  partySetRequestStatus: (update) => {
+    ipcRenderer.send("liverave:set-request-status", update);
+  },
+  onPartyRequest: (cb) => {
+    const listener = (_event: unknown, record: PartyRequestRecord) =>
+      cb(record);
+    ipcRenderer.on("liverave:request-received", listener);
+    return () => {
+      ipcRenderer.removeListener("liverave:request-received", listener);
+    };
+  },
+  onPartyReaction: (cb) => {
+    const listener = (_event: unknown, reaction: PartyReaction) => cb(reaction);
+    ipcRenderer.on("liverave:reaction-received", listener);
+    return () => {
+      ipcRenderer.removeListener("liverave:reaction-received", listener);
+    };
+  },
   mintPoToken: (identifier) => ipcRenderer.invoke("potoken:mint", identifier),
   youtubeTvSession: () => ipcRenderer.invoke("youtube:tv-session"),
   youtubeSolveN: (playerId, values) =>

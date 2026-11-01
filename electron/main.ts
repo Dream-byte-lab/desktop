@@ -50,6 +50,7 @@ import {
 } from "./netdiag.js";
 import { TouchBarManager } from "./touchbar.js";
 import { registerAuthSessionIpc } from "./auth-session-ipc.js";
+import { registerPartyIpc } from "./liverave/ipc.js";
 import { ThumbarController } from "./thumbar.js";
 import { OverlayManager } from "./overlay.js";
 import { detectCompositor } from "./compositor/index.js";
@@ -1523,6 +1524,7 @@ if (!gotTheLock) {
     });
 
     const authSessions = registerAuthSessionIpc();
+    registerPartyIpc(() => mainWindow);
     overlayManager?.bindAuthSource(
       () => Boolean(authSessions.get()),
       (listener) => authSessions.onChange(() => listener()),
