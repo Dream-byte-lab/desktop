@@ -27,8 +27,8 @@
   <body>
     <h1>API reachability test</h1>
     <p>
-      This page runs the same server checks the app runs, one by one, and
-      prints exactly what happens. No app code is involved.
+      This page runs the same server checks the app runs, one by one, and prints
+      exactly what happens. No app code is involved.
     </p>
     <button id="run">Run the checks</button>
     <pre id="out">Press the button…</pre>
@@ -64,10 +64,14 @@
           "1 api health (plain)",
           "https://api.tryliner.fun/health",
         );
-        await attempt("2 api health (app's exact recipe)", "https://api.tryliner.fun/health", {
-          cache: "no-store",
-          signal: AbortSignal.timeout(6000),
-        });
+        await attempt(
+          "2 api health (app's exact recipe)",
+          "https://api.tryliner.fun/health",
+          {
+            cache: "no-store",
+            signal: AbortSignal.timeout(6000),
+          },
+        );
         await attempt(
           "3 api health (no-cors, network only)",
           "https://api.tryliner.fun/health",

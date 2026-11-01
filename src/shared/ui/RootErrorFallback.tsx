@@ -62,7 +62,7 @@ export function RootErrorFallback({
 
   const errorDetailsString = useMemo(() => {
     const lines: string[] = [
-      "=== Liner Desktop Client Error Report ===",
+      "=== Linerave Client Error Report ===",
       `Time: ${new Date().toISOString()}`,
       `URL: ${typeof window !== "undefined" ? window.location.href : "unknown"}`,
       `User Agent: ${typeof navigator !== "undefined" ? navigator.userAgent : "unknown"}`,

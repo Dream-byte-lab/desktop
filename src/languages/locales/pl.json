@@ -43,7 +43,7 @@
   },
   "common": {
     "app": {
-      "name": "Liner",
+      "name": "Linerave",
       "description": "Więcej tego, co lubisz",
       "version": "Wersja 0.1.0"
     },
@@ -249,7 +249,7 @@
     "sign_in_to_account": "Zaloguj się na swoje konto",
     "auth_title_login": "Twoja muzyka, po twojemu",
     "auth_subtitle_login": "Zaloguj się i kontynuuj tam, gdzie skończyłeś.",
-    "auth_title_register": "Dołącz do Liner",
+    "auth_title_register": "Dołącz do Linerave",
     "auth_subtitle_register": "Załóż konto i zacznij tworzyć własną bibliotekę.",
     "profile_setup_title": "Skonfiguruj profil",
     "profile_setup_subtitle": "Wybierz unikalny identyfikator i wyświetlaną nazwę.",
@@ -319,7 +319,7 @@
       "email_invalid": "Wpisz prawidłowy adres e-mail.",
       "password_min_8": "Hasło musi mieć co najmniej 8 znaków.",
       "server_unavailable": "Nie można połączyć się z serwerem. Sprawdź połączenie.",
-      "server_error": "Serwery Liner mają teraz problemy. Spróbuj ponownie za kilka minut.",
+      "server_error": "Serwery Linerave mają teraz problemy. Spróbuj ponownie za kilka minut.",
       "invalid_credentials": "Nieprawidłowy e-mail lub hasło.",
       "email_already_used": "Ten adres e-mail jest już używany.",
       "username_invalid": "Nazwa użytkownika musi mieć 3–30 znaków: małe litery, cyfry lub podkreślenia.",
@@ -492,9 +492,9 @@
     "shortcuts": {
       "description": "Dostosuj globalne skróty systemowe i skróty odtwarzacza.",
       "global_section": "Skróty globalne (systemowe)",
-      "global_desc": "Działają w każdej aplikacji na komputerze, nawet gdy Liner jest zminimalizowany lub nieaktywny.",
+      "global_desc": "Działają w każdej aplikacji na komputerze, nawet gdy Linerave jest zminimalizowany lub nieaktywny.",
       "main_app_section": "Główna aplikacja",
-      "main_app_desc": "Aktywne, gdy główne okno Liner jest otwarte i aktywne.",
+      "main_app_desc": "Aktywne, gdy główne okno Linerave jest otwarte i aktywne.",
       "miniplayer_section": "Tryb miniodtwarzacza",
       "miniplayer_desc": "Aktywne, gdy miniodtwarzacz w nakładce jest aktywny.",
       "toggle_overlay": "Pokaż/ukryj nakładkę miniodtwarzacza",
@@ -568,7 +568,7 @@
       },
       "auto_show_on_minimize": {
         "title": "Pokazuj po zminimalizowaniu",
-        "description": "Automatycznie pokazuje nakładkę, gdy Liner zostanie zminimalizowany."
+        "description": "Automatycznie pokazuje nakładkę, gdy Linerave zostanie zminimalizowany."
       },
       "always_on_top": {
         "title": "Zawsze na wierzchu",
@@ -646,8 +646,8 @@
       "title": "Pamięć podręczna",
       "description": "Wykorzystanie miejsca, statystyki pamięci podręcznej i pliki multimedialne.",
       "usage_title": "Wykorzystanie miejsca",
-      "device_usage": "Liner używa obecnie {size} pamięci lokalnej.",
-      "device_usage_raw": "Liner używa obecnie {size} pamięci lokalnej.",
+      "device_usage": "Linerave używa obecnie {size} pamięci lokalnej.",
+      "device_usage_raw": "Linerave używa obecnie {size} pamięci lokalnej.",
       "audio_cache_limit": "Limit pamięci podręcznej",
       "audio_cache_limit_desc": "Po zapełnieniu najstarsze pliki i multimedia są usuwane automatycznie",
       "cache_limit": "Limit pamięci podręcznej",
@@ -663,7 +663,7 @@
       "empty_storage": "Pamięć podręczna jest czysta!",
       "cloud_disclaimer": "Wszystkie multimedia, okładki i utwory zostają w chmurze i zostaną ponownie pobrane podczas odtwarzania.",
       "clearing_title": "Czyszczenie pamięci...",
-      "clearing_subtitle": "Nie zamykaj tego okna, dopóki Liner czyści pamięć podręczną.",
+      "clearing_subtitle": "Nie zamykaj tego okna, dopóki Linerave czyści pamięć podręczną.",
       "cleared_title": "Pamięć wyczyszczona",
       "cleared_subtitle": "Pamięć podręczna została wyczyszczona. Nowe multimedia będą streamowane i zapisywane automatycznie.",
       "done_button": "Gotowe",
@@ -675,7 +675,7 @@
         "local": "Muzyka lokalna"
       },
       "local_confirm_title": "Usunąć też muzykę lokalną?",
-      "local_confirm_desc": "Muzyka lokalna to twoja zaimportowana biblioteka, a nie pamięć podręczna. {tracks} ({size}) zostanie usuniętych z Liner razem z okładkami i tekstami. Oryginalne pliki zostaną na miejscu.",
+      "local_confirm_desc": "Muzyka lokalna to twoja zaimportowana biblioteka, a nie pamięć podręczna. {tracks} ({size}) zostanie usuniętych z Linerave razem z okładkami i tekstami. Oryginalne pliki zostaną na miejscu.",
       "local_confirm_button": "Usuń muzykę lokalną"
     },
     "theme": {
@@ -716,7 +716,7 @@
       "title": "Profil",
       "signed_in_as": "Zalogowano jako",
       "not_signed_in": "Nie jesteś zalogowany w rozpoznanej sesji.",
-      "sign_in": "Zaloguj się do Liner",
+      "sign_in": "Zaloguj się do Linerave",
       "sign_out": "Wyloguj się",
       "sign_out_confirm": "Czy na pewno chcesz się wylogować?",
       "edit_profile": "Edytuj profil",
@@ -727,7 +727,7 @@
       "stat_active": "Aktywny",
       "no_bio": "Brak opisu",
       "details_section": "Szczegóły profilu",
-      "details_subtitle": "Dostosuj swój publiczny wizerunek w Liner",
+      "details_subtitle": "Dostosuj swój publiczny wizerunek w Linerave",
       "username_label": "Nazwa użytkownika",
       "username_hint": "3–30 małych znaków (a-z, 0-9, _). Musi być unikalna.",
       "username_invalid": "Nazwa użytkownika musi mieć 3–30 znaków: małe litery, cyfry lub podkreślenia.",
@@ -744,7 +744,7 @@
       "saved_success": "Profil zaktualizowany",
       "save_failed": "Nie udało się zaktualizować profilu",
       "privacy_section": "Prywatność i społeczność",
-      "privacy_subtitle": "Kontroluj swoją widoczność i obecność w Liner",
+      "privacy_subtitle": "Kontroluj swoją widoczność i obecność w Linerave",
       "public_profile": {
         "title": "Profil publiczny",
         "description": "Pozwól innym wyszukiwać twój profil i oglądać twoje publiczne informacje."
@@ -876,7 +876,7 @@
   },
   "error_screen": {
     "title": "Coś poszło nie tak",
-    "subtitle": "W Liner wystąpił nieoczekiwany błąd. Możesz przeładować aplikację lub spróbować ponownie.",
+    "subtitle": "W Linerave wystąpił nieoczekiwany błąd. Możesz przeładować aplikację lub spróbować ponownie.",
     "reload": "Przeładuj aplikację",
     "try_again": "Spróbuj ponownie",
     "go_home": "Przejdź na start",
@@ -903,13 +903,13 @@
   },
   "connectivity": {
     "wall_title": "Błąd połączenia",
-    "wall_subtitle": "Liner nie może połączyć się ze swoimi serwerami. Twoja muzyka i biblioteka są bezpieczne.",
-    "wall_title_server": "Serwery Liner mają problemy",
+    "wall_subtitle": "Linerave nie może połączyć się ze swoimi serwerami. Twoja muzyka i biblioteka są bezpieczne.",
+    "wall_title_server": "Serwery Linerave mają problemy",
     "wall_subtitle_server": "Twoje połączenie działa, ale serwer odpowiedział błędem. Twoja muzyka i biblioteka są bezpieczne, spróbuj ponownie za kilka minut.",
     "steps_title": "Szybkie rozwiązania do wypróbowania",
     "step_net": "Sprawdź, czy Wi-Fi lub kabel są podłączone i czy strony otwierają się w przeglądarce.",
     "step_vpn": "Wstrzymaj na minutę VPN, proxy lub filtry DNS, bo często blokują aplikację.",
-    "step_firewall": "Zezwól Liner na dostęp przez zaporę i ochronę sieciową antywirusa.",
+    "step_firewall": "Zezwól Linerave na dostęp przez zaporę i ochronę sieciową antywirusa.",
     "step_router": "Uruchom ponownie router, a potem naciśnij Ponów poniżej.",
     "retry": "Ponów",
     "retrying": "Sprawdzanie…",
@@ -934,13 +934,13 @@
   },
   "updater": {
     "modal_title": "Dostępna aktualizacja",
-    "modal_desc": "Nowa wersja Liner (v{version}) jest gotowa do pobrania.",
+    "modal_desc": "Nowa wersja Linerave (v{version}) jest gotowa do pobrania.",
     "view_changelog": "Lista zmian",
     "skip_button": "Pomiń",
     "update_button": "Aktualizuj",
     "downloading_title": "Pobieranie aktualizacji…",
     "downloaded_title": "Aktualizacja pobrana",
-    "downloaded_desc": "Uruchom ponownie Liner, aby zainstalować wersję {version}.",
+    "downloaded_desc": "Uruchom ponownie Linerave, aby zainstalować wersję {version}.",
     "install_button": "Zainstaluj",
     "error_title": "Aktualizacja nie powiodła się"
   },

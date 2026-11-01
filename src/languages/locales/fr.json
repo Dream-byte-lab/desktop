@@ -43,7 +43,7 @@
   },
   "common": {
     "app": {
-      "name": "Liner",
+      "name": "Linerave",
       "description": "Plus de ce que vous aimez",
       "version": "Version 0.1.0"
     },
@@ -254,7 +254,7 @@
       "importing": "Ajout en cours…",
       "empty_title": "Aucun fichier local pour le moment",
       "empty_subtitle": "Ajoutez des fichiers MP3, FLAC, M4A, OGG, OPUS ou WAV, ou glissez-les n'importe où dans la fenêtre.",
-      "drop_title": "Déposer pour ajouter à Liner",
+      "drop_title": "Déposer pour ajouter à Linerave",
       "drop_subtitle": "Les fichiers sont copiés uniquement sur cet appareil",
       "drop_count_one": "{count} fichier",
       "drop_count_many": "{count} fichiers",
@@ -273,7 +273,7 @@
       "remove": "Supprimer de l'appareil",
       "remove_all": "Tout supprimer",
       "remove_all_title": "Supprimer toute la musique locale ?",
-      "remove_all_desc": "{tracks} ({size}) seront supprimés de Liner, avec leurs pochettes et leurs paroles. Vos fichiers d'origine restent à leur place.",
+      "remove_all_desc": "{tracks} ({size}) seront supprimés de Linerave, avec leurs pochettes et leurs paroles. Vos fichiers d'origine restent à leur place.",
       "removed_all": "Musique locale supprimée"
     }
   },
@@ -282,7 +282,7 @@
     "sign_in_to_account": "Connectez-vous à votre compte",
     "auth_title_login": "Votre musique, à votre façon",
     "auth_subtitle_login": "Connectez-vous et reprenez là où vous vous étiez arrêté.",
-    "auth_title_register": "Rejoindre Liner",
+    "auth_title_register": "Rejoindre Linerave",
     "auth_subtitle_register": "Créez un compte et commencez à construire votre bibliothèque personnelle.",
     "profile_setup_title": "Configurez votre profil",
     "profile_setup_subtitle": "Choisissez votre identifiant unique et votre nom affiché.",
@@ -352,7 +352,7 @@
       "email_invalid": "Saisissez une adresse e-mail valide.",
       "password_min_8": "Le mot de passe doit contenir au moins 8 caractères.",
       "server_unavailable": "Impossible de joindre le serveur. Vérifiez votre connexion.",
-      "server_error": "Les serveurs de Liner rencontrent des difficultés. Réessayez dans quelques minutes.",
+      "server_error": "Les serveurs de Linerave rencontrent des difficultés. Réessayez dans quelques minutes.",
       "invalid_credentials": "E-mail ou mot de passe incorrect.",
       "email_already_used": "Cette adresse e-mail est déjà utilisée.",
       "username_invalid": "Le nom d'utilisateur doit contenir 3 à 30 lettres minuscules, chiffres ou tirets bas.",
@@ -592,9 +592,9 @@
     "shortcuts": {
       "description": "Personnalisez les raccourcis clavier globaux et ceux du lecteur.",
       "global_section": "Raccourcis globaux (système)",
-      "global_desc": "Fonctionnent depuis n'importe quelle application, même quand Liner est réduit ou n'a pas le focus.",
+      "global_desc": "Fonctionnent depuis n'importe quelle application, même quand Linerave est réduit ou n'a pas le focus.",
       "main_app_section": "Application principale",
-      "main_app_desc": "Actifs quand la fenêtre principale de Liner est ouverte et a le focus.",
+      "main_app_desc": "Actifs quand la fenêtre principale de Linerave est ouverte et a le focus.",
       "miniplayer_section": "Mode mini-lecteur",
       "miniplayer_desc": "Actifs quand le mini-lecteur en overlay a le focus.",
       "toggle_overlay": "Afficher/masquer le mini-lecteur",
@@ -668,7 +668,7 @@
       },
       "auto_show_on_minimize": {
         "title": "Afficher à la réduction",
-        "description": "Affiche automatiquement l'overlay quand Liner est réduit."
+        "description": "Affiche automatiquement l'overlay quand Linerave est réduit."
       },
       "always_on_top": {
         "title": "Toujours au premier plan",
@@ -746,8 +746,8 @@
       "title": "Cache et stockage",
       "description": "Répartition du stockage, statistiques du cache local et fichiers multimédias.",
       "usage_title": "Utilisation du stockage",
-      "device_usage": "Liner utilise actuellement {size} de stockage local.",
-      "device_usage_raw": "Liner utilise actuellement {size} de stockage local.",
+      "device_usage": "Linerave utilise actuellement {size} de stockage local.",
+      "device_usage_raw": "Linerave utilise actuellement {size} de stockage local.",
       "audio_cache_limit": "Taille maximale du cache",
       "audio_cache_limit_desc": "Les fichiers et médias les plus anciens sont supprimés automatiquement quand le cache est plein",
       "cache_limit": "Taille maximale du cache",
@@ -763,7 +763,7 @@
       "empty_storage": "Le cache est tout propre !",
       "cloud_disclaimer": "Tous les médias, pochettes et titres restent dans le cloud et seront retéléchargés automatiquement à la lecture.",
       "clearing_title": "Nettoyage du cache...",
-      "clearing_subtitle": "Gardez cette fenêtre ouverte pendant que Liner nettoie votre cache.",
+      "clearing_subtitle": "Gardez cette fenêtre ouverte pendant que Linerave nettoie votre cache.",
       "cleared_title": "Stockage libéré",
       "cleared_subtitle": "Votre cache a été vidé. Les nouveaux médias seront diffusés et mis en cache automatiquement.",
       "done_button": "Terminé",
@@ -775,7 +775,7 @@
         "local": "Musique locale"
       },
       "local_confirm_title": "Supprimer aussi votre musique locale ?",
-      "local_confirm_desc": "La musique locale est votre bibliothèque importée, pas du cache. {tracks} ({size}) seront supprimés de Liner, avec leurs pochettes et leurs paroles. Vos fichiers d'origine restent à leur place.",
+      "local_confirm_desc": "La musique locale est votre bibliothèque importée, pas du cache. {tracks} ({size}) seront supprimés de Linerave, avec leurs pochettes et leurs paroles. Vos fichiers d'origine restent à leur place.",
       "local_confirm_button": "Supprimer la musique locale"
     },
     "theme": {
@@ -816,7 +816,7 @@
       "title": "Profil",
       "signed_in_as": "Connecté en tant que",
       "not_signed_in": "Aucune session reconnue n'est actuellement connectée.",
-      "sign_in": "Se connecter à Liner",
+      "sign_in": "Se connecter à Linerave",
       "sign_out": "Se déconnecter",
       "sign_out_confirm": "Voulez-vous vraiment vous déconnecter ?",
       "edit_profile": "Modifier le profil",
@@ -827,7 +827,7 @@
       "stat_active": "Actif",
       "no_bio": "Pas encore de bio",
       "details_section": "Détails du profil",
-      "details_subtitle": "Personnalisez votre apparence publique sur Liner",
+      "details_subtitle": "Personnalisez votre apparence publique sur Linerave",
       "username_label": "Nom d'utilisateur",
       "username_hint": "3 à 30 caractères minuscules (a-z, 0-9, _). Doit être unique.",
       "username_invalid": "Le nom d'utilisateur doit contenir 3 à 30 lettres minuscules, chiffres ou tirets bas.",
@@ -844,7 +844,7 @@
       "saved_success": "Profil mis à jour",
       "save_failed": "Impossible de mettre à jour le profil",
       "privacy_section": "Confidentialité et social",
-      "privacy_subtitle": "Contrôlez votre visibilité et votre présence sociale sur Liner",
+      "privacy_subtitle": "Contrôlez votre visibilité et votre présence sociale sur Linerave",
       "public_profile": {
         "title": "Profil public",
         "description": "Permet aux autres de trouver votre profil et de voir vos informations publiques."
@@ -920,7 +920,7 @@
       },
       "sync_library": {
         "title": "Synchroniser la bibliothèque",
-        "description": "Affiche les playlists de votre compte YouTube dans la bibliothèque à côté des playlists Liner."
+        "description": "Affiche les playlists de votre compte YouTube dans la bibliothèque à côté des playlists Linerave."
       },
       "sign_out": "Se déconnecter",
       "sign_in": "Se connecter",
@@ -1047,7 +1047,7 @@
   },
   "error_screen": {
     "title": "Un problème est survenu",
-    "subtitle": "Une erreur inattendue s'est produite dans Liner. Vous pouvez recharger l'application ou réessayer.",
+    "subtitle": "Une erreur inattendue s'est produite dans Linerave. Vous pouvez recharger l'application ou réessayer.",
     "reload": "Recharger l'application",
     "try_again": "Réessayer",
     "go_home": "Aller à l'accueil",
@@ -1074,13 +1074,13 @@
   },
   "connectivity": {
     "wall_title": "Échec de la connexion",
-    "wall_subtitle": "Liner n'arrive pas à joindre ses serveurs. Votre musique et votre bibliothèque sont en sécurité.",
-    "wall_title_server": "Les serveurs de Liner rencontrent des difficultés",
+    "wall_subtitle": "Linerave n'arrive pas à joindre ses serveurs. Votre musique et votre bibliothèque sont en sécurité.",
+    "wall_title_server": "Les serveurs de Linerave rencontrent des difficultés",
     "wall_subtitle_server": "Votre connexion fonctionne, mais le serveur a répondu par une erreur. Votre musique et votre bibliothèque sont en sécurité, réessayez dans quelques minutes.",
     "steps_title": "Solutions rapides à essayer",
     "step_net": "Vérifiez que le Wi-Fi ou le câble est connecté et que les pages s'ouvrent dans un navigateur.",
     "step_vpn": "Mettez en pause le VPN, le proxy ou les filtres DNS pendant une minute : ils bloquent souvent l'application.",
-    "step_firewall": "Autorisez Liner dans le pare-feu et les protections réseau de l'antivirus.",
+    "step_firewall": "Autorisez Linerave dans le pare-feu et les protections réseau de l'antivirus.",
     "step_router": "Redémarrez le routeur, puis cliquez sur Réessayer ci-dessous.",
     "retry": "Réessayer",
     "retrying": "Vérification…",
@@ -1105,13 +1105,13 @@
   },
   "updater": {
     "modal_title": "Nouvelle mise à jour disponible",
-    "modal_desc": "Une nouvelle version de Liner (v{version}) est prête à être téléchargée.",
+    "modal_desc": "Une nouvelle version de Linerave (v{version}) est prête à être téléchargée.",
     "view_changelog": "Nouveautés",
     "skip_button": "Ignorer",
     "update_button": "Mettre à jour",
     "downloading_title": "Téléchargement de la mise à jour…",
     "downloaded_title": "Mise à jour téléchargée",
-    "downloaded_desc": "Redémarrez Liner pour installer la version {version}.",
+    "downloaded_desc": "Redémarrez Linerave pour installer la version {version}.",
     "install_button": "Installer",
     "error_title": "Échec de la mise à jour"
   },

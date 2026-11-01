@@ -245,7 +245,7 @@ export class PlayerRuntime {
       navigator.mediaSession.metadata = new MediaMetadata({
         title: track.title,
         artist: track.artists,
-        album: (track as { albumTitle?: string }).albumTitle || "Liner",
+        album: (track as { albumTitle?: string }).albumTitle || "Linerave",
         artwork: track.coverUrl
           ? [
               { src: track.coverUrl, sizes: "96x96", type: "image/jpeg" },
