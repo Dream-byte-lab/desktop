@@ -12,8 +12,13 @@ export interface PartyTrackListing {
 
 /** Everything a guest is allowed to see about tonight. */
 export interface PartyPublicState {
-  /** Whether the party is accepting guests and requests. */
+  /** Whether the party is open to guests at all. */
   open: boolean;
+  /**
+   * The host's kill switch: when false, the party stays open and
+   * visible but new requests are paused. The music never stops.
+   */
+  accepting: boolean;
   partyName: string;
   nowPlaying: PartyTrackListing | null;
   upNext: PartyTrackListing[];

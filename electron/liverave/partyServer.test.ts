@@ -17,6 +17,7 @@ async function startOpenServer() {
   const info = await server.start(0);
   server.setState({
     open: true,
+    accepting: true,
     partyName: "Test Party",
     nowPlaying: { id: "now", title: "Now Song", artist: "Now Artist" },
     upNext: [],
@@ -115,6 +116,27 @@ describe("PartyServer", () => {
         status: "coming soon",
       },
     ]);
+  });
+
+  it("pauses requests when the host flips the kill switch", async () => {
+    const { base, token } = await startOpenServer();
+    server!.setState({
+      open: true,
+      accepting: false,
+      partyName: "Test Party",
+      nowPlaying: null,
+      upNext: [],
+      catalogue: [{ id: "t1", title: "Song 1", artist: "Artist 1" }],
+    });
+    const res = await post(base, "/api/request", { token, trackId: "t1" });
+    expect(res.status).toBe(403);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toContain("paused by the host");
+    const state = (await (
+      await fetch(`${base}/api/state?token=${token}`)
+    ).json()) as { open: boolean; accepting: boolean };
+    expect(state.open).toBe(true);
+    expect(state.accepting).toBe(false);
   });
 
   it("rejects unknown guests", async () => {

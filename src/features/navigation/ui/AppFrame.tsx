@@ -50,6 +50,7 @@ import {
   useGlassBlur,
 } from "@/features/player";
 import { WelcomeGreeting } from "@/features/greeting/ui/WelcomeGreeting";
+import { DjPartyPanel } from "@/features/mixer/ui/DjPartyPanel";
 import { DjProView } from "@/features/mixer/ui/DjProView";
 import { DjSimpleView } from "@/features/mixer/ui/DjSimpleView";
 import SearchResultsList from "@/features/search/ui/SearchResultsList";
@@ -840,6 +841,7 @@ export default function AppFrame({ children }: AppFrameProps) {
             >
               <DjProView />
               <DjSimpleView />
+              <DjPartyPanel />
               <MiniPlayer
                 embedded
                 onQueueOpenChange={handleQueuePopupToggle}

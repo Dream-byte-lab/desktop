@@ -60,6 +60,7 @@ export class PartyServer {
   private boundPort = 0;
   private state: PartyPublicState = {
     open: false,
+    accepting: true,
     partyName: "liveRave party",
     nowPlaying: null,
     upNext: [],
@@ -215,6 +216,7 @@ export class PartyServer {
       }
       this.json(res, 200, {
         open: this.state.open,
+        accepting: this.state.accepting,
         partyName: this.state.partyName,
         nowPlaying: this.state.nowPlaying,
         upNext: this.state.upNext,
@@ -233,6 +235,10 @@ export class PartyServer {
       }
       if (!this.state.open) {
         this.json(res, 403, { error: "The party isn't open yet" });
+        return;
+      }
+      if (!this.state.accepting) {
+        this.json(res, 403, { error: "Requests are paused by the host" });
         return;
       }
       const listing = this.state.catalogue.find(

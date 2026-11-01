@@ -53,6 +53,10 @@ export function guestPageHtml(): string {
   </div>
 
   <div id="live" class="hidden">
+    <div id="paused" class="card hidden">
+      <div class="title">Requests are paused</div>
+      <div class="artist">The host has paused new requests for a bit — the music keeps playing.</div>
+    </div>
     <div class="card">
       <div class="label">Now playing</div>
       <div class="title" id="now-title">—</div>
@@ -94,6 +98,7 @@ export function guestPageHtml(): string {
   var token = localStorage.getItem(tokenKey);
   var catalogue = [];
   var myRequests = [];
+  var acceptingRequests = true;
 
   function el(tag, text, cls) {
     var node = document.createElement(tag);
@@ -131,6 +136,8 @@ export function guestPageHtml(): string {
     document.getElementById("closed").classList.toggle("hidden", state.open);
     document.getElementById("live").classList.toggle("hidden", !state.open);
     if (!state.open) return;
+    acceptingRequests = state.accepting !== false;
+    document.getElementById("paused").classList.toggle("hidden", acceptingRequests);
     document.getElementById("now-title").textContent = state.nowPlaying ? state.nowPlaying.title : "—";
     document.getElementById("now-artist").textContent = state.nowPlaying ? state.nowPlaying.artist : "";
     var upNext = document.getElementById("up-next");
@@ -184,7 +191,7 @@ export function guestPageHtml(): string {
         left.appendChild(el("div", track.artist, "artist"));
         row.appendChild(left);
         var button = el("button", openIds[track.id] ? "Requested" : "Request");
-        button.disabled = Boolean(openIds[track.id]);
+        button.disabled = Boolean(openIds[track.id]) || !acceptingRequests;
         button.addEventListener("click", function () { requestTrack(track, button); });
         row.appendChild(button);
         list.appendChild(row);
