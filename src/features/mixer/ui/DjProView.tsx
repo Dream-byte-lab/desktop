@@ -26,17 +26,17 @@ export function DjProToggle({ className, activeClassName }: DjProToggleProps) {
   const proOpen = useDjModeStore((state) => state.proOpen);
   const setProOpen = useDjModeStore((state) => state.setProOpen);
 
+  // Seamless-protection rule: the Pro layer must never clutter the
+  // plain press-play experience. Until DJ mode is on, this control
+  // does not exist in the interface at all.
+  if (!active) return null;
+
   return (
     <button
       type="button"
       aria-label="Pro deck controls"
       aria-pressed={proOpen}
-      title={
-        active
-          ? "Pro controls — crossfader, trims and bass kills for the two decks"
-          : "Pro controls are available while DJ mode is on"
-      }
-      disabled={!active}
+      title="Pro controls — crossfader, trims and bass kills for the two decks"
       className={`${className ?? ""} ${proOpen ? (activeClassName ?? "") : ""}`}
       onPointerDown={(e) => e.stopPropagation()}
       onClick={() => setProOpen(!proOpen)}
@@ -47,7 +47,6 @@ export function DjProToggle({ className, activeClassName }: DjProToggleProps) {
         fontSize: 11,
         fontWeight: 700,
         letterSpacing: "0.08em",
-        opacity: !active ? 0.4 : 1,
       }}
     >
       PRO
