@@ -1,0 +1,132 @@
+import { describe, expect, it } from "vitest";
+import type { BeatMap } from "./beatMap";
+import { planTransition } from "./transitionPlanner";
+
+function track(partial: Partial<BeatMap>): BeatMap {
+  return {
+    bpm: 128,
+    firstBeatSec: 0,
+    beatsPerBar: 4,
+    durationSec: 300,
+    ...partial,
+  };
+}
+
+describe("planTransition", () => {
+  it("starts the blend on a phrase boundary of the outgoing track", () => {
+    const plan = planTransition({
+      outgoing: track({}),
+      outgoingPositionSec: 61.3,
+      incoming: track({}),
+      incomingEntryBeat: 32,
+    });
+    expect(plan).not.toBeNull();
+    // 16-beat phrases at 128 bpm: boundaries fall on whole phrases
+    expect(plan!.outgoingExitBeat % 16).toBe(0);
+    // at 61.3s we are on beat ~130.7; the first boundary with at least
+    // 8 beats of lead is beat 144
+    expect(plan!.outgoingExitBeat).toBe(144);
+    expect(plan!.blendBeats).toBe(16);
+    expect(plan!.outgoingEndBeat).toBe(160);
+  });
+
+  it("lands the incoming entry beat exactly at the end of the blend", () => {
+    const plan = planTransition({
+      outgoing: track({}),
+      outgoingPositionSec: 10,
+      incoming: track({ firstBeatSec: 0.5 }),
+      incomingEntryBeat: 32,
+    });
+    expect(plan).not.toBeNull();
+    // 16 blend beats at the outgoing tempo (0.46875s each) before beat 32
+    expect(plan!.incomingStartSec).toBeCloseTo(0.5 + 16 * 0.46875, 6);
+    expect(plan!.blendDurationSec).toBeCloseTo(16 * 0.46875, 6);
+  });
+
+  it("tempo-matches the incoming track to the outgoing one", () => {
+    const plan = planTransition({
+      outgoing: track({ bpm: 126 }),
+      outgoingPositionSec: 10,
+      incoming: track({ bpm: 120 }),
+      incomingEntryBeat: 32,
+    });
+    expect(plan).not.toBeNull();
+    expect(plan!.incomingRate).toBeCloseTo(126 / 120, 6);
+    expect(plan!.tempoStretch).toBeCloseTo(0.05, 6);
+    expect(plan!.tempoComfortable).toBe(true);
+  });
+
+  it("flags a stretch beyond the comfortable tolerance", () => {
+    const plan = planTransition({
+      outgoing: track({ bpm: 128 }),
+      outgoingPositionSec: 10,
+      incoming: track({ bpm: 100 }),
+      incomingEntryBeat: 32,
+    });
+    expect(plan).not.toBeNull();
+    expect(plan!.incomingRate).toBeCloseTo(1.28, 6);
+    expect(plan!.tempoComfortable).toBe(false);
+  });
+
+  it("shortens the blend when the incoming track cannot start before zero", () => {
+    const plan = planTransition({
+      outgoing: track({}),
+      outgoingPositionSec: 10,
+      incoming: track({ firstBeatSec: 0 }),
+      incomingEntryBeat: 8,
+      blendBeats: 16,
+    });
+    expect(plan).not.toBeNull();
+    // only 8 beats exist before the entry beat, so the blend shrinks to fit
+    expect(plan!.blendBeats).toBe(8);
+    expect(plan!.incomingStartSec).toBe(0);
+  });
+
+  it("swaps the bass on a bar boundary near the middle of the blend", () => {
+    const plan = planTransition({
+      outgoing: track({}),
+      outgoingPositionSec: 10,
+      incoming: track({}),
+      incomingEntryBeat: 64,
+      blendBeats: 32,
+    });
+    expect(plan).not.toBeNull();
+    expect(plan!.bassSwapBeatOffset).toBe(16);
+    expect(plan!.bassSwapInSec - plan!.startsInSec).toBeCloseTo(
+      16 * 0.46875,
+      6,
+    );
+  });
+
+  it("refuses when the outgoing track has no room left for a blend", () => {
+    const plan = planTransition({
+      outgoing: track({ durationSec: 70 }),
+      outgoingPositionSec: 69,
+      incoming: track({}),
+      incomingEntryBeat: 32,
+    });
+    expect(plan).toBeNull();
+  });
+
+  it("refuses when the entry beat is past the end of the incoming track", () => {
+    const plan = planTransition({
+      outgoing: track({}),
+      outgoingPositionSec: 10,
+      incoming: track({ durationSec: 20 }),
+      incomingEntryBeat: 64,
+    });
+    expect(plan).toBeNull();
+  });
+
+  it("glides the incoming track back to its own tempo over one phrase", () => {
+    const plan = planTransition({
+      outgoing: track({ bpm: 126 }),
+      outgoingPositionSec: 10,
+      incoming: track({ bpm: 120 }),
+      incomingEntryBeat: 32,
+    });
+    expect(plan).not.toBeNull();
+    // one 16-beat phrase at the incoming track's own 120 bpm = 8 seconds
+    expect(plan!.rateReturnDurationSec).toBeCloseTo(8, 6);
+  });
+});

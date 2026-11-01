@@ -1,0 +1,50 @@
+{
+  "tasks": [
+    {
+      "args": ["dev"],
+      "command": "pnpm",
+      "detail": "Starts the app with hot reload (pnpm dev).",
+      "label": "Run the app (dev)",
+      "presentation": { "panel": "dedicated", "reveal": "always" },
+      "problemMatcher": [],
+      "type": "shell"
+    },
+    {
+      "args": ["build"],
+      "command": "pnpm",
+      "detail": "Type-checks and builds the app (pnpm build).",
+      "group": { "isDefault": true, "kind": "build" },
+      "label": "Build",
+      "problemMatcher": ["$tsc"],
+      "type": "shell"
+    },
+    {
+      "args": ["test"],
+      "command": "pnpm",
+      "detail": "Runs the full test suite once (pnpm test).",
+      "group": { "isDefault": true, "kind": "test" },
+      "label": "Test",
+      "problemMatcher": [],
+      "type": "shell"
+    },
+    {
+      "args": ["check"],
+      "command": "pnpm",
+      "detail": "Lint, format check, build and tests — the same checks as a pull request (pnpm check).",
+      "group": "build",
+      "label": "Check everything",
+      "problemMatcher": ["$tsc"],
+      "type": "shell"
+    },
+    {
+      "args": ["electron:build:linux"],
+      "command": "pnpm",
+      "detail": "Builds the Linux AppImage and .deb packages.",
+      "group": "build",
+      "label": "Package for Linux",
+      "problemMatcher": ["$tsc"],
+      "type": "shell"
+    }
+  ],
+  "version": "2.0.0"
+}
