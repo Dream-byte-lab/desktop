@@ -1,4 +1,5 @@
 import type { BeatMap } from "./beatMap";
+import { detectKey, type KeyEstimate } from "./detectKey";
 
 // The analyser: listens to a track's raw audio and writes down what the
 // mixer needs to know — its tempo, where the first downbeat falls, how its
@@ -33,6 +34,8 @@ export interface TrackAnalysis {
   energyCurve: { timeSec: number; energy: number }[];
   /** Likely drop points, strongest first. */
   drops: DropCandidate[];
+  /** Estimated musical key (Camelot-labelled), for harmonic mixing. */
+  key: KeyEstimate | null;
 }
 
 export interface AnalyseOptions {
@@ -254,7 +257,19 @@ export function analyseTrack(
   }
   drops.sort((a, z) => z.strength - a.strength);
 
-  return { beatMap, tempoConfidence: tempo.confidence, energyCurve, drops };
+  // The key is read from the opening stretch of the track: keys in
+  // dance music are stable, and sampling keeps this pass bounded
+  // instead of scanning every second of audio.
+  const keySampleCount = Math.min(samples.length, Math.floor(45 * sampleRate));
+  const key = detectKey(samples.subarray(0, keySampleCount), sampleRate);
+
+  return {
+    beatMap,
+    tempoConfidence: tempo.confidence,
+    energyCurve,
+    drops,
+    key,
+  };
 }
 
 /** Mixes an AudioBuffer down to mono samples and analyses them. */

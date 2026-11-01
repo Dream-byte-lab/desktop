@@ -13,6 +13,7 @@ function analysis(partial: Partial<TrackAnalysis>): TrackAnalysis {
     tempoConfidence: 0.9,
     energyCurve: [],
     drops: [],
+    key: null,
     ...partial,
   };
 }
