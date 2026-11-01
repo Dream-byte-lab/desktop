@@ -73,6 +73,7 @@ export default function CreatePlaylistModal() {
 
   const titleRef = useRef<HTMLInputElement>(null);
   const linkRef = useRef<HTMLInputElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
   const createPlaylist = useCreatePlaylist();
   const addTrack = useAddPlaylistTracks();
 
@@ -127,6 +128,32 @@ export default function CreatePlaylistModal() {
       close();
     } catch {
       setCreateError(t("common.failed_create_playlist"));
+    }
+  }
+
+  async function handleFile(file: File) {
+    if (importing) return;
+    setImportError("");
+    setImporting(true);
+    try {
+      const text = await file.text();
+      const summary = await useImportStore
+        .getState()
+        .startFileImport(file.name, text);
+      toast(
+        `Imported ${summary.imported} songs across ${summary.playlists} playlist${summary.playlists === 1 ? "" : "s"}${
+          summary.kept > 0
+            ? ` · ${summary.kept} song${summary.kept === 1 ? "" : "s"} kept in Failed imports`
+            : ""
+        }`,
+      );
+      close();
+    } catch (err: unknown) {
+      setImportError(
+        err instanceof Error ? err.message : "That file could not be imported.",
+      );
+    } finally {
+      setImporting(false);
     }
   }
 
@@ -323,6 +350,37 @@ export default function CreatePlaylistModal() {
               </DialogButton>
             </DialogActions>
           </form>
+        )}
+        {!isCreate && (
+          <div className="mt-4 flex flex-col gap-2 border-t border-black/[0.06] pt-3 dark:border-white/[0.08]">
+            <span className="text-[13px] font-medium text-text-primary">
+              Or bring your playlists from a file
+            </span>
+            <span className="text-[12px] text-text-secondary">
+              Works with your Spotify data download (the Playlist1.json files —
+              every playlist, private ones too) and CSV playlist exports. Songs
+              that cannot be matched are kept in Failed imports, never lost.
+            </span>
+            <input
+              ref={fileRef}
+              type="file"
+              accept=".json,.csv,application/json,text/csv"
+              className="hidden"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                event.target.value = "";
+                if (file) void handleFile(file);
+              }}
+            />
+            <button
+              type="button"
+              disabled={importing}
+              onClick={() => fileRef.current?.click()}
+              className="self-start rounded-full bg-black/[0.05] px-4 py-2 text-[13px] font-medium text-text-primary transition-colors hover:bg-black/[0.09] disabled:opacity-50 dark:bg-white/[0.08] dark:hover:bg-white/[0.12]"
+            >
+              {importing ? "Importing…" : "Choose a file…"}
+            </button>
+          </div>
         )}
         {!isCreate && (
           <button

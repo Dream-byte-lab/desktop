@@ -15,7 +15,10 @@ vi.mock("@/shared/youtube", async (importOriginal) => {
 });
 
 import { api, ApiError } from "@/shared/api";
-import { runClientImport } from "./clientImportManager";
+import {
+  runClientImport,
+  runClientImportFromPlaylist,
+} from "./clientImportManager";
 import { finalizeImportedPlaylist } from "./finalizeImport";
 
 function searchTrack(
@@ -156,6 +159,27 @@ describe("runClientImport", () => {
       id: "dQw4w9WgXcQ",
       cover: { url: "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg" },
     });
+  });
+});
+
+describe("runClientImportFromPlaylist (file imports)", () => {
+  it("matches an in-hand playlist exactly like a link import", async () => {
+    mocks.searchRaw.mockImplementation(async (query: string) =>
+      query.toLowerCase().includes("blinding")
+        ? [searchTrack("4NRXx6U8ABQ", "Blinding Lights", "The Weeknd", 200_000)]
+        : [],
+    );
+
+    const outcome = await runClientImportFromPlaylist(spotifyPlaylist);
+
+    expect(mocks.parseImportSource).not.toHaveBeenCalled();
+    expect(outcome.approvedTracks).toHaveLength(1);
+    expect(outcome.failedTracks).toEqual([
+      {
+        sourceTrack: expect.objectContaining({ sourceId: "sp2" }),
+        reason: "no_catalog_candidates",
+      },
+    ]);
   });
 });
 

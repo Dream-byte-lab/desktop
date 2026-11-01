@@ -200,6 +200,25 @@ export async function runClientImport(
     result: { total: 0, imported: 0, skipped: 0 },
   });
   const playlist = await parseImportSource(url, options.signal);
+  return importParsedPlaylist(playlist, options);
+}
+
+/**
+ * Imports a playlist that is already in hand — from a Spotify
+ * data-export file, say — through the exact same matching,
+ * review and failure-keeping as a link import.
+ */
+export async function runClientImportFromPlaylist(
+  playlist: ClientImportedPlaylist,
+  options: RunImportOptions = {},
+): Promise<ClientImportOutcome> {
+  return importParsedPlaylist(playlist, options);
+}
+
+async function importParsedPlaylist(
+  playlist: ClientImportedPlaylist,
+  options: RunImportOptions,
+): Promise<ClientImportOutcome> {
   if (playlist.tracks.length === 0) {
     throw new Error(
       "No tracks found in the imported playlist. Make sure the playlist is public and contains available tracks.",

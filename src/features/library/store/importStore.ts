@@ -4,8 +4,10 @@ import type { ImportSource, Track } from "@/shared/contracts";
 import { notifyLibraryChanged } from "../hooks/usePlaylists";
 import { detectImportSource } from "../services/import";
 import { recordFailedImports } from "../services/import/failures/failedImportsStore";
+import { parseExportFile } from "../services/import/sources/spotify/spotifyExport";
 import {
   runClientImport,
+  runClientImportFromPlaylist,
   type ImportProgress,
 } from "../services/import/manager/clientImportManager";
 import {
@@ -28,6 +30,10 @@ export interface ActiveImportState {
     url: string,
     pendingTrack?: TrackDetail | null,
   ) => Promise<ImportJob>;
+  startFileImport: (
+    fileName: string,
+    text: string,
+  ) => Promise<{ playlists: number; imported: number; kept: number }>;
   cancelPolling: () => void;
   reset: () => void;
 }
@@ -180,6 +186,51 @@ export const useImportStore = create<ActiveImportState>((set, get) => ({
     })();
 
     return job;
+  },
+
+  startFileImport: async (fileName: string, text: string) => {
+    const { playlists } = parseExportFile(fileName, text);
+    let imported = 0;
+    let kept = 0;
+    set({ isPolling: true, error: null });
+    try {
+      for (const playlist of playlists) {
+        const job = createLocalImportJob(playlist.source, `file:${fileName}`);
+        const outcome = await runClientImportFromPlaylist(playlist);
+        updateLocalImportJob(job.id, {
+          title: outcome.title,
+          description: outcome.description,
+          result: outcome.result,
+        });
+        // A file import runs unattended (a data download can hold
+        // many playlists), so songs that would need a decision are
+        // not dropped: they are kept in Failed Imports, where a
+        // later retry can still bring them home.
+        const failedAt = new Date().toISOString();
+        const needsDecision = outcome.reviewItems.map((item) => ({
+          source: playlist.source,
+          sourceTrack: item.sourceTrack,
+          reason: item.reason,
+          stage: "review" as const,
+          importTitle: outcome.title,
+          failedAt,
+        }));
+        if (needsDecision.length > 0) recordFailedImports(needsDecision);
+        await finalizeLocalImport(
+          job.id,
+          outcome.approvedTracks,
+          outcome.title,
+          outcome.description,
+          outcome.failedTracks,
+        );
+        imported += outcome.result.imported;
+        kept += outcome.failedTracks.length + needsDecision.length;
+      }
+    } finally {
+      set({ isPolling: false });
+    }
+    notifyLibraryChanged();
+    return { playlists: playlists.length, imported, kept };
   },
 }));
 
