@@ -84,7 +84,7 @@
       ]
     },
     "nsis": {
-      "artifactName": "Linerave-Setup-${version}.${ext}",
+      "artifactName": "Linerave-Setup-${version}-${arch}.${ext}",
       "allowToChangeInstallationDirectory": true,
       "oneClick": false
     },

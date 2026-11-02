@@ -20,10 +20,15 @@ export default defineConfig(({ command, mode }) => {
   }
 
   return {
-    // The desktop build keeps the default root base. The web
-    // version (GitHub Pages) builds with WEB_BASE=/desktop/ so
-    // asset paths resolve under the repository's Pages subpath.
-    base: process.env.WEB_BASE || "/",
+    // The desktop build MUST use a relative base: the packaged
+    // app loads dist/index.html via loadFile from inside the
+    // asar, where an absolute "/assets/..." path resolves to the
+    // filesystem root and the app's JavaScript never loads (the
+    // window stays blank). A relative "./" base is also the form
+    // upstream's OTA bundles ship. The web version (GitHub Pages)
+    // builds with WEB_BASE=/desktop/ so asset paths resolve under
+    // the repository's Pages subpath.
+    base: process.env.WEB_BASE || "./",
     define: {
       __APP_VERSION__: JSON.stringify(pkg.version),
       // True only for the GitHub Pages build (WEB_BASE set): the
