@@ -38,7 +38,8 @@
       {
         "provider": "github",
         "owner": "Dream-byte-lab",
-        "repo": "desktop"
+        "repo": "linerave-releases",
+        "private": true
       }
     ],
     "directories": {
