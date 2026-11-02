@@ -76,6 +76,7 @@
     "save_to_library": "Save to library",
     "share": "Share",
     "back": "Back",
+    "forward": "Forward",
     "link_copied": "Link copied",
     "download": "Download",
     "more": "More",
@@ -265,7 +266,7 @@
       "remove": "Remove from device",
       "remove_all": "Remove all imported files",
       "remove_all_title": "Remove all local music?",
-      "remove_all_desc": "{tracks} ({size}) will be removed from Linerave, together with their covers and lyrics. Your original files stay where they are.",
+      "remove_all_desc": "{tracks} ({size}) will be removed from Linerave, together with their covers. Your original files stay where they are.",
       "removed_all": "Local music removed"
     },
     "offline_mix": {
@@ -310,7 +311,6 @@
     "placeholder_confirm": "Repeat your password",
     "btn_sign_in": "Sign in",
     "btn_signing_in": "Signing in…",
-    "btn_continue_guest": "Continue without an account",
     "btn_create_account": "Create account",
     "btn_creating_account": "Creating account…",
     "separator_or": "or",
@@ -384,13 +384,16 @@
       "account_not_found": "Account not found or session expired. Try registering.",
       "failed_start_auth": "Failed to start Telegram auth",
       "registration_failed": "Registration failed: {status}",
-      "verification_canceled": "Verification canceled."
+      "verification_canceled": "Verification canceled.",
+      "human_check_cancelled": "Finish the human check to continue.",
+      "human_check_failed": "The human check didn't go through. Please try again."
     },
     "toasts": {
       "login_successful": "Login successful",
       "account_created": "Account created!",
       "logged_in": "Logged in!"
-    }
+    },
+    "btn_continue_guest": "Continue without an account"
   },
   "player": {
     "repeat_off": "Repeat: off",
@@ -584,8 +587,6 @@
     "docs": "Docs",
     "support": "Support",
     "manage_account": "Manage account",
-    "guest": "Guest",
-    "guest_hint": "Sign in to sync likes, playlists and history",
     "tabs": {
       "general": "General",
       "appearance": "Appearance",
@@ -615,6 +616,9 @@
       "toggle_overlay_desc": "Show or hide the floating desktop overlay from anywhere in the OS.",
       "quick_like_song": "Quick like current song",
       "quick_like_song_desc": "Like or unlike current playing track system-wide without focusing the player.",
+      "show_main_window": "Show Linerave",
+      "show_main_window_desc": "Bring the main Linerave window to the front from anywhere.",
+      "not_set": "Not set",
       "play_pause": "Play / Pause",
       "play_pause_desc": "Toggle audio playback.",
       "next_track": "Next track",
@@ -712,43 +716,43 @@
     },
     "discord": {
       "description": "Show what you're listening to on Discord with album art, artist badge and progress bar.",
-      "section_display": "Display Options",
-      "section_buttons": "Profile Buttons",
+      "section_display": "Display",
+      "section_buttons": "Profile buttons",
       "enable": {
-        "title": "Discord Rich Presence",
+        "title": "Rich Presence",
         "description": "Broadcast your active music playback to your Discord profile."
       },
       "status_display": {
-        "title": "Status Format",
+        "title": "Status line",
         "description": "Choose what appears in Discord's 'Listening to...' status header.",
-        "artist": "Artist (Default)",
-        "song": "Song Title",
+        "artist": "Artist",
+        "song": "Song title",
         "artist_song": "Artist - Song",
         "song_artist": "Song - Artist",
-        "app": "Liner (App name)"
+        "app": "Liner"
       },
       "show_timeline": {
-        "title": "Playback Timeline",
+        "title": "Playback timeline",
         "description": "Display interactive progress bar with elapsed and remaining track time."
       },
       "show_artwork": {
-        "title": "Track Artwork",
+        "title": "Track artwork",
         "description": "Show track or album cover in the Discord activity card."
       },
       "show_artist_image": {
-        "title": "Artist Photo Badge",
+        "title": "Artist photo badge",
         "description": "Display the artist photo in a small circular badge on the bottom corner."
       },
       "show_paused": {
-        "title": "Show when Paused",
+        "title": "Show when paused",
         "description": "Keep status visible on Discord with a paused indicator when music is paused."
       },
       "show_button": {
-        "title": "'Listen on Liner' Button",
+        "title": "“Listen on Liner” button",
         "description": "Add an interactive button linking to the song on Liner."
       },
       "show_download_button": {
-        "title": "'Download Liner' Button",
+        "title": "“Download Liner” button",
         "description": "Add an interactive button linking to tryliner.fun to download the app."
       },
       "status": {
@@ -867,7 +871,7 @@
         "liked": "Liked songs"
       },
       "local_confirm_title": "Remove imported files?",
-      "local_confirm_desc": "{tracks} ({size}) will be deleted from Linerave, together with their covers and lyrics. Your original files stay where they are.",
+      "local_confirm_desc": "{tracks} ({size}) will be deleted from Linerave, together with their covers. Your original files stay where they are.",
       "local_confirm_button": "Remove imported files",
       "total_on_device": "{size} on this device",
       "music_title": "Your music",
@@ -1041,7 +1045,9 @@
     },
     "connection": {
       "open_folder": "Open saved location"
-    }
+    },
+    "guest": "Guest",
+    "guest_hint": "Sign in to sync likes, playlists and history"
   },
   "toast": {
     "playlist_created": "Playlist created",
@@ -1107,7 +1113,13 @@
     "status_failed_sub": "Something went wrong",
     "view_playlist": "Open playlist",
     "no_candidate_found": "No matching track found in catalog",
-    "active_import": "Playlist Import"
+    "active_import": "Playlist Import",
+    "overview_unit_one": "track to add",
+    "overview_unit_other": "tracks to add",
+    "overview_review": "{count} to review",
+    "overview_matched": "Matched {count}",
+    "overview_added": "Added {count}",
+    "overview_skipped": "Skipped {count}"
   },
   "error_screen": {
     "title": "Something went wrong",
@@ -1206,6 +1218,16 @@
     "copy_code": "Copy code",
     "connected": "YouTube connected",
     "qr_label": "Sign-in QR code"
+  },
+  "human_check": {
+    "title": "Confirm you're not a bot",
+    "description": "A quick Cloudflare check keeps bots away from Liner accounts. It usually passes on its own in a second.",
+    "expired": "The check timed out and is starting again.",
+    "failed": "The check didn't load. Check your connection and try again.",
+    "waiting": "Checking…",
+    "retry": "Try again",
+    "cancel": "Cancel",
+    "skip": "Skip"
   },
   "offline": {
     "entered_auto_title": "Switched to offline mode",

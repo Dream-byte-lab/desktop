@@ -33,7 +33,7 @@ export function LoginBrandPanel({ title, subtitle }: LoginBrandPanelProps) {
           draggable={false}
           className="h-[22px] w-auto object-contain rounded-[5px] select-none"
         />
-        <span className="text-[18px] font-[650] tracking-[-0.03em] text-text-primary">
+        <span className="text-heading font-[650] tracking-[-0.03em] text-text-primary">
           Linerave
         </span>
       </div>

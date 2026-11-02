@@ -40,10 +40,14 @@ import { TimelineSlider } from "./TimelineSlider";
 import { useTheme } from "next-themes";
 import { useCoverReady, CoverImage, loadCoverElement } from "@/features/covers";
 import { useHasPageBackdrop } from "@/features/settings/store/customizationStore";
-import { ArtistLink } from "@/features/artist";
+import { ArtistAvatar, ArtistLink } from "@/features/artist";
 import { isLocalTrackId } from "@/shared/media/local";
 import DropdownMenu from "@/shared/ui/DropdownMenu";
 import { useSongMenuItems } from "../hooks/useSongMenuItems";
+
+const PROGRESS_STEP_MS = 1000;
+const PROGRESS_JUMP_TRANSITION =
+  "transform 380ms cubic-bezier(0.22, 1, 0.36, 1)";
 
 function rgbToHsl(r: number, g: number, b: number): [number, number, number] {
   r /= 255;
@@ -343,6 +347,14 @@ function MiniPlayer({
       : 0;
 
   const isPlaying = player.status === "playing";
+  const secondProgress =
+    isPlaying && durationMs > 0
+      ? Math.min(
+          1,
+          (Math.floor(player.positionMs / PROGRESS_STEP_MS) + 1) *
+            (PROGRESS_STEP_MS / durationMs),
+        )
+      : progress;
   const isLoading = player.status === "loading";
   const trackTitle = player.currentTrack?.title ?? t("player.nothing_playing");
   const trackArtists = player.currentTrack?.artists ?? t("player.choose_track");
@@ -394,7 +406,7 @@ function MiniPlayer({
     : "!bg-[#dfdfe1] dark:!bg-[#292929] !text-text-primary";
 
   const iconButtonClass =
-    "inline-flex h-[30px] w-[30px] items-center justify-center rounded-md text-text-secondary transition-colors duration-150 hover:bg-black/[0.05] dark:hover:bg-white/[0.09] hover:text-text-primary active:scale-[0.96] border-none bg-transparent cursor-pointer";
+    "inline-flex h-[30px] w-[30px] items-center justify-center rounded-control text-text-secondary transition-colors duration-150 hover:bg-black/[0.05] dark:hover:bg-white/[0.09] hover:text-text-primary active:scale-[0.96] border-none bg-transparent cursor-pointer";
 
   const clearVolumeHoverTimer = useCallback(() => {
     if (volumeHoverCloseTimerRef.current) {
@@ -553,7 +565,18 @@ function MiniPlayer({
   }, [clearVolumeHoverTimer, eqOpen, speedOpen, volumeOpen]);
 
   const [scrubRatio, setScrubRatio] = useState<number | null>(null);
-  const activeProgress = scrubRatio !== null ? scrubRatio : progress;
+  const activeProgress = scrubRatio !== null ? scrubRatio : secondProgress;
+
+  // anything other than the regular one-step tick (a new track, a seek, a
+  // repeat) is a jump: it eases out quickly instead of crawling linearly
+  const [shownProgress, setShownProgress] = useState(secondProgress);
+  const [progressJumped, setProgressJumped] = useState(false);
+  if (secondProgress !== shownProgress) {
+    const delta = secondProgress - shownProgress;
+    const step = durationMs > 0 ? PROGRESS_STEP_MS / durationMs : 0;
+    setProgressJumped(delta < 0 || delta > step * 1.5);
+    setShownProgress(secondProgress);
+  }
 
   return (
     <div
@@ -569,7 +592,7 @@ function MiniPlayer({
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 6, scale: 0.96, pointerEvents: "none" }}
             transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
-            className="absolute bottom-[52px] z-[99] w-[46px] rounded-[11px] p-[4px] bg-black/[0.05] backdrop-blur-2xl backdrop-saturate-150 dark:bg-white/[0.07] prevent-seek"
+            className="absolute bottom-[52px] z-[99] w-[46px] rounded-[11px] p-[4px] bg-fill backdrop-blur-2xl backdrop-saturate-150 prevent-seek"
             style={volumePopupStyle}
             onPointerDown={(e) => e.stopPropagation()}
             onMouseEnter={clearVolumeHoverTimer}
@@ -591,7 +614,7 @@ function MiniPlayer({
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 10, scale: 0.985 }}
             transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}
-            className="absolute bottom-[74px] z-[92] w-[300px] rounded-[14px] p-[16px] bg-black/[0.05] backdrop-blur-2xl backdrop-saturate-150 dark:bg-white/[0.07] prevent-seek"
+            className="absolute bottom-[74px] z-[92] w-[300px] rounded-[14px] p-[16px] bg-fill backdrop-blur-2xl backdrop-saturate-150 prevent-seek"
             style={speedPopupStyle}
             onPointerDown={(e) => e.stopPropagation()}
           >
@@ -609,7 +632,7 @@ function MiniPlayer({
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 10, scale: 0.985 }}
             transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}
-            className="absolute bottom-[74px] z-[92] w-[300px] rounded-[14px] p-[16px] bg-black/[0.05] backdrop-blur-2xl backdrop-saturate-150 dark:bg-white/[0.07] prevent-seek"
+            className="absolute bottom-[74px] z-[92] w-[300px] rounded-[14px] p-[16px] bg-fill backdrop-blur-2xl backdrop-saturate-150 prevent-seek"
             style={eqPopupStyle}
             onPointerDown={(e) => e.stopPropagation()}
           >
@@ -623,9 +646,9 @@ function MiniPlayer({
           usesRoundedStyle
             ? "rounded-full border-[0.5px] border-border-tertiary bg-bg-primary"
             : embedded
-              ? `rounded-[12px] ${
+              ? `rounded-item ${
                   hasPageBackdrop
-                    ? "bg-bg-glass dark:bg-black/20 backdrop-blur-[48px] backdrop-saturate-150"
+                    ? "bg-bg-glass backdrop-blur-[48px] backdrop-saturate-150"
                     : "bg-bg-primary"
                 }`
               : "rounded-3xl border-[0.5px] border-border-tertiary bg-bg-primary"
@@ -672,15 +695,16 @@ function MiniPlayer({
       >
         {usesBackgroundProgress && (
           <div
-            className="absolute inset-y-0 left-0 z-0 pointer-events-none"
+            className="absolute inset-0 z-0 pointer-events-none origin-left"
             style={{
               backgroundColor: accentColor,
-              width: `${activeProgress * 100}%`,
-              willChange: "width",
+              transform: `scaleX(${activeProgress})`,
               transition:
                 scrubRatio !== null
                   ? "none"
-                  : "width 200ms cubic-bezier(0.22, 1, 0.36, 1)",
+                  : isPlaying && !progressJumped
+                    ? `transform ${PROGRESS_STEP_MS}ms linear`
+                    : PROGRESS_JUMP_TRANSITION,
             }}
           />
         )}
@@ -745,7 +769,7 @@ function MiniPlayer({
               role="button"
               tabIndex={0}
               aria-label="Open player"
-              className={`relative h-[38px] w-[38px] shrink-0 overflow-hidden rounded-[8px] bg-bg-elevated cursor-pointer pointer-events-auto prevent-seek ${
+              className={`relative h-[38px] w-[38px] shrink-0 overflow-hidden rounded-control bg-bg-elevated cursor-pointer pointer-events-auto prevent-seek ${
                 coverUrl && !isCoverLoaded ? "animate-pulse" : ""
               }`}
               onClick={onFullscreenOpen}
@@ -762,7 +786,7 @@ function MiniPlayer({
                 onLoad={(e) => {
                   extractAccentColor(e.currentTarget as HTMLImageElement);
                 }}
-                className="h-[38px] w-[38px] object-cover rounded-[8px]"
+                className="h-[38px] w-[38px] object-cover rounded-control"
               />
             </div>
             <div className="flex min-w-0 flex-col pointer-events-none">
@@ -791,17 +815,24 @@ function MiniPlayer({
                 </span>
               </p>
               <p
-                className="m-0 mt-[4px] flex min-w-0 items-center gap-[5px] text-[13px] font-[300] text-text-tertiary pointer-events-none"
+                className="m-0 mt-[4px] flex min-w-0 items-center gap-[5px] text-body font-[300] text-text-tertiary pointer-events-none"
                 style={{
                   lineHeight: "15px",
                 }}
               >
                 {player.currentTrack?.explicit && (
-                  <span className="inline-flex h-[14px] w-[14px] shrink-0 -translate-y-px items-center justify-center rounded-[3.5px] bg-black/[0.1] dark:bg-white/[0.14] text-[8px] font-[600] leading-none text-text-secondary">
+                  <span className="inline-flex h-[14px] w-[14px] shrink-0 -translate-y-px items-center justify-center rounded-[3.5px] bg-fill-strong text-[8px] font-[600] leading-none text-text-secondary">
                     <span className="translate-y-[0.5px] [text-box:trim-both_cap_alphabetic]">
                       E
                     </span>
                   </span>
+                )}
+                {!isLocal && (
+                  <ArtistAvatar
+                    artistId={player.currentTrack?.artistId}
+                    artistList={player.currentTrack?.artistList}
+                    size={15}
+                  />
                 )}
                 <ArtistLink
                   name={trackArtists}
@@ -838,7 +869,7 @@ function MiniPlayer({
             <div
               className={`ml-auto flex items-center gap-[2px] rounded-lg p-[3px] pointer-events-auto prevent-seek cursor-default ${
                 hasPageBackdrop
-                  ? "bg-black/[0.04] dark:bg-white/[0.06]"
+                  ? "bg-fill-subtle"
                   : "bg-[#ebebed] dark:bg-[#141414]"
               }`}
               onPointerDown={(e) => e.stopPropagation()}

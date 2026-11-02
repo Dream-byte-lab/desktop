@@ -72,6 +72,7 @@
     "save_to_library": "Сохранить в библиотеку",
     "share": "Поделиться",
     "back": "Назад",
+    "forward": "Вперёд",
     "link_copied": "Ссылка скопирована",
     "download": "Скачать",
     "more": "Ещё",
@@ -273,7 +274,7 @@
       "remove": "Удалить с устройства",
       "remove_all": "Удалить все импортированные файлы",
       "remove_all_title": "Удалить всю локальную музыку?",
-      "remove_all_desc": "{tracks} ({size}) будут удалены из Linerave вместе с обложками и текстами. Исходные файлы останутся на месте.",
+      "remove_all_desc": "{tracks} ({size}) будут удалены из Linerave вместе с обложками. Исходные файлы останутся на месте.",
       "removed_all": "Локальная музыка удалена"
     },
     "offline_mix": {
@@ -387,7 +388,9 @@
       "account_not_found": "Аккаунт не найден или сессия истекла. Попробуйте зарегистрироваться.",
       "failed_start_auth": "Не удалось запустить авторизацию Telegram",
       "registration_failed": "Регистрация не удалась: {status}",
-      "verification_canceled": "Подтверждение отменено."
+      "verification_canceled": "Подтверждение отменено.",
+      "human_check_cancelled": "Пройдите проверку, чтобы продолжить.",
+      "human_check_failed": "Проверка не прошла. Попробуйте ещё раз."
     },
     "toasts": {
       "login_successful": "Успешный вход",
@@ -615,6 +618,9 @@
       "toggle_overlay_desc": "Показать или скрыть плавающий мини-плеер из любого места в ОС.",
       "quick_like_song": "Быстрый лайк текущего трека",
       "quick_like_song_desc": "Поставить или снять лайк треку снаружи плеера, даже если оверлей не в фокусе.",
+      "show_main_window": "Показать Linerave",
+      "show_main_window_desc": "Вывести главное окно Linerave на передний план из любого приложения.",
+      "not_set": "Не задано",
       "play_pause": "Воспроизведение / Пауза",
       "play_pause_desc": "Переключить воспроизведение аудио.",
       "next_track": "Следующий трек",
@@ -899,7 +905,7 @@
         "liked": "Любимые треки"
       },
       "local_confirm_title": "Удалить импортированные файлы?",
-      "local_confirm_desc": "{tracks} ({size}) будут удалены из Linerave вместе с обложками и текстами. Исходные файлы останутся на месте.",
+      "local_confirm_desc": "{tracks} ({size}) будут удалены из Linerave вместе с обложками. Исходные файлы останутся на месте.",
       "local_confirm_button": "Удалить импортированные файлы",
       "total_on_device": "{size} на этом устройстве",
       "music_title": "Ваша музыка",
@@ -1147,7 +1153,15 @@
     "status_failed_sub": "Что-то пошло не так",
     "view_playlist": "Открыть плейлист",
     "no_candidate_found": "Трек не найден в каталоге",
-    "active_import": "Импорт плейлиста"
+    "active_import": "Импорт плейлиста",
+    "overview_unit_one": "трек добавится",
+    "overview_unit_few": "трека добавится",
+    "overview_unit_many": "треков добавится",
+    "overview_unit_other": "трека добавится",
+    "overview_review": "{count} на проверке",
+    "overview_matched": "Найдено {count}",
+    "overview_added": "Добавлено {count}",
+    "overview_skipped": "Пропущено {count}"
   },
   "error_screen": {
     "title": "Что-то пошло не так",
@@ -1246,6 +1260,16 @@
     "copy_code": "Скопировать код",
     "connected": "YouTube подключён",
     "qr_label": "QR-код для входа"
+  },
+  "human_check": {
+    "title": "Подтвердите, что вы не бот",
+    "description": "Быстрая проверка Cloudflare защищает аккаунты Liner от ботов. Обычно она проходит сама за секунду.",
+    "expired": "Время проверки вышло, она начинается заново.",
+    "failed": "Проверка не загрузилась. Проверьте подключение и попробуйте ещё раз.",
+    "waiting": "Проверяем…",
+    "retry": "Попробовать снова",
+    "cancel": "Отмена",
+    "skip": "Пропустить"
   },
   "offline": {
     "entered_auto_title": "Включён офлайн-режим",
