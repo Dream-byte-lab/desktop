@@ -1,9 +1,11 @@
 // The guest page: the whole of what a party guest ever installs —
 // nothing. The host app serves this single self-contained page over
-// the local Wi-Fi; a guest opens it, gets an anonymous token kept in
-// their own browser, searches tonight's catalogue, requests songs,
-// watches honest statuses come back, and taps reactions. No account,
-// no app, no sign-in, and no powers beyond asking: guests cannot
+// the local Wi-Fi; a guest opens it from the host's join link (the
+// QR code carries tonight's join secret in its `#join=` fragment),
+// trades that secret for an anonymous token kept in their own
+// browser, searches tonight's catalogue, requests songs, watches
+// honest statuses come back, and taps reactions. No account, no
+// app, no sign-in, and no powers beyond asking: guests cannot
 // skip, stop, reorder or touch the volume.
 //
 // The page is built with plain DOM calls and textContent throughout,
@@ -95,6 +97,7 @@ export function guestPageHtml(): string {
 <script>
 (function () {
   var tokenKey = "liverave-guest-token";
+  var joinKey = "liverave-join-secret";
   var token = localStorage.getItem(tokenKey);
   var catalogue = [];
   var myRequests = [];
@@ -117,12 +120,68 @@ export function guestPageHtml(): string {
       return res.json().then(function (body) { return { ok: res.ok, status: res.status, body: body }; });
     });
   }
+  // Tonight's join secret rides in this page's own address, after
+  // the "#" — the host's QR code put it there. It never travels in
+  // a request URL; the page presents it once, in the mint call's
+  // body, and the server trades it for the guest token.
+  var joinSecret = (function () {
+    var match = /join=([^&]+)/.exec(location.hash || "");
+    if (match) {
+      var secret = decodeURIComponent(match[1]);
+      localStorage.setItem(joinKey, secret);
+      return secret;
+    }
+    return localStorage.getItem(joinKey) || "";
+  })();
+  function mintToken() {
+    return api("/api/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ join: joinSecret }),
+    }).then(function (res) {
+      if (res.ok && res.body.token) {
+        token = res.body.token;
+        localStorage.setItem(tokenKey, token);
+        return token;
+      }
+      return null;
+    });
+  }
   function ensureToken() {
     if (token) return Promise.resolve(token);
-    return api("/api/token", { method: "POST" }).then(function (res) {
-      token = res.body.token;
-      localStorage.setItem(tokenKey, token);
-      return token;
+    return mintToken();
+  }
+  function dropToken() {
+    token = null;
+    localStorage.removeItem(tokenKey);
+  }
+  // Calls an authenticated endpoint with the guest token in the
+  // body. A 401 means the stored token is dead (last night's party,
+  // most likely): drop it, mint a fresh one from tonight's join
+  // secret, and try exactly once more.
+  function callWithToken(path, payload) {
+    function attempt() {
+      return ensureToken().then(function (guestToken) {
+        if (!guestToken) {
+          return {
+            ok: false,
+            status: 403,
+            body: { error: "Couldn't join — scan the host's QR code" },
+          };
+        }
+        var body = { token: guestToken };
+        Object.keys(payload).forEach(function (key) { body[key] = payload[key]; });
+        return api(path, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+      });
+    }
+    return attempt().then(function (res) {
+      if (res.status !== 401) return res;
+      dropToken();
+      return attempt();
     });
   }
   function chipFor(status) {
@@ -202,13 +261,7 @@ export function guestPageHtml(): string {
   }
   function requestTrack(track, button) {
     button.disabled = true;
-    ensureToken().then(function (guestToken) {
-      return api("/api/request", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token: guestToken, trackId: track.id }),
-      });
-    }).then(function (res) {
+    callWithToken("/api/request", { trackId: track.id }).then(function (res) {
       if (res.ok) {
         toast(res.body.duplicate ? "Counted as a vote for that song" : "Request received");
       } else {
@@ -222,8 +275,9 @@ export function guestPageHtml(): string {
     });
   }
   function refresh() {
-    var query = token ? "?token=" + encodeURIComponent(token) : "";
-    api("/api/state" + query).then(function (res) { renderState(res.body); }).catch(function () {});
+    // The token goes in a header, never in the polled URL.
+    var options = token ? { headers: { "x-party-token": token } } : undefined;
+    api("/api/state", options).then(function (res) { renderState(res.body); }).catch(function () {});
   }
   function loadCatalogue() {
     api("/api/catalogue").then(function (res) {
@@ -234,13 +288,11 @@ export function guestPageHtml(): string {
   document.getElementById("search").addEventListener("input", renderCatalogue);
   document.querySelectorAll("[data-react]").forEach(function (button) {
     button.addEventListener("click", function () {
-      ensureToken().then(function (guestToken) {
-        return api("/api/react", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ token: guestToken, kind: button.getAttribute("data-react") }),
-        });
-      }).then(function () { toast("Sent to the DJ"); }).catch(function () {});
+      callWithToken("/api/react", { kind: button.getAttribute("data-react") })
+        .then(function (res) {
+          toast(res.ok ? "Sent to the DJ" : res.body.error || "That didn't go through");
+        })
+        .catch(function () {});
     });
   });
   ensureToken().then(function () {

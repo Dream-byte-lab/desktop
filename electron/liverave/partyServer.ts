@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import { networkInterfaces } from "node:os";
 import { guestPageHtml } from "./guestPage.js";
@@ -17,16 +17,33 @@ import type {
 // of NEW requests per guest per window; asking again for a song
 // already open is a vote and costs nothing).
 //
+// Tokens are not free: each party has a random join secret that
+// rides in the join link the host shows (the QR code and the typed
+// address both carry it as `#join=<secret>`). A phone must present
+// that secret to mint a token, minting is rate-limited per device,
+// and the guest list is capped — so one script on the LAN cannot
+// mint its way around the per-guest fairness rules. Reactions are
+// rate-limited per guest for the same reason.
+//
 // It makes NO musical decisions. The renderer publishes tonight's
 // public state (what's playing, what's searchable) and owns every
 // request's status; this server stores and relays, and passes each
 // accepted request to the renderer through its events. When the
-// party stops, the server closes and every token dies with it.
+// party stops, the server closes and every token dies with it —
+// and so does the join secret: tomorrow's party has a new one.
 
 export const PARTY_PORT = 8471;
 const MAX_BODY_BYTES = 16_384;
 const NEW_REQUEST_LIMIT = 3;
 const NEW_REQUEST_WINDOW_MS = 15 * 60_000;
+/** Token mints allowed per source IP per window (join + re-joins). */
+const TOKEN_MINT_LIMIT = 5;
+const TOKEN_MINT_WINDOW_MS = 15 * 60_000;
+/** Reactions allowed per guest per window. */
+const REACTION_LIMIT = 30;
+const REACTION_WINDOW_MS = 60_000;
+/** Hard cap on simultaneous guests for one party. */
+const MAX_GUESTS = 500;
 const REACTION_KINDS = new Set(["fire", "heart", "clap"]);
 const CLOSED_STATUSES = new Set(["played", "not tonight"]);
 
@@ -72,6 +89,16 @@ export class PartyServer {
     NEW_REQUEST_LIMIT,
     NEW_REQUEST_WINDOW_MS,
   );
+  private mintLimiter = new SlidingWindowLimiter(
+    TOKEN_MINT_LIMIT,
+    TOKEN_MINT_WINDOW_MS,
+  );
+  private reactionLimiter = new SlidingWindowLimiter(
+    REACTION_LIMIT,
+    REACTION_WINDOW_MS,
+  );
+  /** Tonight's join secret; empty unless a party is running. */
+  private joinSecret = "";
   private partyStartedAtMs = 0;
 
   constructor(private readonly events: PartyServerEvents = {}) {}
@@ -84,8 +111,11 @@ export class PartyServer {
     return {
       running: this.running,
       port: this.boundPort,
+      joinSecret: this.running ? this.joinSecret : "",
       addresses: this.running
-        ? lanAddresses().map((ip) => `http://${ip}:${this.boundPort}`)
+        ? lanAddresses().map(
+            (ip) => `http://${ip}:${this.boundPort}/#join=${this.joinSecret}`,
+          )
         : [],
     };
   }
@@ -104,6 +134,8 @@ export class PartyServer {
   async start(port: number = PARTY_PORT): Promise<PartyInfo> {
     if (this.server) return this.partyInfo();
     this.partyStartedAtMs = Date.now();
+    // A fresh secret per party: yesterday's QR code joins nothing.
+    this.joinSecret = randomBytes(16).toString("base64url");
     const server = createServer((req, res) => {
       void this.handle(req, res).catch(() => {
         if (!res.headersSent) {
@@ -129,6 +161,9 @@ export class PartyServer {
     this.guests.clear();
     this.records.clear();
     this.limiter.reset();
+    this.mintLimiter.reset();
+    this.reactionLimiter.reset();
+    this.joinSecret = "";
     if (server) {
       server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -169,6 +204,21 @@ export class PartyServer {
     }
   }
 
+  /** The LAN address a request arrived from, as a limiter key. */
+  private sourceIp(req: import("node:http").IncomingMessage): string {
+    return req.socket.remoteAddress ?? "unknown";
+  }
+
+  /** Constant-time check of a presented join secret. */
+  private joinSecretMatches(candidate: string): boolean {
+    const expected = Buffer.from(this.joinSecret, "utf8");
+    const given = Buffer.from(candidate, "utf8");
+    if (expected.length === 0 || expected.length !== given.length) {
+      return false;
+    }
+    return timingSafeEqual(expected, given);
+  }
+
   private async handle(
     req: import("node:http").IncomingMessage,
     res: import("node:http").ServerResponse,
@@ -187,6 +237,26 @@ export class PartyServer {
     }
 
     if (req.method === "POST" && path === "/api/token") {
+      const body = await this.readBody(req);
+      const presented = typeof body?.join === "string" ? body.join : "";
+      if (!this.joinSecretMatches(presented)) {
+        this.json(res, 403, {
+          error: "That join link isn't right — scan the host's QR code",
+        });
+        return;
+      }
+      const mintVerdict = this.mintLimiter.hit(this.sourceIp(req), Date.now());
+      if (!mintVerdict.allowed) {
+        this.json(res, 429, {
+          error: "Too many joins from this device — give it a few minutes",
+          retryAfterSec: Math.ceil(mintVerdict.retryAfterMs / 1000),
+        });
+        return;
+      }
+      if (this.guests.size >= MAX_GUESTS) {
+        this.json(res, 403, { error: "The party is full tonight" });
+        return;
+      }
       const token = randomUUID();
       this.guests.add(token);
       this.json(res, 200, { token });
@@ -199,7 +269,10 @@ export class PartyServer {
     }
 
     if (req.method === "GET" && path === "/api/state") {
-      const token = url.searchParams.get("token") ?? "";
+      // The guest token rides in a header, never in the URL, so it
+      // stays out of anything that logs addresses.
+      const header = req.headers["x-party-token"];
+      const token = typeof header === "string" ? header : "";
       const myRequests: GuestRequestView[] = [];
       for (const record of this.records.values()) {
         if (record.guestToken !== token) continue;
@@ -303,6 +376,14 @@ export class PartyServer {
       }
       if (!REACTION_KINDS.has(kind)) {
         this.json(res, 400, { error: "Unknown reaction" });
+        return;
+      }
+      const verdict = this.reactionLimiter.hit(token, Date.now());
+      if (!verdict.allowed) {
+        this.json(res, 429, {
+          error: "Easy — too many reactions",
+          retryAfterSec: Math.ceil(verdict.retryAfterMs / 1000),
+        });
         return;
       }
       this.events.onReaction?.({ guestToken: token, kind, atMs: Date.now() });

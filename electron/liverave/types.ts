@@ -57,6 +57,12 @@ export interface PartyRequestStatusUpdate {
 export interface PartyInfo {
   running: boolean;
   port: number;
+  /**
+   * Tonight's join secret, embedded in every join address as
+   * `#join=<secret>`; guests must present it to receive a token.
+   * Empty when no party is running. A fresh one is minted per party.
+   */
+  joinSecret: string;
   /** Join addresses on the local network, best first. */
   addresses: string[];
 }

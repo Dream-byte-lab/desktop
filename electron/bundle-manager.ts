@@ -5,6 +5,17 @@ import crypto from "node:crypto";
 import * as tar from "tar";
 import type { BundleUpdateState } from "./bundle-stamp";
 
+// LINERAVE: the inherited OTA bundle channel is permanently disabled in
+// this fork. Linerave ships its frontend inside the installer and updates
+// through installer releases, so an upstream bundle must never replace
+// our UI (security audit SA-2, finding F1: once our version reaches the
+// upstream manifest's minAppVersion, the background check below would
+// silently download upstream's signed frontend and swap ours out).
+// Every check/apply entry point in this file refuses while this is true,
+// so a future upstream merge that re-adds a caller still cannot activate
+// the channel. Do not flip this without replacing the whole update story.
+export const BUNDLE_UPDATES_DISABLED_FOR_LINERAVE = true;
+
 export interface BundleManifest {
   bundleVersion: string;
   minAppVersion: string;
@@ -84,6 +95,14 @@ export class BundleManager {
    * Reads active_bundle.json and validates files exist and are compatible
    */
   private loadActiveState() {
+    // LINERAVE: never activate a downloaded bundle (see
+    // BUNDLE_UPDATES_DISABLED_FOR_LINERAVE above) — a state file left on
+    // disk must not resurrect the channel (SA-2 F2).
+    if (BUNDLE_UPDATES_DISABLED_FOR_LINERAVE) {
+      this.activeState = null;
+      this.installedState = null;
+      return;
+    }
     try {
       if (fs.existsSync(this.stateFilePath)) {
         const raw = fs.readFileSync(this.stateFilePath, "utf-8");
@@ -121,6 +140,11 @@ export class BundleManager {
    * Returns path to current effective index.html (active OTA bundle OR built-in fallback)
    */
   public getEffectiveIndexPath(): string {
+    // LINERAVE: always serve the built-in dist while bundle updates are
+    // disabled (BUNDLE_UPDATES_DISABLED_FOR_LINERAVE), whatever state says.
+    if (BUNDLE_UPDATES_DISABLED_FOR_LINERAVE) {
+      return path.join(this.defaultRendererDist, "index.html");
+    }
     if (this.activeState) {
       const activeHtml = path.join(
         this.activeState.bundleDir,
@@ -231,6 +255,9 @@ export class BundleManager {
   public async updateBeforeLaunch(
     budgetMs = STARTUP_UPDATE_BUDGET_MS,
   ): Promise<void> {
+    // LINERAVE: bundle updates disabled — never fetch or install
+    // (BUNDLE_UPDATES_DISABLED_FOR_LINERAVE).
+    if (BUNDLE_UPDATES_DISABLED_FOR_LINERAVE) return;
     this.pruneBundles();
     const deadline = Date.now() + budgetMs;
     let manifest: BundleManifest;
@@ -266,6 +293,10 @@ export class BundleManager {
   }
 
   public async peekUpdate(): Promise<BundleUpdateState> {
+    // LINERAVE: bundle updates disabled (BUNDLE_UPDATES_DISABLED_FOR_LINERAVE)
+    // — report "latest" without touching the network; installer updates are
+    // a separate channel.
+    if (BUNDLE_UPDATES_DISABLED_FOR_LINERAVE) return { kind: "latest" };
     try {
       const manifest = await this.fetchManifest(5_000);
       if (!this.isVersionCompatible(app.getVersion(), manifest.minAppVersion)) {
@@ -284,6 +315,14 @@ export class BundleManager {
     manifest?: BundleManifest;
     reason?: string;
   }> {
+    // LINERAVE: bundle updates disabled — refuse before any network work
+    // (BUNDLE_UPDATES_DISABLED_FOR_LINERAVE).
+    if (BUNDLE_UPDATES_DISABLED_FOR_LINERAVE) {
+      return {
+        available: false,
+        reason: "Bundle updates are disabled in Linerave",
+      };
+    }
     if (this.isChecking)
       return { available: false, reason: "Already checking" };
     this.isChecking = true;
@@ -337,6 +376,15 @@ export class BundleManager {
     manifest: BundleManifest,
     signal?: AbortSignal,
   ): Promise<{ success: boolean; error?: string }> {
+    // LINERAVE: bundle updates disabled — refuse even a direct call with a
+    // renderer-supplied manifest (BUNDLE_UPDATES_DISABLED_FOR_LINERAVE;
+    // also closes the SA-2 F9 arbitrary-URL fetch).
+    if (BUNDLE_UPDATES_DISABLED_FOR_LINERAVE) {
+      return {
+        success: false,
+        error: "Bundle updates are disabled in Linerave",
+      };
+    }
     if (this.isDownloading)
       return { success: false, error: "Already downloading" };
     this.isDownloading = true;
@@ -461,6 +509,9 @@ export class BundleManager {
    * Applies the downloaded bundle immediately (Hot Swap)
    */
   public hotSwap(): boolean {
+    // LINERAVE: bundle updates disabled — never swap the running UI to a
+    // downloaded bundle (BUNDLE_UPDATES_DISABLED_FOR_LINERAVE).
+    if (BUNDLE_UPDATES_DISABLED_FOR_LINERAVE) return false;
     if (!this.mainWindow || this.mainWindow.isDestroyed()) return false;
     if (this.installedState) this.activeState = this.installedState;
     const indexPath = this.getEffectiveIndexPath();

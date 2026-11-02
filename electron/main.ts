@@ -55,7 +55,10 @@ import { initStartupLog, slog } from "./startupLog.js";
 import { ThumbarController } from "./thumbar.js";
 import { OverlayManager } from "./overlay.js";
 import { detectCompositor } from "./compositor/index.js";
-import { BundleManager } from "./bundle-manager.js";
+import {
+  BUNDLE_UPDATES_DISABLED_FOR_LINERAVE,
+  BundleManager,
+} from "./bundle-manager.js";
 import { createBundleErrorStamp } from "./bundle-stamp.js";
 import { createSleepBlocker } from "./sleep-blocker.js";
 import { keepsOwnCors, needsOpenCors, withOpenCors } from "./cors.js";
@@ -1992,8 +1995,12 @@ if (!gotTheLock) {
     });
 
     // OTA bundle updater IPC handlers
+    // LINERAVE: while BUNDLE_UPDATES_DISABLED_FOR_LINERAVE is set, these
+    // answer exactly like the "no bundle manager" (dev mode) path, so the
+    // renderer's settings UI sees the same inactive shapes. The manager's
+    // own entry points refuse as well (defence in depth).
     ipcMain.handle("bundle:check", async () => {
-      if (!bundleManager) {
+      if (!bundleManager || BUNDLE_UPDATES_DISABLED_FOR_LINERAVE) {
         return {
           available: false,
           error: "Bundle updater inactive (dev mode)",
@@ -2003,19 +2010,19 @@ if (!gotTheLock) {
     });
 
     ipcMain.handle("bundle:download-and-install", async (_event, manifest) => {
-      if (!bundleManager) {
+      if (!bundleManager || BUNDLE_UPDATES_DISABLED_FOR_LINERAVE) {
         return { success: false, error: "Bundle updater inactive (dev mode)" };
       }
       return await bundleManager.downloadAndInstall(manifest);
     });
 
     ipcMain.handle("bundle:hot-swap", () => {
-      if (!bundleManager) return false;
+      if (!bundleManager || BUNDLE_UPDATES_DISABLED_FOR_LINERAVE) return false;
       return bundleManager.hotSwap();
     });
 
     ipcMain.handle("bundle:rollback", () => {
-      if (!bundleManager) return false;
+      if (!bundleManager || BUNDLE_UPDATES_DISABLED_FOR_LINERAVE) return false;
       return bundleManager.rollback();
     });
 
@@ -2053,12 +2060,17 @@ if (!gotTheLock) {
       );
 
       // check for OTA bundles every 15 minutes silently in background
-      setInterval(
-        () => {
-          bundleManager?.checkForUpdates().catch(() => {});
-        },
-        15 * 60 * 1000,
-      );
+      // LINERAVE: never armed — BUNDLE_UPDATES_DISABLED_FOR_LINERAVE
+      // (the manager's checkForUpdates would refuse anyway; don't even
+      // schedule the timer in this fork).
+      if (!BUNDLE_UPDATES_DISABLED_FOR_LINERAVE) {
+        setInterval(
+          () => {
+            bundleManager?.checkForUpdates().catch(() => {});
+          },
+          15 * 60 * 1000,
+        );
+      }
     }
 
     app.on("activate", () => {

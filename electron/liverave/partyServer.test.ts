@@ -28,9 +28,10 @@ async function startOpenServer() {
     })),
   });
   const base = `http://127.0.0.1:${info.port}`;
-  const tokenRes = await fetch(`${base}/api/token`, { method: "POST" });
+  const tokenRes = await post(base, "/api/token", { join: info.joinSecret });
+  expect(tokenRes.status).toBe(200);
   const { token } = (await tokenRes.json()) as { token: string };
-  return { base, token, received };
+  return { base, token, received, joinSecret: info.joinSecret };
 }
 
 function post(base: string, path: string, body: unknown) {
@@ -38,6 +39,12 @@ function post(base: string, path: string, body: unknown) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
+  });
+}
+
+function getState(base: string, token: string) {
+  return fetch(`${base}/api/state`, {
+    headers: { "x-party-token": token },
   });
 }
 
@@ -101,7 +108,7 @@ describe("PartyServer", () => {
     const { base, token, received } = await startOpenServer();
     await post(base, "/api/request", { token, trackId: "t1" });
     server!.setRequestStatus(received[0].requestId, "coming soon");
-    const res = await fetch(`${base}/api/state?token=${token}`);
+    const res = await getState(base, token);
     const body = (await res.json()) as {
       open: boolean;
       myRequests: { trackId: string; title: string; status: string }[];
@@ -132,9 +139,10 @@ describe("PartyServer", () => {
     expect(res.status).toBe(403);
     const body = (await res.json()) as { error: string };
     expect(body.error).toContain("paused by the host");
-    const state = (await (
-      await fetch(`${base}/api/state?token=${token}`)
-    ).json()) as { open: boolean; accepting: boolean };
+    const state = (await (await getState(base, token)).json()) as {
+      open: boolean;
+      accepting: boolean;
+    };
     expect(state.open).toBe(true);
     expect(state.accepting).toBe(false);
   });
@@ -146,5 +154,93 @@ describe("PartyServer", () => {
       trackId: "t1",
     });
     expect(res.status).toBe(401);
+  });
+
+  it("refuses to mint a token without tonight's join secret", async () => {
+    const { base } = await startOpenServer();
+    const noBody = await fetch(`${base}/api/token`, { method: "POST" });
+    expect(noBody.status).toBe(403);
+    const wrongSecret = await post(base, "/api/token", {
+      join: "not-the-secret",
+    });
+    expect(wrongSecret.status).toBe(403);
+    const emptySecret = await post(base, "/api/token", { join: "" });
+    expect(emptySecret.status).toBe(403);
+  });
+
+  it("mints a token to a guest who presents the join secret", async () => {
+    server = new PartyServer();
+    const info = await server.start(0);
+    expect(info.joinSecret).not.toBe("");
+    // The join addresses the host shows carry the same secret.
+    for (const address of info.addresses) {
+      expect(address).toContain(`#join=${info.joinSecret}`);
+    }
+    const base = `http://127.0.0.1:${info.port}`;
+    const res = await post(base, "/api/token", { join: info.joinSecret });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { token: string };
+    expect(body.token).toBeTruthy();
+  });
+
+  it("caps token mints per device, even with the join secret", async () => {
+    server = new PartyServer();
+    const info = await server.start(0);
+    const base = `http://127.0.0.1:${info.port}`;
+    for (let i = 0; i < 5; i++) {
+      const res = await post(base, "/api/token", {
+        join: info.joinSecret,
+      });
+      expect(res.status).toBe(200);
+    }
+    const sixth = await post(base, "/api/token", { join: info.joinSecret });
+    expect(sixth.status).toBe(429);
+    const body = (await sixth.json()) as { retryAfterSec: number };
+    expect(body.retryAfterSec).toBeGreaterThan(0);
+  });
+
+  it("rate-limits reactions per guest", async () => {
+    const reactions: string[] = [];
+    server = new PartyServer({
+      onReaction: (reaction) => reactions.push(reaction.kind),
+    });
+    const info = await server.start(0);
+    server.setState({
+      open: true,
+      accepting: true,
+      partyName: "Test Party",
+      nowPlaying: null,
+      upNext: [],
+      catalogue: [],
+    });
+    const base = `http://127.0.0.1:${info.port}`;
+    const tokenRes = await post(base, "/api/token", {
+      join: info.joinSecret,
+    });
+    const { token } = (await tokenRes.json()) as { token: string };
+    for (let i = 0; i < 30; i++) {
+      const res = await post(base, "/api/react", { token, kind: "fire" });
+      expect(res.status).toBe(200);
+    }
+    const flooded = await post(base, "/api/react", {
+      token,
+      kind: "fire",
+    });
+    expect(flooded.status).toBe(429);
+    // The blocked reaction never reached the host.
+    expect(reactions).toHaveLength(30);
+  });
+
+  it("takes the guest token from a header, never from the URL", async () => {
+    const { base, token } = await startOpenServer();
+    await post(base, "/api/request", { token, trackId: "t1" });
+    const viaQuery = (await (
+      await fetch(`${base}/api/state?token=${token}`)
+    ).json()) as { myRequests: unknown[] };
+    expect(viaQuery.myRequests).toEqual([]);
+    const viaHeader = (await (await getState(base, token)).json()) as {
+      myRequests: unknown[];
+    };
+    expect(viaHeader.myRequests).toHaveLength(1);
   });
 });
