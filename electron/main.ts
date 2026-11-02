@@ -1898,9 +1898,12 @@ if (!gotTheLock) {
       },
     );
 
-    // updater config: production github releases only, no prereleases or auto-install on close
-    autoUpdater.autoDownload = false;
-    autoUpdater.autoInstallOnAppQuit = false;
+    // updater config: production github releases (this repo) only, no
+    // prereleases; updates download in the background as soon as they are
+    // found and install on quit, so a new version never needs a manual
+    // reinstall — the prompts stay as a "restart now" shortcut
+    autoUpdater.autoDownload = true;
+    autoUpdater.autoInstallOnAppQuit = true;
     autoUpdater.allowPrerelease = false;
     autoUpdater.allowDowngrade = false;
 
@@ -1971,6 +1974,9 @@ if (!gotTheLock) {
         await autoUpdater.downloadUpdate();
         return { success: true };
       } catch (err: any) {
+        // with autoDownload on, a manual request can race the automatic
+        // download (already running or already finished) — not a failure
+        if (autoUpdater.autoDownload) return { success: true };
         return {
           success: false,
           error: err?.message || "Failed to download update",
@@ -2036,6 +2042,15 @@ if (!gotTheLock) {
           );
         });
       }, 4000);
+
+      // re-check for installer updates while the app stays open, so a
+      // release published during a long session is still picked up
+      setInterval(
+        () => {
+          autoUpdater.checkForUpdates().catch(() => {});
+        },
+        6 * 60 * 60 * 1000,
+      );
 
       // check for OTA bundles every 15 minutes silently in background
       setInterval(
