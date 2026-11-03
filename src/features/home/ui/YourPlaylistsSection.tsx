@@ -4,6 +4,10 @@ import ScrollableRow from "@/shared/ui/ScrollableRow";
 import CoverImage from "@/features/covers/ui/CoverImage";
 import { usePlaylistGenreLabels } from "@/features/genres/playlistGenreStore";
 import type { LibraryPlaylistSummary } from "@/features/library/hooks/usePlaylists";
+import {
+  orderPinnedFirst,
+  usePinnedPlaylistIds,
+} from "@/features/library/lib/playlistIdentity";
 import SectionHeading from "./SectionHeading";
 
 // The signed-in listener's own playlists, as a Home rail. Cards
@@ -82,11 +86,15 @@ function YourPlaylistsSection({
   playlists,
   headingMarginTop = "mt-[22px]",
 }: YourPlaylistsSectionProps) {
+  // Pinned playlists first (shared ordering helper); covers already
+  // carry any custom-cover overlay from the summary choke point.
+  const pinnedIds = usePinnedPlaylistIds();
+  const ordered = orderPinnedFirst(playlists, pinnedIds);
   return (
     <div className="flex flex-col">
       <SectionHeading title={title} icon={icon} marginTop={headingMarginTop} />
       <ScrollableRow className="flex gap-[28px] pl-3 pr-3 mt-[12px] overflow-x-auto pb-[2px]">
-        {playlists.map((playlist) => (
+        {ordered.map((playlist) => (
           <PlaylistRailCard key={playlist.id} playlist={playlist} />
         ))}
       </ScrollableRow>

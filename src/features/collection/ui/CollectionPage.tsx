@@ -47,6 +47,7 @@ import { useModalStore } from "@/features/library";
 import { buildShareUrl } from "@/shared/utils/share";
 import { useExternalItems } from "@/features/library/hooks";
 import { useCollection } from "../hooks/useCollection";
+import { useRomanized } from "@/shared/text";
 import { readCollectionPreview } from "../lib/collectionPreview";
 import {
   useTrackSearch,
@@ -67,6 +68,9 @@ function CollectionContent() {
   const location = useLocation();
   const preview = readCollectionPreview(location.state);
   const { data, loading } = useCollection(type, id);
+  // Display-only romanization under the header title; data.title itself
+  // (the identity used for playback context and sharing) is never changed.
+  const titleRomanized = useRomanized(data?.title);
   usePageBackdrop(preview?.coverUrl || data?.coverUrl);
   const isSingleArtistAlbum = useMemo(() => {
     if (type === "playlist" || !data || data.tracks.length === 0) return false;
@@ -325,7 +329,19 @@ function CollectionContent() {
                     )
                   }
 
-                  title={<h1 className={HERO_TITLE_CLASS}>{data.title}</h1>}
+                  title={
+                    <>
+                      <h1 className={HERO_TITLE_CLASS}>{data.title}</h1>
+                      {titleRomanized ? (
+                        <p
+                          data-romanization
+                          className="m-0 mt-[3px] text-[15px] font-[400] leading-[1.25] text-text-tertiary"
+                        >
+                          {titleRomanized}
+                        </p>
+                      ) : null}
+                    </>
+                  }
                   subtitle={
                     data.artists && data.artists.length > 0 ? (
                       <p

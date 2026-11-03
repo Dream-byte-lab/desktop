@@ -2,6 +2,7 @@ import { usePlayerStore } from "../../player/store/playerStore";
 import { djSession } from "../engine/djSession";
 import { initDjIntentWiring } from "../store/djIntentWiring";
 import { useDjModeStore } from "../store/djModeStore";
+import { initPersonalityWiring } from "../store/personalityWiring";
 
 // The DJ mode switch for the player bar. It shows the user's
 // standing INTENT (djModeStore.intent), not whether a session
@@ -19,6 +20,7 @@ import { useDjModeStore } from "../store/djModeStore";
 // The intent wiring owns the session's running-change notice (it
 // mirrors `active` into the store and runs the auto-resume machine).
 initDjIntentWiring();
+initPersonalityWiring();
 
 djSession.onBlendChange = (blending) => {
   useDjModeStore.getState().setBlending(blending);

@@ -42,7 +42,17 @@ import {
   DownloadLine,
 } from "@mingcute/react";
 import { AnimatePresence, motion } from "framer-motion";
-import { LuPencil, LuTrash2, LuText, LuShuffle } from "react-icons/lu";
+import {
+  LuPencil,
+  LuTrash2,
+  LuText,
+  LuShuffle,
+  LuPin,
+  LuImage,
+  LuRotateCcw,
+  LuCheck,
+  LuListChecks,
+} from "react-icons/lu";
 import { buildShareUrl } from "@/shared/utils/share";
 import Button from "@/shared/ui/Button";
 import DropdownMenu from "@/shared/ui/DropdownMenu";
@@ -56,20 +66,38 @@ import {
   usePlaylistsList,
   useLikedTracks,
   useReorderPlaylistTracks,
+  useAddPlaylistTracks,
+  useRemovePlaylistTracks,
+  useLikeTrack,
   reloadLikedTracks,
 } from "../hooks";
+import {
+  LIKES_COVER_ID,
+  clearCustomCover,
+  orderPinnedFirst,
+  togglePlaylistPin,
+  useCustomCover,
+  usePinnedPlaylistIds,
+} from "../lib/playlistIdentity";
+import { openPlaylistCoverPicker } from "../lib/playlistCoverPicker";
+import {
+  applyRangeSelection,
+  toggleSelectionKey,
+  trackSelectionKey,
+} from "../lib/trackSelection";
 import { statusOf } from "@/features/connectivity";
 import { useListReorder } from "@/shared/hooks";
 import { playerEngine } from "@/features/player";
 import type { Track } from "@/shared/types";
 import { useTranslation } from "@/languages";
-import { api } from "@/shared/api";
+import { api, ApiError } from "@/shared/api";
 import {
   useTrackSearch,
   TrackSearchField,
   TrackSearchEmpty,
 } from "./TrackSearch";
 import { useTrackSort, TrackSortMenu } from "./TrackSort";
+import { useRomanized } from "@/shared/text";
 
 interface TrackItemProps {
   track: Track;
@@ -81,6 +109,9 @@ interface TrackItemProps {
   showReorderHandle?: boolean;
   onGrabStart?: (e: React.PointerEvent<HTMLDivElement>) => void;
   highlight?: string;
+  selectionMode?: boolean;
+  selected?: boolean;
+  onToggleSelect?: (e: React.MouseEvent) => void;
 }
 
 const TrackItem = memo(function TrackItem({
@@ -93,6 +124,9 @@ const TrackItem = memo(function TrackItem({
   showReorderHandle,
   onGrabStart,
   highlight,
+  selectionMode,
+  selected,
+  onToggleSelect,
 }: TrackItemProps) {
   const handlePlay = useCallback(() => {
     if (typeof window !== "undefined" && window.__linerWasDragging) return;
@@ -101,31 +135,52 @@ const TrackItem = memo(function TrackItem({
   }, [track, allTracks, playlistId, playlistTitle, playlistCoverUrl]);
 
   return (
-    <div style={style} data-reorder-item>
-      <SongCardWithMenu
-        id={track.id}
-        title={track.title}
-        artists={track.artists}
-        artistId={track.artistId}
-        artistList={track.artistList}
-        coverUrl={track.coverUrl || playlistCoverUrl}
-        playlistId={playlistId}
-        playlistItemId={track.playlistItemId}
-        playlistTitle={playlistTitle}
-        showReorderHandle={showReorderHandle}
-        onGrabStart={onGrabStart}
-        highlight={highlight}
-        duration={
-          track.durationMs
-            ? `${Math.floor(track.durationMs / 60000)}:${String(
-                Math.floor((track.durationMs % 60000) / 1000),
-              ).padStart(2, "0")}`
-            : undefined
-        }
-        durationMs={track.durationMs}
-        explicit={track.explicit}
-        onPlay={handlePlay}
-      />
+    <div style={style} data-reorder-item className="flex items-center">
+      {selectionMode ? (
+        <button
+          type="button"
+          role="checkbox"
+          aria-checked={Boolean(selected)}
+          aria-label={track.title}
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleSelect?.(e);
+          }}
+          className={`ml-[6px] flex h-[22px] w-[22px] shrink-0 cursor-pointer items-center justify-center rounded-[6px] border p-0 transition-colors ${
+            selected
+              ? "border-transparent bg-accent-primary text-white"
+              : "border-border-primary bg-transparent text-transparent hover:border-text-secondary"
+          }`}
+        >
+          <LuCheck size={14} />
+        </button>
+      ) : null}
+      <div className="min-w-0 flex-1">
+        <SongCardWithMenu
+          id={track.id}
+          title={track.title}
+          artists={track.artists}
+          artistId={track.artistId}
+          artistList={track.artistList}
+          coverUrl={track.coverUrl || playlistCoverUrl}
+          playlistId={playlistId}
+          playlistItemId={track.playlistItemId}
+          playlistTitle={playlistTitle}
+          showReorderHandle={showReorderHandle}
+          onGrabStart={onGrabStart}
+          highlight={highlight}
+          duration={
+            track.durationMs
+              ? `${Math.floor(track.durationMs / 60000)}:${String(
+                  Math.floor((track.durationMs % 60000) / 1000),
+                ).padStart(2, "0")}`
+              : undefined
+          }
+          durationMs={track.durationMs}
+          explicit={track.explicit}
+          onPlay={handlePlay}
+        />
+      </div>
     </div>
   );
 });
@@ -205,6 +260,12 @@ function LibraryPlaylistContent() {
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [isEditingDescription, setIsEditingDescription] = useState(false);
   const reorderTracks = useReorderPlaylistTracks();
+  // Playlist identity: local custom cover + pin state for this page's
+  // playlist (Liked Songs uses the reserved "likes" cover id).
+  const identityCoverId = isLikesMode ? LIKES_COVER_ID : decodedId;
+  const customCover = useCustomCover(identityCoverId);
+  const pinnedIds = usePinnedPlaylistIds();
+  const isPinned = decodedId ? pinnedIds.includes(decodedId) : false;
   const titleRef = useRef<HTMLHeadingElement>(null);
   const descriptionRef = useRef<HTMLParagraphElement>(null);
 
@@ -219,6 +280,8 @@ function LibraryPlaylistContent() {
     isLoading: likesLoading,
     error: likesError,
   } = useLikedTracks(isLikesMode ? { limit: 1000, offset: 0 } : undefined);
+
+  const { data: playlistList } = usePlaylistsList();
 
   const loadFailed = isLikesMode
     ? likesError && likesData.tracks.length === 0
@@ -239,29 +302,47 @@ function LibraryPlaylistContent() {
         title: t("playlist.liked_songs"),
         bio: "",
         countLabel: t("common.tracks", { count: tracks.length }),
-        coverUrl: "",
-        coverUrls: [] as string[],
+        // #248: a local custom cover for Liked Songs, when set, is
+        // the hero art; otherwise the palette cover below is used.
+        coverUrl: customCover ?? "",
+        coverUrls: customCover ? [customCover] : ([] as string[]),
         tracks,
         revision: 0,
       };
     }
     if (!playlistDetail) return null;
     const bio = playlistDetail.description?.trim() ?? "";
+    // The summary carries the live custom-cover overlay (and, after a
+    // reset, the restored derived covers) even when the cached detail
+    // still holds an older overlay, so it wins when present.
+    const summaryForCover = playlistList?.playlists?.find(
+      (playlist) => playlist.id === decodedId,
+    );
     return {
       title: playlistDetail.title || t("playlist.untitled_playlist"),
       bio,
       countLabel: t("common.tracks", { count: playlistDetail.trackCount }),
-      coverUrl: playlistDetail.coverUrl || "",
-      coverUrls:
-        playlistDetail.coverUrls ??
-        (playlistDetail.coverUrl ? [playlistDetail.coverUrl] : []),
+      coverUrl:
+        customCover ??
+        summaryForCover?.coverUrl ??
+        playlistDetail.coverUrl ??
+        "",
+      coverUrls: customCover
+        ? [customCover]
+        : summaryForCover?.coverUrls?.length
+          ? summaryForCover.coverUrls
+          : (playlistDetail.coverUrls ??
+            (playlistDetail.coverUrl ? [playlistDetail.coverUrl] : [])),
       tracks: playlistDetail.tracks,
       durationMs: playlistDetail.durationMs,
       revision: playlistDetail.revision,
     };
   })();
+  // Display-only romanization under the header title, rendered outside the
+  // (editable) h1 so it can never be captured into a rename; viewData.title
+  // itself is never changed.
+  const titleRomanized = useRomanized(viewData?.title);
   const likesCover = useLikesCover();
-  const { data: playlistList } = usePlaylistsList();
   const summary = isLikesMode
     ? undefined
     : playlistList?.playlists?.find((playlist) => playlist.id === decodedId);
@@ -339,6 +420,200 @@ function LibraryPlaylistContent() {
     [search.matches, sortedTracks],
   );
 
+  const { toast } = useToast();
+
+  // ---- Multi-select (harvest Rank 10 remainder) --------------------
+  // Selection mode with checkboxes and shift-range over the visible
+  // order. Bulk actions reuse the existing mutations and their exact
+  // toasts; there is deliberately no bare "like all" button — liking
+  // happens only for an explicit selection, inside this mode.
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedKeys, setSelectedKeys] = useState<ReadonlySet<string>>(
+    new Set(),
+  );
+  const [confirmingBulkRemove, setConfirmingBulkRemove] = useState(false);
+  const lastSelectedKeyRef = useRef<string | null>(null);
+  const likeTrackBulk = useLikeTrack();
+  const addTracksBulk = useAddPlaylistTracks();
+  const removeTracksBulk = useRemovePlaylistTracks();
+
+  useEffect(() => {
+    setSelectionMode(false);
+    setSelectedKeys(new Set());
+    setConfirmingBulkRemove(false);
+    lastSelectedKeyRef.current = null;
+  }, [decodedId, isLikesMode]);
+
+  useEffect(() => {
+    setConfirmingBulkRemove(false);
+  }, [selectedKeys]);
+
+  const visibleKeys = useMemo(
+    () => visibleTracks.map(({ track }) => trackSelectionKey(track)),
+    [visibleTracks],
+  );
+
+  const handleToggleSelect = useCallback(
+    (track: Track, event: React.MouseEvent) => {
+      const key = trackSelectionKey(track);
+      setSelectedKeys((previous) => {
+        if (event.shiftKey && lastSelectedKeyRef.current) {
+          return applyRangeSelection(
+            previous,
+            visibleKeys,
+            lastSelectedKeyRef.current,
+            key,
+            !previous.has(key),
+          );
+        }
+        return toggleSelectionKey(previous, key);
+      });
+      lastSelectedKeyRef.current = key;
+    },
+    [visibleKeys],
+  );
+
+  const selectedTracks = useMemo(
+    () =>
+      currentTracks.filter((track) =>
+        selectedKeys.has(trackSelectionKey(track)),
+      ),
+    [currentTracks, selectedKeys],
+  );
+
+  const exitSelection = useCallback(() => {
+    setSelectionMode(false);
+    setSelectedKeys(new Set());
+    setConfirmingBulkRemove(false);
+    lastSelectedKeyRef.current = null;
+  }, []);
+
+  const likedIdSet = useMemo(
+    () => new Set((likesData?.tracks ?? []).map((track) => track.id)),
+    [likesData],
+  );
+
+  const handleBulkLike = useCallback(() => {
+    const targets = selectedTracks.filter((track) => !likedIdSet.has(track.id));
+    for (const track of targets) likeTrackBulk.mutate(track.id);
+    if (targets.length > 0) {
+      toast(
+        t("playlist.bulk_liked", { count: targets.length }) ||
+          `${targets.length} tracks liked`,
+        "checkmark",
+      );
+    } else {
+      toast(
+        t("playlist.bulk_already_liked") ||
+          "All selected tracks are already liked",
+        "info",
+      );
+    }
+    exitSelection();
+  }, [selectedTracks, likedIdSet, likeTrackBulk, toast, t, exitSelection]);
+
+  const handleBulkAdd = useCallback(
+    async (targetId: string, targetTitle: string) => {
+      let added = 0;
+      let conflicts = 0;
+      let failed = 0;
+      for (const track of selectedTracks) {
+        try {
+          await addTracksBulk.mutateAsync({
+            playlistId: targetId,
+            trackId: track.id,
+          });
+          added += 1;
+        } catch (error) {
+          if (error instanceof ApiError && error.status === 409) {
+            conflicts += 1;
+          } else {
+            failed += 1;
+          }
+        }
+      }
+      // Same feedback shapes as the single-track modal: success names
+      // the playlist, an all-conflict run names the already-added
+      // case, anything else is the plain failure toast.
+      if (failed === 0 && conflicts === 0) {
+        toast(t("common.added_to_playlist"), "checkmark", {
+          description: targetTitle,
+        });
+      } else if (added === 0 && conflicts > 0 && failed === 0) {
+        toast(t("common.track_already_in_playlist"), "error");
+      } else if (added > 0) {
+        toast(
+          t("playlist.bulk_added_partial", {
+            added,
+            skipped: conflicts + failed,
+          }) || `${added} tracks added, ${conflicts + failed} skipped`,
+          "info",
+          { description: targetTitle },
+        );
+      } else {
+        toast(t("common.failed_add_playlist"), "error");
+      }
+      exitSelection();
+    },
+    [selectedTracks, addTracksBulk, toast, t, exitSelection],
+  );
+
+  const handleBulkRemove = useCallback(async () => {
+    if (!decodedId || isLikesMode) return;
+    const removed: Track[] = [];
+    let failed = 0;
+    for (const track of selectedTracks) {
+      if (!track.playlistItemId) {
+        failed += 1;
+        continue;
+      }
+      try {
+        await removeTracksBulk.mutateAsync({
+          playlistId: decodedId,
+          itemId: track.playlistItemId,
+        });
+        removed.push(track);
+      } catch {
+        failed += 1;
+      }
+    }
+    if (removed.length > 0) {
+      // Undo is honest with existing server semantics: re-adding a
+      // removed track goes through the same add endpoint. Position in
+      // the playlist is not restored (the API appends), which is why
+      // the remove itself is confirm-first in the bar above.
+      toast(t("common.removed_from_playlist"), "info", {
+        description:
+          removed.length === 1 ? removed[0].title : `${removed.length} tracks`,
+        action: {
+          label: t("common.undo"),
+          onClick: () => {
+            void (async () => {
+              for (const track of removed) {
+                await addTracksBulk
+                  .mutateAsync({ playlistId: decodedId, trackId: track.id })
+                  .catch(() => undefined);
+              }
+            })();
+          },
+        },
+      });
+    }
+    if (failed > 0 && removed.length === 0) {
+      toast(t("common.failed_to_remove_track"), "error");
+    }
+    exitSelection();
+  }, [
+    decodedId,
+    isLikesMode,
+    selectedTracks,
+    removeTracksBulk,
+    addTracksBulk,
+    toast,
+    t,
+    exitSelection,
+  ]);
+
   // results start at the top, not wherever the full list was scrolled to
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: 0 });
@@ -375,7 +650,6 @@ function LibraryPlaylistContent() {
     void playerEngine.playShuffled(sortedTracks, context, viewData.coverUrl);
   }, [sortedTracks, viewData, decodedId]);
 
-  const { toast } = useToast();
   const [addedToQueue, setAddedToQueue] = useState(false);
 
   const handleAddToQueue = useCallback(() => {
@@ -618,50 +892,62 @@ function LibraryPlaylistContent() {
                     <PlaylistHeroCover
                       urls={viewData.coverUrls}
                       title={viewData.title}
-                      likesCover={isLikesMode ? likesCover : undefined}
+                      likesCover={
+                        isLikesMode ? (customCover ?? likesCover) : undefined
+                      }
                     />
                   }
                   title={
-                    <h1
-                      ref={titleRef}
-                      className={`${HERO_TITLE_CLASS} ${
-                        isLikesMode
-                          ? ""
-                          : "cursor-text outline-none transition-colors"
-                      } ${isEditingTitle ? "bg-border-alpha-14 rounded-[4px] -ml-[4px] px-[4px]" : ""}`}
-                      contentEditable={isLikesMode ? false : isEditingTitle}
-                      suppressContentEditableWarning
-                      onBlur={(e) => {
-                        if (!isEditingTitle) return;
-                        const title = e.currentTarget.textContent?.trim();
-                        if (title && decodedId && title !== viewData.title) {
-                          void api
-                            .updatePlaylist(decodedId, { title })
-                            .then(() =>
-                              window.dispatchEvent(
-                                new Event("library:changed"),
-                              ),
-                            );
-                        }
-                        setIsEditingTitle(false);
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") {
-                          e.preventDefault();
-                          e.currentTarget.blur();
-                        }
-                        if (e.key === "Escape") {
-                          e.currentTarget.textContent = viewData.title;
-                          e.currentTarget.blur();
+                    <>
+                      <h1
+                        ref={titleRef}
+                        className={`${HERO_TITLE_CLASS} ${
+                          isLikesMode
+                            ? ""
+                            : "cursor-text outline-none transition-colors"
+                        } ${isEditingTitle ? "bg-border-alpha-14 rounded-[4px] -ml-[4px] px-[4px]" : ""}`}
+                        contentEditable={isLikesMode ? false : isEditingTitle}
+                        suppressContentEditableWarning
+                        onBlur={(e) => {
+                          if (!isEditingTitle) return;
+                          const title = e.currentTarget.textContent?.trim();
+                          if (title && decodedId && title !== viewData.title) {
+                            void api
+                              .updatePlaylist(decodedId, { title })
+                              .then(() =>
+                                window.dispatchEvent(
+                                  new Event("library:changed"),
+                                ),
+                              );
+                          }
                           setIsEditingTitle(false);
-                        }
-                      }}
-                      onClick={() => {
-                        if (!isLikesMode) setIsEditingTitle(true);
-                      }}
-                    >
-                      {viewData.title}
-                    </h1>
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            e.currentTarget.blur();
+                          }
+                          if (e.key === "Escape") {
+                            e.currentTarget.textContent = viewData.title;
+                            e.currentTarget.blur();
+                            setIsEditingTitle(false);
+                          }
+                        }}
+                        onClick={() => {
+                          if (!isLikesMode) setIsEditingTitle(true);
+                        }}
+                      >
+                        {viewData.title}
+                      </h1>
+                      {titleRomanized ? (
+                        <p
+                          data-romanization
+                          className="m-0 mt-[3px] text-[15px] font-[400] leading-[1.25] text-text-tertiary"
+                        >
+                          {titleRomanized}
+                        </p>
+                      ) : null}
+                    </>
                   }
                   subtitle={
                     isLikesMode ? (
@@ -843,55 +1129,123 @@ function LibraryPlaylistContent() {
                         sort={sort}
                         disabled={currentTracks.length < 2}
                       />
-                      {!isLikesMode && (
-                        <DropdownMenu
-                          trigger={
-                            <Button
-                              variant="secondary"
-                              className={`${HERO_BUTTON_CLASS} ${HERO_GLASS_BUTTON_CLASS} !w-[52px] !p-0 text-text-primary`}
-                              title={t("common.more")}
-                            >
-                              <More1Fill size={20} />
-                            </Button>
-                          }
-                          items={[
-                            {
-                              id: "rename",
-                              icon: <LuPencil size={15} />,
-                              label: t("common.rename"),
-                              onClick: () => setIsEditingTitle(true),
-                            },
-                            {
-                              id: "edit-description",
-                              icon: <LuText size={15} />,
-                              label: t("common.edit_description"),
-                              onClick: () => setIsEditingDescription(true),
-                            },
-                            {
-                              id: "share",
-                              icon: <ShareForwardLine size={15} />,
-                              label: t("common.share"),
-                              onClick: handleShare,
-                            },
-                            {
-                              id: "delete",
-                              icon: <LuTrash2 size={15} />,
-                              label: t("common.delete"),
-                              danger: true,
-                              onClick: () => {
-                                if (!decodedId) return;
-                                useModalStore.getState().openRemoveFromLibrary({
-                                  id: decodedId,
-                                  title: viewData.title,
-                                  coverUrl: viewData.coverUrl,
-                                  type: "playlist",
-                                  isOwned: true,
+                      <Button
+                        variant="secondary"
+                        onClick={() =>
+                          selectionMode
+                            ? exitSelection()
+                            : setSelectionMode(true)
+                        }
+                        disabled={currentTracks.length === 0}
+                        className={`${HERO_BUTTON_CLASS} ${HERO_GLASS_BUTTON_CLASS} !w-[52px] !p-0 text-text-primary`}
+                        title={
+                          selectionMode
+                            ? t("common.cancel")
+                            : t("playlist.select_tracks") || "Select tracks"
+                        }
+                        aria-pressed={selectionMode}
+                      >
+                        <LuListChecks size={18} />
+                      </Button>
+                      <DropdownMenu
+                        trigger={
+                          <Button
+                            variant="secondary"
+                            className={`${HERO_BUTTON_CLASS} ${HERO_GLASS_BUTTON_CLASS} !w-[52px] !p-0 text-text-primary`}
+                            title={t("common.more")}
+                          >
+                            <More1Fill size={20} />
+                          </Button>
+                        }
+                        items={[
+                          ...(!isLikesMode
+                            ? [
+                                {
+                                  id: "rename",
+                                  icon: <LuPencil size={15} />,
+                                  label: t("common.rename"),
+                                  onClick: () => setIsEditingTitle(true),
+                                },
+                                {
+                                  id: "edit-description",
+                                  icon: <LuText size={15} />,
+                                  label: t("common.edit_description"),
+                                  onClick: () => setIsEditingDescription(true),
+                                },
+                                {
+                                  id: "share",
+                                  icon: <ShareForwardLine size={15} />,
+                                  label: t("common.share"),
+                                  onClick: handleShare,
+                                },
+                                {
+                                  id: "pin-playlist",
+                                  icon: <LuPin size={15} />,
+                                  label: isPinned
+                                    ? t("playlist.unpin_playlist") ||
+                                      "Unpin playlist"
+                                    : t("playlist.pin_playlist") ||
+                                      "Pin playlist",
+                                  onClick: () => {
+                                    if (decodedId) togglePlaylistPin(decodedId);
+                                  },
+                                },
+                              ]
+                            : []),
+                          {
+                            id: "change-cover",
+                            icon: <LuImage size={15} />,
+                            label: t("playlist.change_cover") || "Change cover",
+                            onClick: () => {
+                              if (identityCoverId)
+                                openPlaylistCoverPicker(identityCoverId, {
+                                  updated:
+                                    t("playlist.cover_updated") ||
+                                    "Playlist cover updated",
+                                  failed:
+                                    t("playlist.cover_failed") ||
+                                    "Could not use that image",
                                 });
-                              },
                             },
-                          ]}
-                        />
-                      )}
+                          },
+                          ...(customCover
+                            ? [
+                                {
+                                  id: "reset-cover",
+                                  icon: <LuRotateCcw size={15} />,
+                                  label:
+                                    t("playlist.reset_cover") || "Reset cover",
+                                  onClick: () => {
+                                    if (identityCoverId)
+                                      clearCustomCover(identityCoverId);
+                                  },
+                                },
+                              ]
+                            : []),
+                          ...(!isLikesMode
+                            ? [
+                                {
+                                  id: "delete",
+                                  icon: <LuTrash2 size={15} />,
+                                  label: t("common.delete"),
+                                  danger: true,
+                                  onClick: () => {
+                                    if (!decodedId) return;
+                                    useModalStore
+                                      .getState()
+                                      .openRemoveFromLibrary({
+                                        id: decodedId,
+                                        title: viewData.title,
+                                        coverUrl: viewData.coverUrl,
+                                        type: "playlist",
+                                        isOwned: true,
+                                      });
+                                  },
+                                },
+                              ]
+                            : []),
+                        ]}
+                      />
                     </>
                   }
                 />
@@ -906,6 +1260,111 @@ function LibraryPlaylistContent() {
               </div>
 
               <ListPanel>
+                {selectionMode ? (
+                  <div className="mb-[8px] flex flex-wrap items-center gap-[8px] px-[8px] py-[8px]">
+                    <span className="text-body font-[500] text-text-primary">
+                      {t("playlist.selected_count", {
+                        count: selectedTracks.length,
+                      }) || `${selectedTracks.length} selected`}
+                    </span>
+                    <Button
+                      variant="secondary"
+                      onClick={() =>
+                        setSelectedKeys(
+                          new Set(
+                            currentTracks.map((track) =>
+                              trackSelectionKey(track),
+                            ),
+                          ),
+                        )
+                      }
+                      disabled={currentTracks.length === 0}
+                      className="!h-[32px] !rounded-[9px] !border-0 px-[12px]"
+                    >
+                      {t("playlist.select_all") || "Select all"}
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      onClick={() => setSelectedKeys(new Set())}
+                      disabled={selectedTracks.length === 0}
+                      className="!h-[32px] !rounded-[9px] !border-0 px-[12px]"
+                    >
+                      {t("playlist.clear_selection") || "Clear"}
+                    </Button>
+                    <DropdownMenu
+                      trigger={
+                        <Button
+                          variant="secondary"
+                          disabled={selectedTracks.length === 0}
+                          className="!h-[32px] !rounded-[9px] !border-0 px-[12px]"
+                        >
+                          {t("common.add_to_playlist")}
+                        </Button>
+                      }
+                      items={orderPinnedFirst(
+                        (playlistList?.playlists ?? []).filter(
+                          (playlist) => playlist.id !== decodedId,
+                        ),
+                        pinnedIds,
+                      ).map((playlist) => ({
+                        id: `bulk-add-${playlist.id}`,
+                        label: playlist.title,
+                        onClick: () =>
+                          void handleBulkAdd(playlist.id, playlist.title),
+                      }))}
+                    />
+                    <Button
+                      variant="secondary"
+                      onClick={handleBulkLike}
+                      disabled={selectedTracks.length === 0}
+                      className="!h-[32px] !rounded-[9px] !border-0 px-[12px]"
+                    >
+                      {t("common.like")}
+                    </Button>
+                    {!isLikesMode && decodedId ? (
+                      confirmingBulkRemove ? (
+                        <>
+                          <span className="text-body text-text-secondary">
+                            {t("playlist.bulk_remove_confirm", {
+                              count: selectedTracks.length,
+                            }) ||
+                              `Remove ${selectedTracks.length} tracks from this playlist?`}
+                          </span>
+                          <Button
+                            variant="secondary"
+                            onClick={() => void handleBulkRemove()}
+                            className="!h-[32px] !rounded-[9px] !border-0 px-[12px] text-red-400"
+                          >
+                            {t("common.confirm")}
+                          </Button>
+                          <Button
+                            variant="secondary"
+                            onClick={() => setConfirmingBulkRemove(false)}
+                            className="!h-[32px] !rounded-[9px] !border-0 px-[12px]"
+                          >
+                            {t("common.cancel")}
+                          </Button>
+                        </>
+                      ) : (
+                        <Button
+                          variant="secondary"
+                          onClick={() => setConfirmingBulkRemove(true)}
+                          disabled={selectedTracks.length === 0}
+                          className="!h-[32px] !rounded-[9px] !border-0 px-[12px]"
+                        >
+                          {t("common.remove_from_playlist")}
+                        </Button>
+                      )
+                    ) : null}
+                    <Button
+                      variant="secondary"
+                      onClick={exitSelection}
+                      className="!h-[32px] !rounded-[9px] !border-0 px-[12px]"
+                    >
+                      {t("common.cancel")}
+                    </Button>
+                  </div>
+                ) : null}
                 {currentTracks.length === 0 ? (
                   <div className="flex min-h-[50vh] flex-col items-center justify-center gap-[12px] text-center">
                     <PlaylistFill size={40} className="text-border-alpha-33" />
@@ -981,7 +1440,8 @@ function LibraryPlaylistContent() {
                         decodedId &&
                         track.playlistItemId &&
                         !isFiltering &&
-                        !isSorted,
+                        !isSorted &&
+                        !selectionMode,
                       );
 
                       return (
@@ -994,7 +1454,10 @@ function LibraryPlaylistContent() {
                           playlistTitle={viewData.title}
                           playlistCoverUrl={viewData.coverUrl}
                           allTracks={sortedTracks}
-                          showReorderHandle={canReorder}
+                          showReorderHandle={canReorder && !selectionMode}
+                          selectionMode={selectionMode}
+                          selected={selectedKeys.has(trackSelectionKey(track))}
+                          onToggleSelect={(e) => handleToggleSelect(track, e)}
                           highlight={search.activeQuery || undefined}
                           onGrabStart={
                             canReorder && !isDragging
@@ -1079,7 +1542,9 @@ function LibraryPlaylistContent() {
                   <PlaylistHeroCover
                     urls={preview.coverUrls}
                     title={preview.title}
-                    likesCover={isLikesMode ? likesCover : undefined}
+                    likesCover={
+                      isLikesMode ? (customCover ?? likesCover) : undefined
+                    }
                   />
                 ) : undefined
               }

@@ -5,6 +5,7 @@ import { MenuSelect } from "@/shared/ui";
 import { revealThemeChange } from "@/shared/lib";
 import { SettingBlock, SettingRow, SettingSection } from "../controls";
 import { ThemeCard } from "./ThemeCard";
+import { PlaybackBarSetting } from "./PlaybackBarSetting";
 
 export function AppearanceTab({ searchQuery }: { searchQuery?: string }) {
   const { t, locale, setLocale } = useTranslation();
@@ -72,6 +73,8 @@ export function AppearanceTab({ searchQuery }: { searchQuery?: string }) {
           </div>
         ) : null}
       </SettingBlock>
+
+      <PlaybackBarSetting searchQuery={searchQuery} />
     </SettingSection>
   );
 }

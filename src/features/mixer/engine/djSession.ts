@@ -10,6 +10,7 @@ import {
   chooseArcShape,
 } from "./curatedSet";
 import { levelGainFor } from "./levelMatch";
+import type { ResolvedDecisionSettings } from "./personality";
 import type { RaveDecision, RaveRequest, RaveTrackInfo } from "./liveRave";
 import { LiveRaveQueue, type RaveQueueEntry } from "./liveRaveQueue";
 import {
@@ -392,6 +393,15 @@ export class DjSession {
   private endReasonValue: DjSessionEndReason | null = null;
   private startOutcomeValue: DjStartOutcome | null = null;
   private partyUnsubscribe: (() => void) | null = null;
+  /**
+   * The standing temperament the personality wiring owns (R4): the
+   * resolved decision settings the wiring hands in, or null when no
+   * wiring has spoken. A session that never receives them behaves
+   * exactly as before R4 — the brain keeps its shipped profile, the
+   * arc shape is chosen from the pool, and curation spends its
+   * shipped constants.
+   */
+  private decisionSettingsValue: ResolvedDecisionSettings | null = null;
 
   /** Notified whenever the session starts or stops, for UI state. */
   onRunningChange: ((running: boolean) => void) | null = null;
@@ -449,6 +459,23 @@ export class DjSession {
    */
   get degraded(): boolean {
     return this.plainCutFallbacks >= PLAIN_CUT_ANNOUNCE_THRESHOLD;
+  }
+
+  /** The standing temperament the wiring last handed in, if any. */
+  get decisionSettings(): ResolvedDecisionSettings | null {
+    return this.decisionSettingsValue;
+  }
+
+  /**
+   * Hands the session its standing temperament (R4): the resolved
+   * settings are stored for curation, and the brain's profile is
+   * the resolved profile from this moment on. The wiring owns
+   * these settings — it re-hands them whenever the listener's
+   * personality or sliders change.
+   */
+  setDecisionSettings(settings: ResolvedDecisionSettings): void {
+    this.decisionSettingsValue = settings;
+    this.brain.setProfile(settings.profile);
   }
 
   // The manual stage (Pro layer). These lean on the mix through the
@@ -631,15 +658,29 @@ export class DjSession {
         labelsForTrack(item.track.id),
       ),
     );
-    // The night's arc shape is chosen from tonight's pool, and the
-    // night so far (joins already played) turns the near-equal band.
-    const shape = chooseArcShape(candidates);
+    // The night's arc shape is chosen from tonight's pool — unless
+    // the standing temperament leans a shape, in which case the
+    // lean is the night's shape — and the night so far (joins
+    // already played) turns the near-equal band. With no stored
+    // temperament the curation bends are not passed at all, so
+    // assembleSet spends its shipped constants exactly as before R4.
+    const shape =
+      this.decisionSettingsValue?.arcShapeLean ?? chooseArcShape(candidates);
     this.brain.setArcShape(shape);
     const byId = new Map(prepared.map((item) => [item.track.id, item]));
-    const order = assembleSet(candidates, undefined, {
-      shape,
-      rotationSeed: this.brain.historySnapshot().length,
-    });
+    const settings = this.decisionSettingsValue;
+    const order = settings
+      ? assembleSet(candidates, undefined, {
+          shape,
+          rotationSeed: this.brain.historySnapshot().length,
+          nearEqualEpsilon: settings.curation.nearEqualEpsilon,
+          sharedLabelCredit: settings.curation.sharedLabelCredit,
+          incumbencyPenalty: settings.curation.incumbencyPenalty,
+        })
+      : assembleSet(candidates, undefined, {
+          shape,
+          rotationSeed: this.brain.historySnapshot().length,
+        });
     const newTail = order
       .map((id) => byId.get(id)?.track)
       .filter((track) => track !== undefined);

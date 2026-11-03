@@ -941,17 +941,23 @@ function getNotificationIconColor(
     typeof customIcon === "string" ? customIcon : variant
   ).toLowerCase();
 
+  // Foundation tokens, not brand hexes: this value is consumed as a React
+  // inline `style={{ color }}` on a DOM span (see ToastCard above), so a
+  // CSS var resolves against the active theme — a literal hex would freeze
+  // one theme's value (each token differs between light and dark).
+  // success → sweep spring (--sweep-spring, the --accent-primary value),
+  // error → --danger, loading → sweep teal (--sweep-teal).
   switch (resolved) {
     case "success":
     case "checkmark":
     case "check":
-      return "#34A853";
+      return "var(--sweep-spring)";
     case "error":
-      return "#EA4335";
+      return "var(--danger)";
     case "loading":
     case "loader":
     case "spinner":
-      return "#4285F4";
+      return "var(--sweep-teal)";
     case "info":
     default:
       return undefined;

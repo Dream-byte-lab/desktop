@@ -14,8 +14,16 @@ import type {
 } from "../types";
 import { useTranslation } from "@/languages";
 import { useModalStore } from "../store/modalStore";
-import { LuTrash2 } from "react-icons/lu";
+import {
+  clearCustomCover,
+  togglePlaylistPin,
+  useCustomCover,
+  usePinnedPlaylistIds,
+} from "../lib/playlistIdentity";
+import { openPlaylistCoverPicker } from "../lib/playlistCoverPicker";
+import { LuTrash2, LuPin, LuImage, LuRotateCcw } from "react-icons/lu";
 import { More2Fill, PlaylistFill, AddLine, Search3Fill } from "@mingcute/react";
+import { useRomanized } from "@/shared/text";
 
 interface LibraryGridProps {
   items: LibraryItemViewModel[];
@@ -97,6 +105,8 @@ export function LibraryGridSkeleton({
 
 function useItemMenuItems(item: LibraryItemViewModel): DropdownMenuItem[] {
   const { t } = useTranslation();
+  const pinnedIds = usePinnedPlaylistIds();
+  const customCover = useCustomCover(item.id);
   return useMemo(() => {
     if (item.source) return [];
     const entityType =
@@ -105,7 +115,49 @@ function useItemMenuItems(item: LibraryItemViewModel): DropdownMenuItem[] {
         : item.kind === "album"
           ? "album"
           : "playlist";
+    // Playlist identity (pin + local custom cover) belongs to owned
+    // library playlists only — the ones that flow through the
+    // usePlaylists summary choke point. Saved/external playlists open
+    // under /collection, albums/artists are not playlists.
+    const isOwnedPlaylist =
+      item.kind === "playlist" &&
+      (item.isOwned ?? item.href.startsWith("/library/playlist"));
+    const identityItems: DropdownMenuItem[] = isOwnedPlaylist
+      ? [
+          {
+            id: "pin-playlist",
+            label: pinnedIds.includes(item.id)
+              ? t("playlist.unpin_playlist") || "Unpin playlist"
+              : t("playlist.pin_playlist") || "Pin playlist",
+            icon: <LuPin size={15} />,
+            onClick: () => togglePlaylistPin(item.id),
+          },
+          {
+            id: "change-playlist-cover",
+            label: t("playlist.change_cover") || "Change cover",
+            icon: <LuImage size={15} />,
+            onClick: () =>
+              openPlaylistCoverPicker(item.id, {
+                updated:
+                  t("playlist.cover_updated") || "Playlist cover updated",
+                failed:
+                  t("playlist.cover_failed") || "Could not use that image",
+              }),
+          },
+          ...(customCover
+            ? [
+                {
+                  id: "reset-playlist-cover",
+                  label: t("playlist.reset_cover") || "Reset cover",
+                  icon: <LuRotateCcw size={15} />,
+                  onClick: () => clearCustomCover(item.id),
+                },
+              ]
+            : []),
+        ]
+      : [];
     return [
+      ...identityItems,
       {
         id: "remove-from-library",
         label: t("common.remove_from_library"),
@@ -136,6 +188,8 @@ function useItemMenuItems(item: LibraryItemViewModel): DropdownMenuItem[] {
     item.isOwned,
     item.source,
     item.href,
+    pinnedIds,
+    customCover,
     t,
   ]);
 }
@@ -176,6 +230,9 @@ function LibraryItemCard({ item }: { item: LibraryItemViewModel }) {
 }
 
 function LibraryItemRow({ item }: { item: LibraryItemViewModel }) {
+  // Display-only romanization beside the original title (rows are
+  // fixed-height, so no extra line); the stored title is never changed.
+  const titleRomanized = useRomanized(item.title);
   const menuItems = useItemMenuItems(item);
   const link = collectionLink(item);
   const navigate = useStableNavigate();
@@ -236,6 +293,14 @@ function LibraryItemRow({ item }: { item: LibraryItemViewModel }) {
             title={item.title}
           >
             {item.title}
+            {titleRomanized ? (
+              <span
+                data-romanization
+                className="ml-[8px] text-caption font-[400] text-text-tertiary"
+              >
+                {titleRomanized}
+              </span>
+            ) : null}
           </h3>
           <p
             className="m-0 flex min-w-0 items-center text-title leading-[1.2] overflow-hidden text-text-secondary"

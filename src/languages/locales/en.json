@@ -332,7 +332,8 @@
       "subtitle": "Liked songs downloaded to this device. They play without a connection, with lyrics.",
       "empty_title": "No downloaded liked songs",
       "empty_subtitle": "Liked songs are downloaded in the background while you're online."
-    }
+    },
+    "romanization_toggle": "Romanization"
   },
   "genres": {
     "playlist_genre": "Playlist Genre",
@@ -619,7 +620,21 @@
     "likes_empty": "No liked songs yet",
     "likes_load_failed": "Couldn't load your liked songs",
     "load_failed": "Couldn't load this playlist",
-    "load_failed_desc": "Check your connection and try again."
+    "load_failed_desc": "Check your connection and try again.",
+    "pin_playlist": "Pin playlist",
+    "unpin_playlist": "Unpin playlist",
+    "change_cover": "Change cover",
+    "reset_cover": "Reset cover",
+    "cover_updated": "Playlist cover updated",
+    "cover_failed": "Could not use that image",
+    "select_tracks": "Select tracks",
+    "selected_count": "{count} selected",
+    "select_all": "Select all",
+    "clear_selection": "Clear",
+    "bulk_liked": "{count} tracks liked",
+    "bulk_already_liked": "All selected tracks are already liked",
+    "bulk_added_partial": "{added} tracks added, {skipped} skipped",
+    "bulk_remove_confirm": "Remove {count} tracks from this playlist?"
   },
   "search": {
     "placeholder": "Search tracks, artists, albums...",
@@ -992,6 +1007,13 @@
       "light": "Light",
       "dark": "Dark",
       "system": "System"
+    },
+    "playback_bar": {
+      "title": "Playback bar",
+      "description": "The bar at the bottom of the window. Auto expands it when you hover over it or open one of its menus; Standard keeps it compact; Expanded keeps the full controls and scrubber visible.",
+      "auto": "Auto",
+      "standard": "Standard",
+      "expanded": "Expanded"
     },
     "branding": {
       "title": "Branding",

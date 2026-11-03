@@ -103,7 +103,7 @@ export function RootErrorFallback({
   const subtitleText =
     t("error_screen.subtitle") !== "error_screen.subtitle"
       ? t("error_screen.subtitle")
-      : "An unexpected error occurred in Liner. You can reload the app or try again.";
+      : "An unexpected error occurred in Linerave. You can reload the app or try again.";
 
   const reloadText =
     t("error_screen.reload") !== "error_screen.reload"
@@ -157,7 +157,7 @@ export function RootErrorFallback({
       <div className="flex-1 flex flex-col items-center justify-center min-h-0 w-full bg-bg-primary rounded-item border border-border-primary/40 p-6 md:p-10 overflow-y-auto">
         <div className="flex flex-col items-center max-w-[560px] w-full text-center my-auto">
           {/* Error Icon Badge */}
-          <div className="flex items-center justify-center w-14 h-14 rounded-2xl bg-accent-primary/10 text-accent-primary border border-accent-primary/20 mb-5">
+          <div className="flex items-center justify-center w-14 h-14 rounded-2xl bg-danger/10 text-danger border border-danger/20 mb-5">
             <LuTriangleAlert size={28} />
           </div>
 
@@ -226,8 +226,8 @@ export function RootErrorFallback({
             >
               {isCopied ? (
                 <>
-                  <LuCheck size={14} className="text-green-500" />
-                  <span className="text-green-500">{copiedText}</span>
+                  <LuCheck size={14} className="text-accent-primary" />
+                  <span className="text-accent-primary">{copiedText}</span>
                 </>
               ) : (
                 <>

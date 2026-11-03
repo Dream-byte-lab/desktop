@@ -221,10 +221,28 @@ export interface AssembleOptions {
    * different night may order differently. Absent = no rotation.
    */
   rotationSeed?: number;
+  /**
+   * Score distance within which candidates count as near-equals.
+   * Absent = NEAR_EQUAL_EPSILON, the shipped default.
+   */
+  nearEqualEpsilon?: number;
+  /**
+   * Credit for continuing the owner's shared Playlist Genre label.
+   * Absent = SHARED_LABEL_CREDIT, the shipped default.
+   */
+  sharedLabelCredit?: number;
+  /**
+   * Penalty the pure-score leader's rivals must overcome.
+   * Absent = 0.1, the shipped default.
+   */
+  incumbencyPenalty?: number;
 }
 
 /** Score distance within which candidates count as near-equals. */
 export const NEAR_EQUAL_EPSILON = 0.05;
+
+/** Credit for continuing the owner's shared Playlist Genre label. */
+export const SHARED_LABEL_CREDIT = 0.6;
 
 /**
  * Orders a pool of candidates into a curated set: arc-shaped energy,
@@ -243,6 +261,9 @@ export function assembleSet(
   const target = Math.min(length ?? candidates.length, candidates.length);
   if (target <= 0) return [];
   const shape = options.shape ?? "classic";
+  const nearEqualEpsilon = options.nearEqualEpsilon ?? NEAR_EQUAL_EPSILON;
+  const sharedLabelCredit = options.sharedLabelCredit ?? SHARED_LABEL_CREDIT;
+  const incumbencyPenalty = options.incumbencyPenalty ?? 0.1;
 
   const remaining = [...candidates];
   const chosen: SetCandidate[] = [];
@@ -261,7 +282,7 @@ export function assembleSet(
     let bestScore = -Infinity;
     for (const entry of scored) bestScore = Math.max(bestScore, entry.score);
     const band = scored.filter(
-      (entry) => entry.score >= bestScore - NEAR_EQUAL_EPSILON,
+      (entry) => entry.score >= bestScore - nearEqualEpsilon,
     );
     let pick = band[0];
     if (band.length > 1) {
@@ -284,7 +305,7 @@ export function assembleSet(
           options.rotationSeed === undefined
             ? entry.score >= bestScore
               ? 0
-              : 0.1
+              : incumbencyPenalty
             : 0;
         if (previous) {
           if (
@@ -296,7 +317,7 @@ export function assembleSet(
           const sharedLabel = (entry.candidate.playlistGenres ?? []).some(
             (label) => (previous.playlistGenres ?? []).includes(label),
           );
-          if (sharedLabel) value -= 0.6;
+          if (sharedLabel) value -= sharedLabelCredit;
         }
         return value;
       };

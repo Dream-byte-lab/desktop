@@ -1,6 +1,10 @@
 import { cn } from "@/shared/lib";
 
-// a plain swatch of the theme: its background with "Aa" in its text colour
+// a plain swatch of the theme: its background with "Aa" in its text colour.
+// The hex literals mirror the --bg-primary / --text-primary tokens of each
+// mode in src/app/globals.css (dark #1B1440 / #F4F2FA, light #FAF8F3 /
+// #241B4D): a cross-theme preview cannot use the live CSS vars, because it
+// must render the other mode's colours while in either mode.
 function Swatch({
   mode,
   align = "center",
@@ -13,7 +17,7 @@ function Swatch({
     <span
       className={cn(
         "flex h-full w-full items-center px-[18px] text-[22px] font-[600] tracking-[-0.02em]",
-        dark ? "bg-[#0a0a0a] text-white" : "bg-[#f5f5f7] text-[#18181b]",
+        dark ? "bg-[#1B1440] text-[#F4F2FA]" : "bg-[#FAF8F3] text-[#241B4D]",
         align === "left" && "justify-start",
         align === "center" && "justify-center",
         align === "right" && "justify-end",

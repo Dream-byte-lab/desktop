@@ -11,6 +11,7 @@ import { DeckDisplay } from "./DeckDisplay";
 import { Fader } from "./Fader";
 import { JogWheel } from "./JogWheel";
 import { PadGrid } from "./PadGrid";
+import { PersonalityPanel } from "./PersonalityPanel";
 import {
   activityLinesForStage,
   landmarkCues,
@@ -176,7 +177,16 @@ export function DjStageView() {
   const data0 = useDeckStageData(deckTrack(0), cueVersion, slowTick);
   const data1 = useDeckStageData(deckTrack(1), cueVersion, slowTick);
 
-  if (!active || !proOpen) return null;
+  if (!proOpen) return null;
+  if (!active) {
+    // The panel was left open as a set ended: the personality
+    // panel stays reachable on its own, in the stage's frame.
+    return (
+      <div className="w-full border-t border-border-tertiary bg-bg-primary px-3 py-3 text-text-primary">
+        <PersonalityPanel />
+      </div>
+    );
+  }
 
   const displayPosSec = displayPosMs / 1000;
   const noteGrab = () => setLastGrabAt(Date.now());
@@ -374,6 +384,10 @@ export function DjStageView() {
 
   return (
     <div className="w-full border-t border-border-tertiary bg-bg-primary px-3 py-3 text-text-primary">
+      <div className="mb-3">
+        <PersonalityPanel />
+      </div>
+
       <ActivityStrip lines={lines} levelLabel={levelLabel} />
 
       <div className="mt-3 flex flex-wrap items-stretch gap-3">

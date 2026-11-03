@@ -54,7 +54,7 @@ export function StorageOverview({
         freeBytes !== undefined ? (
           <span
             className={`text-body tabular-nums ${
-              lowDisk ? "text-amber-500" : "text-text-tertiary"
+              lowDisk ? "text-accent-warning" : "text-text-tertiary"
             }`}
           >
             {t("settings.storage.free_on_disk", {

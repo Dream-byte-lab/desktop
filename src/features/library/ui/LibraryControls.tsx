@@ -12,9 +12,11 @@ import {
   HERO_BUTTON_CLASS,
   HERO_GLASS_BUTTON_CLASS,
   HERO_GLASS_CLASS,
+  ToggleSwitch,
 } from "@/shared/ui";
 import type { LibraryTab, LibraryViewMode } from "../types";
 import { useTranslation } from "@/languages";
+import { useRomanizationStore } from "@/shared/text";
 
 export interface GenreFilterControl {
   /** Every Playlist Genre label in use in the library. */
@@ -45,6 +47,21 @@ export default function LibraryControls({
   genreFilter,
 }: LibraryControlsProps) {
   const { t } = useTranslation();
+
+  // Romanization (name display aid) toggle. It lives on the Library header
+  // this wave because Settings is out of scope; its future home is a
+  // Settings display/appearance row. t() returns the key itself for a
+  // missing entry, so the fallback compares against the key.
+  const romanizationEnabled = useRomanizationStore((state) => state.enabled);
+  const setRomanizationEnabled = useRomanizationStore(
+    (state) => state.setEnabled,
+  );
+  const romanizationKey = "library.romanization_toggle";
+  const romanizationTranslated = t(romanizationKey);
+  const romanizationLabel =
+    romanizationTranslated === romanizationKey
+      ? "Romanization"
+      : romanizationTranslated;
 
   const placeholderByTab: Record<LibraryTab, string> = {
     all: t("library.search_all"),
@@ -124,6 +141,20 @@ export default function LibraryControls({
           <ListCheckLine size={16} />
         )}
       </Button>
+      <div
+        className="flex items-center gap-[8px]"
+        data-no-window-drag
+        title={romanizationLabel}
+      >
+        <span className="text-label text-text-secondary select-none">
+          {romanizationLabel}
+        </span>
+        <ToggleSwitch
+          checked={romanizationEnabled}
+          onChange={setRomanizationEnabled}
+          ariaLabel={romanizationLabel}
+        />
+      </div>
       {onCreatePlaylist && (
         <Button
           variant="primary"

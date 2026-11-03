@@ -25,7 +25,7 @@ export function SettingsUserFooter({ onClose }: SettingsUserFooterProps) {
   if (!user) {
     return (
       <div className="shrink-0 px-[10px] pt-[6px] pb-[10px]">
-        <div className="flex min-w-0 items-center gap-[10px] rounded-[12px] bg-black/[0.05] dark:bg-white/[0.07] p-[8px] pr-[6px]">
+        <div className="flex min-w-0 items-center gap-[10px] rounded-item bg-black/[0.05] dark:bg-white/[0.07] p-[8px] pr-[6px]">
           <span className="relative shrink-0">
             <UserAvatar user={null} size={32} />
           </span>
@@ -43,7 +43,7 @@ export function SettingsUserFooter({ onClose }: SettingsUserFooterProps) {
               onClose();
               navigate("/login");
             }}
-            className="shrink-0 cursor-pointer rounded-[8px] border-0 bg-transparent px-[8px] py-[6px] text-[12px] font-[500] text-text-secondary transition-colors hover:bg-black/[0.05] hover:text-text-primary dark:hover:bg-white/[0.08]"
+            className="shrink-0 cursor-pointer rounded-control border-0 bg-transparent px-[8px] py-[6px] text-[12px] font-[500] text-text-secondary transition-colors hover:bg-black/[0.05] hover:text-text-primary dark:hover:bg-white/[0.08]"
           >
             {t("login.btn_sign_in")}
           </button>
@@ -78,7 +78,7 @@ export function SettingsUserFooter({ onClose }: SettingsUserFooterProps) {
           }}
           title={signOutLabel}
           aria-label={signOutLabel}
-          className="flex h-[30px] w-[30px] shrink-0 cursor-pointer items-center justify-center rounded-control border-0 bg-transparent p-0 text-text-tertiary transition-colors hover:bg-red-500/10 hover:text-red-500"
+          className="flex h-[30px] w-[30px] shrink-0 cursor-pointer items-center justify-center rounded-control border-0 bg-transparent p-0 text-text-tertiary transition-colors hover:bg-danger/10 hover:text-danger"
         >
           <ExitLine size={16} />
         </button>

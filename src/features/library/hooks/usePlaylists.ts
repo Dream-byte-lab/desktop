@@ -9,6 +9,11 @@ import {
 } from "@/shared/api";
 import { queryCache } from "@/shared/cache/queryCache";
 import { recordPlaylistTracks } from "@/features/genres/trackGenres";
+import {
+  applyCustomCover,
+  getCustomCover,
+  subscribePlaylistIdentity,
+} from "../lib/playlistIdentity";
 import type { Track } from "@/shared/types";
 
 export interface LibraryPlaylistSummary {
@@ -73,6 +78,27 @@ function extractCovers(items: ApiUserPlaylistItem[]): string[] {
 
 const EMPTY: PlaylistList = { playlists: [], total: 0 };
 let cache = EMPTY;
+// Derived (server/track-art) covers per playlist id, remembered at
+// load time so a custom-cover change can be applied — and, on reset,
+// the derived cover restored — without refetching. The summaries in
+// `cache` are the single choke point every playlist surface reads
+// (library grid/list, Home Your Playlists, Add-to-Playlist lists,
+// playlist page preview), so the local custom-cover overlay is
+// applied here and nowhere else needs to know it exists.
+const derivedCovers = new Map<
+  string,
+  { coverUrl: string; coverUrls: string[] }
+>();
+
+function withCustomCover(
+  summary: LibraryPlaylistSummary,
+): LibraryPlaylistSummary {
+  derivedCovers.set(summary.id, {
+    coverUrl: summary.coverUrl,
+    coverUrls: summary.coverUrls,
+  });
+  return applyCustomCover(summary);
+}
 let loaded = false;
 let request: Promise<void> | null = null;
 const listeners = new Set<() => void>();
@@ -142,23 +168,23 @@ function load(force = false): Promise<void> {
             trackCount: playlist.trackCount,
             updatedAt: playlist.updatedAt,
           };
-          return {
+          return withCustomCover({
             ...playlist,
             trackCount: playlist.trackCount,
             coverUrl: coverUrls[0] ?? "",
             coverUrls,
-          };
+          });
         }
 
         const cached = coverCache[playlist.id];
 
         if (cached && cached.updatedAt === playlist.updatedAt) {
-          return {
+          return withCustomCover({
             ...playlist,
             trackCount: cached.trackCount,
             coverUrl: cached.coverUrls[0] ?? "",
             coverUrls: cached.coverUrls,
-          };
+          });
         }
 
         const detail = await api.getUserPlaylist(playlist.id);
@@ -169,12 +195,12 @@ function load(force = false): Promise<void> {
           updatedAt: playlist.updatedAt,
         };
         coverCache[playlist.id] = entry;
-        return {
+        return withCustomCover({
           ...playlist,
           trackCount: detail.items.length,
           coverUrl: covers[0] ?? "",
           coverUrls: covers,
-        };
+        });
       }),
     );
 
@@ -214,6 +240,28 @@ if (typeof window !== "undefined") {
   window.addEventListener("auth:changed", handleRefresh);
 }
 
+// A custom cover set/reset re-applies the overlay to the summaries
+// already in memory (restoring the remembered derived covers on
+// reset) and re-emits, so every surface updates without a refetch.
+subscribePlaylistIdentity(() => {
+  if (cache.playlists.length === 0) return;
+  cache = {
+    playlists: cache.playlists.map((summary) => {
+      const derived = derivedCovers.get(summary.id);
+      const base = derived
+        ? {
+            ...summary,
+            coverUrl: derived.coverUrl,
+            coverUrls: derived.coverUrls,
+          }
+        : summary;
+      return applyCustomCover(base);
+    }),
+    total: cache.total,
+  };
+  emit();
+});
+
 function toTrack(item: ApiUserPlaylistItem): Track {
   const base = toClientTrack(item.track);
   return {
@@ -243,7 +291,7 @@ function toDetail(
   partial: boolean,
 ): LibraryPlaylistDetail {
   const covers = extractCovers(items);
-  return {
+  return applyCustomCover({
     id: playlist.id,
     title: playlist.title,
     description: playlist.description,
@@ -254,7 +302,7 @@ function toDetail(
     tracks: items.map(toTrack),
     durationMs,
     ...(partial ? { partial: true } : {}),
-  };
+  });
 }
 
 function rememberCovers(
@@ -263,8 +311,18 @@ function rememberCovers(
   updatedAt: string,
 ) {
   const coverCache = readCoverCache();
+  // The detail may carry the custom-cover overlay; the persistent
+  // derived-cover cache must only ever hold derived covers, so when a
+  // custom cover is active keep the covers already remembered.
+  const custom = getCustomCover(id);
+  const derived = derivedCovers.get(id);
   coverCache[id] = {
-    coverUrls: detail.coverUrls,
+    coverUrls:
+      custom && derived
+        ? derived.coverUrls
+        : custom
+          ? (coverCache[id]?.coverUrls ?? [])
+          : detail.coverUrls,
     trackCount: detail.trackCount,
     updatedAt,
   };

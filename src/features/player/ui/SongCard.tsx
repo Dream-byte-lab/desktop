@@ -9,6 +9,7 @@ import ExplicitBadge from "@/shared/ui/ExplicitBadge";
 import CoverImage from "@/features/covers/ui/CoverImage";
 import { isCoverReady } from "@/features/covers/lib/coverArt";
 import type { TrackArtist } from "@/shared/types";
+import { useRomanized } from "@/shared/text";
 
 export interface SongCardProps {
   id?: string;
@@ -73,6 +74,14 @@ function SongCard({
   trailingAction,
 }: SongCardProps) {
   const { t } = useTranslation();
+  // Display-only romanization: the original title/artists stay primary and
+  // are the identity used for search, matching and playback; the romanized
+  // form is a subordinate reading aid rendered beside them, never stored.
+  // SongCard rows sit in fixed-height (64px) virtualized lists, so the
+  // romanization rides on the existing title/artist lines instead of
+  // adding a third line that would break row height.
+  const titleRomanized = useRomanized(title);
+  const artistRomanized = useRomanized(artists);
   const [imageLoaded, setImageLoaded] = useState(() => isCoverReady(coverUrl));
   const clickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -218,6 +227,14 @@ function SongCard({
               ) : (
                 title
               )}
+              {titleRomanized ? (
+                <span
+                  data-romanization
+                  className="ml-[8px] text-caption font-[400] text-text-tertiary"
+                >
+                  {titleRomanized}
+                </span>
+              ) : null}
             </h3>
             {repostedBy && (
               <div
@@ -250,6 +267,14 @@ function SongCard({
               ) : (
                 <span className="truncate select-none">{artists}</span>
               )}
+              {artistRomanized ? (
+                <span
+                  data-romanization
+                  className="ml-[8px] min-w-0 truncate text-caption text-text-tertiary"
+                >
+                  {artistRomanized}
+                </span>
+              ) : null}
             </p>
           )}
         </div>

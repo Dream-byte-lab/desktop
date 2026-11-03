@@ -16,6 +16,12 @@ import {
   useYoutubeLibraryItems,
 } from "../hooks";
 import { useLikesCover } from "../hooks/useLikesCover";
+import {
+  LIKES_COVER_ID,
+  orderPinnedFirst,
+  useCustomCover,
+  usePinnedPlaylistIds,
+} from "../lib/playlistIdentity";
 import { useTranslation } from "@/languages";
 import { useModalStore } from "../store/modalStore";
 import { useImportStore } from "../store/importStore";
@@ -84,6 +90,10 @@ function LikesPlaylistCard({
 }) {
   const { t } = useTranslation();
   const likesCover = useLikesCover();
+  // #248: Liked Songs is a hard-coded tile, not a summary, so its
+  // local custom cover is read from the identity store directly.
+  const customLikesCover = useCustomCover(LIKES_COVER_ID);
+  const cover = customLikesCover ?? likesCover;
 
   if (viewMode === "list") {
     return (
@@ -94,7 +104,7 @@ function LikesPlaylistCard({
         <div className="flex items-center gap-[16px] min-w-0">
           <div className="relative h-[48px] w-[48px] shrink-0 overflow-hidden rounded-catalogue">
             <img
-              src={likesCover}
+              src={cover}
               alt=""
               draggable={false}
               className="h-full w-full object-cover select-none"
@@ -136,7 +146,7 @@ function LikesPlaylistCard({
     >
       <div className="relative aspect-square w-full overflow-hidden rounded-catalogue">
         <img
-          src={likesCover}
+          src={cover}
           alt=""
           draggable={false}
           className="h-full w-full object-cover select-none"
@@ -257,6 +267,7 @@ function OnlineLibraryPage() {
   // Playlist Genre label filter (S5-0): the labels in use across the
   // library, and the owner's current selection. Playlists only — a
   // label is a playlist property.
+  const pinnedIds = usePinnedPlaylistIds();
   const availableGenreLabels = useAllInUseGenreLabels();
   const [selectedGenreLabels, setSelectedGenreLabels] = useState<string[]>([]);
   const genreFilterActive = selectedGenreLabels.length > 0;
@@ -363,16 +374,22 @@ function OnlineLibraryPage() {
             return haystack.includes(debouncedQuery);
           });
 
-    if (!genreFilterActive) return sortByRecent(filtered);
+    // Pinned playlists first (shared ordering helper), stable within
+    // both groups by the existing recent order.
+    if (!genreFilterActive)
+      return orderPinnedFirst(sortByRecent(filtered), pinnedIds);
     const selected = new Set(selectedGenreLabels.map(normalizeGenreLabel));
-    return sortByRecent(
-      filtered.filter(
-        (item) =>
-          item.kind === "playlist" &&
-          labelsForPlaylist(item.id).some((label) =>
-            selected.has(normalizeGenreLabel(label)),
-          ),
+    return orderPinnedFirst(
+      sortByRecent(
+        filtered.filter(
+          (item) =>
+            item.kind === "playlist" &&
+            labelsForPlaylist(item.id).some((label) =>
+              selected.has(normalizeGenreLabel(label)),
+            ),
+        ),
       ),
+      pinnedIds,
     );
   }, [
     activeTab,
@@ -386,6 +403,7 @@ function OnlineLibraryPage() {
     genreFilterActive,
     selectedGenreLabels,
     availableGenreLabels,
+    pinnedIds,
   ]);
 
   const visibleItems = useMemo(

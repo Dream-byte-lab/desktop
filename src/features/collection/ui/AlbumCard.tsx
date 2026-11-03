@@ -9,6 +9,7 @@ import DropdownMenu from "@/shared/ui/DropdownMenu";
 import type { DropdownMenuItem } from "@/shared/ui/DropdownMenu";
 import ExplicitBadge from "@/shared/ui/ExplicitBadge";
 import CoverImage from "@/features/covers/ui/CoverImage";
+import { useRomanized } from "@/shared/text";
 
 export interface AlbumCardProps {
   id: string;
@@ -35,6 +36,9 @@ function AlbumCard({
   className = "",
   menuItems,
 }: AlbumCardProps) {
+  // Display-only romanization as a subordinate line under the original
+  // title (grid cards already stack title/subtitle vertically).
+  const titleRomanized = useRomanized(title);
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuPosition, setMenuPosition] = useState<{
     x: number;
@@ -91,6 +95,14 @@ function AlbumCard({
           <span className="truncate text-label font-[500] text-text-primary">
             {title}
           </span>
+          {titleRomanized ? (
+            <span
+              data-romanization
+              className="truncate text-caption font-[400] text-text-tertiary"
+            >
+              {titleRomanized}
+            </span>
+          ) : null}
           <span className="flex items-center gap-[5px] truncate text-body text-text-tertiary">
             {badge}
             {explicit && <ExplicitBadge />}

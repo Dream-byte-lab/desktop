@@ -13,6 +13,10 @@ import { DialogActions, DialogButton } from "@/shared/ui";
 import CoverImage from "@/features/covers/ui/CoverImage";
 import { useTranslation } from "@/languages";
 import { useAddPlaylistTracks, usePlaylistsList } from "../../hooks";
+import {
+  orderPinnedFirst,
+  usePinnedPlaylistIds,
+} from "../../lib/playlistIdentity";
 import { useModalStore } from "../../store/modalStore";
 
 export default function AddToPlaylistModal() {
@@ -34,9 +38,14 @@ export default function AddToPlaylistModal() {
   const { data: playlistData } = usePlaylistsList();
   const addTrack = useAddPlaylistTracks();
 
+  const pinnedIds = usePinnedPlaylistIds();
   const rawPlaylists = useMemo(
-    () => track?.playlists ?? playlistData?.playlists ?? [],
-    [track?.playlists, playlistData?.playlists],
+    () =>
+      orderPinnedFirst(
+        track?.playlists ?? playlistData?.playlists ?? [],
+        pinnedIds,
+      ),
+    [track?.playlists, playlistData?.playlists, pinnedIds],
   );
 
   const playlists = useMemo(() => {

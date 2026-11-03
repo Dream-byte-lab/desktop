@@ -802,7 +802,7 @@ export function ShortcutsTab({
 
         {/* Right Tools: Search Field + Small Reset Button */}
         <div className="relative flex items-center justify-end flex-1 min-w-0 gap-2">
-          <div className="h-[34px] px-3 rounded-[10px] bg-fill flex items-center gap-2 transition-colors w-full max-w-[220px] min-w-[130px] border-none outline-none ring-0">
+          <div className="h-[34px] px-3 rounded-item bg-fill flex items-center gap-2 transition-colors w-full max-w-[220px] min-w-[130px] border-none outline-none ring-0">
             <Search2Line size={15} className="text-text-tertiary shrink-0" />
             <input
               type="text"
@@ -865,7 +865,7 @@ export function ShortcutsTab({
                       prev === item.id ? null : item.id,
                     );
                   }}
-                  className="inline-flex min-h-[50px] items-center gap-[14px] rounded-[14px] bg-fill py-[8px] pl-[12px] pr-[8px] transition-colors group select-none cursor-pointer hover:bg-fill-hover"
+                  className="inline-flex min-h-[50px] items-center gap-[14px] rounded-item bg-fill py-[8px] pl-[12px] pr-[8px] transition-colors group select-none cursor-pointer hover:bg-fill-hover"
                 >
                   {/* Left: Icon + Title + Scope Badge */}
                   <div className="flex items-center gap-[10px] min-w-0 pointer-events-none">
