@@ -1,0 +1,313 @@
+name: Community bot
+
+# Linerave's front-desk bot. It does four small jobs:
+#   1. Welcomes first-time issue and pull request authors, and says
+#      honestly what happens next.
+#   2. On bug reports, checks for the four facts we actually triage by
+#      (version, platform, what you were doing, DJ mode on or off) and
+#      politely asks for whichever are missing — once.
+#   3. Routes anything that smells like a security problem away from
+#      public issues to the private advisory form, fast.
+#   4. Labels reports by area so they land in the right pile, and
+#      gently closes needs-info reports that stay unanswered
+#      (nudge at 14 days, close 16 days later).
+#
+# Everything it writes is plain language on purpose. If you edit the
+# messages, keep them that way — they are the project's public face.
+#
+# A note on triggers, because it matters: the pull request job uses
+# pull_request_target so it can comment on PRs from forks (a plain
+# pull_request run gets a read-only token there). That is safe ONLY
+# because the job never checks out or runs PR code — it reads the
+# event payload and talks to the API. Never add a checkout step, a
+# build step, or anything that executes PR content to that job.
+
+on:
+  issues:
+    types: [opened, edited, reopened]
+  pull_request_target:
+    types: [opened]
+  schedule:
+    # Daily, 07:17 UTC — the stale sweep for unanswered needs-info reports.
+    - cron: "17 7 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  issue-front-desk:
+    name: Issues — greet, route, label, ask
+    if: github.event_name == 'issues'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Front desk
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const issue = context.payload.issue;
+            const action = context.payload.action;
+            const author = issue.user.login;
+            if (issue.user.type === 'Bot' || author.endsWith('[bot]')) return;
+
+            const title = issue.title || '';
+            const body = issue.body || '';
+            const text = title + '\n' + body;
+            const labelsNow = (issue.labels || []).map(l => typeof l === 'string' ? l : l.name);
+            const isOwner = author === owner;
+
+            const LABEL_DEFS = {
+              'needs-info':  { color: 'FBCA04', description: 'Waiting for details we asked the reporter for' },
+              'needs-triage':{ color: 'FEF2C0', description: 'New — waiting for a maintainer to look' },
+              'security':    { color: 'B60205', description: 'Security — belongs in a private advisory, not a public issue' },
+              'pinned':      { color: '333333', description: 'Pinned — the bots leave this alone' },
+              'lyrics':      { color: '1D76DB', description: 'Lyrics' },
+              'dj-mixing':   { color: '5319E7', description: 'DJ mode and mixing' },
+              'party':       { color: '0E8A16', description: 'liveRave parties and guest requests' },
+              'playlists':   { color: '006B75', description: 'Playlists, mixes and For You' },
+              'updates':     { color: 'C5DEF5', description: 'App updates and the updater' },
+              'linux':       { color: 'F9D0C4', description: 'Linux' },
+              'windows':     { color: '0052CC', description: 'Windows' }
+            };
+
+            async function ensureLabel(name) {
+              try {
+                await github.rest.issues.getLabel({ owner, repo, name });
+              } catch (e) {
+                if (e.status === 404 && LABEL_DEFS[name]) {
+                  await github.rest.issues.createLabel({ owner, repo, name, ...LABEL_DEFS[name] });
+                }
+              }
+            }
+
+            async function addLabels(names) {
+              const fresh = [...new Set(names)].filter(n => !labelsNow.includes(n));
+              for (const n of fresh) await ensureLabel(n);
+              if (fresh.length) {
+                await github.rest.issues.addLabels({ owner, repo, issue_number: issue.number, labels: fresh });
+              }
+            }
+
+            // --- (3) Security routing comes first, before any triage ---
+            const SECURITY_RE = /vulnerabilit|security (issue|flaw|hole|bug)|exploit|\brce\b|remote code execution|credentials? (leaked|exposed)|token (leaked|exposed)|private key|leaked (secret|token|key|password)|hardcoded (secret|password|token|key)|xss|cross-site scripting|sql injection|authentication bypass|auth bypass|privilege escalation/i;
+            if (SECURITY_RE.test(text)) {
+              await addLabels(['security']);
+              if (action === 'opened') {
+                await github.rest.issues.createComment({
+                  owner, repo, issue_number: issue.number,
+                  body: [
+                    "Thanks for flagging this — and please don't add any more detail here.",
+                    "",
+                    "Because it sounds like a security problem, it doesn't belong in a public issue where anyone can read it. The private route is GitHub's advisory form for this repo:",
+                    "",
+                    "https://github.com/Dream-byte-lab/desktop/security/advisories/new",
+                    "",
+                    "That reaches the maintainer directly and stays private while it's looked into. A maintainer may close this issue to move the conversation there — that's the safer place for it, not a brush-off. If you've already posted technical details or anything secret-shaped here, mention that in the advisory so it can be dealt with."
+                  ].join('\n')
+                });
+              }
+              return;
+            }
+
+            // --- (4) Area labels, from plain keywords ---
+            const AREA_RULES = [
+              ['lyrics',    /\blyrics?\b/i],
+              ['dj-mixing', /\bdj\b|\bmixing\b|\bmixer\b|beatmatch|crossfade|\bdecks?\b|scratch/i],
+              ['party',     /\bparty\b|live ?rave|guest request/i],
+              ['playlists', /playlist|daily mix|for you/i],
+              ['updates',   /auto.?update|\bupdater\b|update (failed|fails|stuck|available|download)/i],
+              ['linux',     /\blinux\b|appimage|ubuntu|debian|fedora/i],
+              ['windows',   /\bwindows\b|\bwin ?(10|11)\b|surface|\.exe\b/i]
+            ];
+            await addLabels(AREA_RULES.filter(([, re]) => re.test(text)).map(([name]) => name));
+
+            // The maintainer's own reports get labels and routing, but
+            // no greeting and no homework questions.
+            if (isOwner) return;
+
+            // --- (2) The four facts we triage by ---
+            function sectionText(re) {
+              const lines = body.split('\n');
+              let capturing = false;
+              const out = [];
+              for (const line of lines) {
+                if (/^#{1,4}\s/.test(line)) {
+                  if (capturing) break;
+                  capturing = re.test(line);
+                  continue;
+                }
+                if (capturing) out.push(line);
+              }
+              return out.join('\n').trim();
+            }
+            const FACTS = [
+              {
+                key: 'version',
+                ask: "Which version of Linerave you're running — it's shown in Settings → About (for example, 0.1.13).",
+                present: /\b\d+\.\d+\.\d+\b/.test(body)
+              },
+              {
+                key: 'platform',
+                ask: "Your platform and chip — for example Windows on ARM64 (a Surface), Windows on x64, or Linux and which flavour.",
+                present: /windows|linux|macos|mac os|ubuntu|appimage/i.test(body) || /arm64|x64|x86_64|apple silicon|intel/i.test(body)
+              },
+              {
+                key: 'doing',
+                ask: "What you were doing when it happened, and what you expected to happen instead.",
+                present: (sectionText(/what happened|what you were doing|describe/i) || body.replace(/<!--[\s\S]*?-->/g, '')).trim().length >= 60
+              },
+              {
+                key: 'dj',
+                ask: "Whether DJ mode was on or off. This one matters more than it sounds: with DJ mode on, a different part of the app plays your music than with it off, so it decides where we look first.",
+                // Look line by line, ignoring the template's own
+                // scaffold wording ("write ON or OFF"), so only a real
+                // answer counts. An honest "don't know / I don't use
+                // DJ mode" counts as answered.
+                present: body.split('\n').filter(l => /dj/i.test(l)).some(l => {
+                  if (/don'?t know|not sure|never use|don'?t use/i.test(l)) return true;
+                  const cleaned = l.replace(/on\s*\/\s*off|off\s*\/\s*on|on or off|write|delete (one|the line)/gi, '');
+                  return /\b(on|off)\b/i.test(cleaned);
+                })
+              }
+            ];
+            const missing = FACTS.filter(f => !f.present);
+
+            // If we asked before and the facts have since arrived, say
+            // thanks and take the label back off. Never nag on edits.
+            if (action !== 'opened' && labelsNow.includes('needs-info')) {
+              if (missing.length === 0) {
+                await github.rest.issues.removeLabel({ owner, repo, issue_number: issue.number, name: 'needs-info' });
+                await github.rest.issues.createComment({
+                  owner, repo, issue_number: issue.number,
+                  body: "That's everything we needed — thank you. The needs-info label is off, and this is back in the pile to be looked at."
+                });
+              }
+              return;
+            }
+            if (action !== 'opened') return;
+
+            // --- (1) First-time greeting ---
+            let firstTime = false;
+            try {
+              const prior = await github.rest.issues.listForRepo({ owner, repo, creator: author, state: 'all', per_page: 5 });
+              firstTime = prior.data.length <= 1;
+            } catch (e) { /* if we can't tell, don't greet */ }
+
+            const isBug = labelsNow.includes('bug');
+            const parts = [];
+            if (firstTime) {
+              parts.push([
+                "Welcome — and thanks for your first issue here.",
+                "",
+                "Linerave is a small personal project, looked after by one person, and every report gets read. What happens next: this report gets labelled so it sits with similar ones, and if anything's missing we'll ask right here. If it's a problem we can reproduce, it goes on the list for a future release — fixes ship in Linerave's own releases, as they're ready."
+              ].join('\n'));
+            } else if (isBug && missing.length) {
+              parts.push("Thanks for the report.");
+            }
+
+            if (isBug && missing.length) {
+              await addLabels(['needs-info']);
+              parts.push([
+                "Before we can dig in, could you add a few details?",
+                "",
+                ...missing.map(f => '- ' + f.ask),
+                "",
+                "Just reply here with whatever you can — no need to open a new issue. If we don't hear back within about a month, the report gets closed as incomplete, but a fresh report with the details included always gets a proper look."
+              ].join('\n'));
+            }
+
+            if (parts.length) {
+              await github.rest.issues.createComment({ owner, repo, issue_number: issue.number, body: parts.join('\n\n') });
+            }
+
+  pr-front-desk:
+    name: Pull requests — greet and label
+    if: github.event_name == 'pull_request_target'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      # Deliberately NO checkout step in this job — see the note at the
+      # top of this file. This job reads the event payload and uses the
+      # API only; it never touches PR code.
+      - name: Front desk
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const pr = context.payload.pull_request;
+            const author = pr.user.login;
+            if (pr.user.type === 'Bot' || author.endsWith('[bot]')) return;
+
+            const text = (pr.title || '') + '\n' + (pr.body || '');
+            const AREA_RULES = [
+              ['lyrics',    /\blyrics?\b/i],
+              ['dj-mixing', /\bdj\b|\bmixing\b|\bmixer\b|beatmatch|crossfade|\bdecks?\b|scratch/i],
+              ['party',     /\bparty\b|live ?rave|guest request/i],
+              ['playlists', /playlist|daily mix|for you/i],
+              ['updates',   /auto.?update|\bupdater\b|update (failed|fails|stuck|available|download)/i],
+              ['linux',     /\blinux\b|appimage|ubuntu|debian|fedora/i],
+              ['windows',   /\bwindows\b|\bwin ?(10|11)\b|surface|\.exe\b/i]
+            ];
+            const names = AREA_RULES.filter(([, re]) => re.test(text)).map(([n]) => n);
+            if (names.length) {
+              try {
+                await github.rest.issues.addLabels({ owner, repo, issue_number: pr.number, labels: names });
+              } catch (e) { /* labels are a nicety on PRs, never a blocker */ }
+            }
+
+            if (author === owner) return;
+
+            let firstTime = false;
+            try {
+              const found = await github.rest.search.issuesAndPullRequests({
+                q: 'repo:' + owner + '/' + repo + ' type:pr author:' + author
+              });
+              firstTime = found.data.total_count <= 1;
+            } catch (e) { /* if we can't tell, don't greet */ }
+            if (!firstTime) return;
+
+            await github.rest.issues.createComment({
+              owner, repo, issue_number: pr.number,
+              body: [
+                "Thanks for opening this pull request — welcome, if it's your first here.",
+                "",
+                "Honest expectations, up front: Linerave is a personal fork, maintained by one person. Every pull request gets read, but not every one gets merged — if a change doesn't fit where the project is headed, it'll be closed with thanks rather than left hanging.",
+                "",
+                "What happens next: the automated checks run first, then the maintainer reads through it and replies here. The checklist in the pull request template is the best guide to what lands well."
+              ].join('\n')
+            });
+
+  stale-needs-info:
+    name: Close unanswered needs-info reports
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Nudge, then close, only where we asked and heard nothing
+        uses: actions/stale@1e223db275d687790206a7acac4d1a11bd6fe629 # v10.4.0
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          # Only reports we already asked for details on are in scope.
+          # A bug report that arrived complete is never touched, and
+          # anything labelled pinned or security is exempt outright.
+          only-labels: needs-info
+          exempt-issue-labels: pinned,security
+          exempt-pr-labels: pinned,security
+          days-before-stale: 14
+          days-before-close: 16
+          stale-issue-message: |
+            Just checking in on this one. We asked for a few more details a while back — they're in the comment above — and without them we can't reproduce the problem. If you're still seeing it, adding the details here picks the report straight back up. And if it's stopped happening, no reply is needed at all.
+          close-issue-message: |
+            Closing this as incomplete: we never got the details needed to reproduce the problem, and it's been quiet since. That's not a dismissal — if it happens again, please open a fresh report with the details from the template and it will get a proper look. Thanks for reporting it in the first place.
