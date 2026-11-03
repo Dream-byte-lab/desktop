@@ -21,7 +21,7 @@
 
 Everything below is additive. With the DJ switched off, playback is the upstream player, untouched.
 
-- **liveRave, the DJ engine.** Turn the DJ on and press play: liveRave analyses each track itself (tempo, phrase structure, key, energy contour, vocals), chooses the order inside *your* playlist, and performs the joins — beatmatched, phrase-aligned blends with EQ and bass swaps, loops, jog moves (nudges, brakes, vinyl stops, spinbacks), scratches (baby, chirp, transformer, flare) and effects (reverb, delay, spiral, flanger, phaser, saturation, gating, slip rolls). Each join is a recipe chosen for that pair of songs from the measurements, never a timed crossfade.
+- **liveRave, the DJ engine.** Turn the DJ on and press play: liveRave analyses each track itself (tempo, phrase structure, key, energy contour, vocals), chooses the order inside _your_ playlist, and performs the joins — beatmatched, phrase-aligned blends with EQ and bass swaps, loops, jog moves (nudges, brakes, vinyl stops, spinbacks), scratches (baby, chirp, transformer, flare) and effects (reverb, delay, spiral, flanger, phaser, saturation, gating, slip rolls). Each join is a recipe chosen for that pair of songs from the measurements, never a timed crossfade.
 - **DJ personalities and sliders.** Seven personalities — Club, Battle, House, Open Format, Experimental, Radio — plus a personality-free autonomous mode, bend how the engine decides; eight sliders (intensity, creativity, scratching, effects, transition complexity, genre flexibility, energy progression, track-selection freedom) bend them further. At the default settings the engine behaves exactly as the un-personalised build.
 - **The DJ stage.** A performance surface modelled on the real DDJ-REV7's layout: two decks, jog wheels that turn at a truthful 33 rpm, channel strips, crossfader, hot-cue pads and a live activity strip that narrates what the DJ just did and why. Its manual controls are alive alongside the autonomous DJ; a light Simple view sits on top of the same decks for smaller screens.
 - **Parties.** Host a session and guests join by QR code to request songs — from the whole catalogue, not just the night's playlist — and react live. The decks stay the host's.
@@ -30,7 +30,7 @@ Everything below is additive. With the DJ switched off, playback is the upstream
 
 ## Preview
 
-*Screenshots are being refreshed. The interface has been redesigned since the upstream captures were taken — a deep-indigo design system from the app's own icon, a frosted inset sidebar that collapses to a rail, a capsule player, the DJ stage and the For You feed — and this section will show the current build rather than pictures of a different app.*
+_Screenshots are being refreshed. The interface has been redesigned since the upstream captures were taken — a deep-indigo design system from the app's own icon, a frosted inset sidebar that collapses to a rail, a capsule player, the DJ stage and the For You feed — and this section will show the current build rather than pictures of a different app._
 
 ---
 
