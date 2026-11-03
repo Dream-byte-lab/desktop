@@ -1,0 +1,97 @@
+name: Security scan
+
+# The standing sweep for Linerave:
+#   - gitleaks:      no secret-shaped string lands in the history unnoticed
+#   - OSV scanner:   no dependency with a known vulnerability sits quietly
+#                    in the lockfile
+#   - dependency review (pull requests only): a PR that would INTRODUCE a
+#                    high-severity vulnerable dependency fails its checks
+#
+# The first two also run weekly, so a vulnerability disclosed against a
+# dependency we already ship is caught even when nothing here changed.
+# GitHub's own secret scanning and push protection (repo settings) are
+# the other half of this — see .github/dependabot.yml's header for how
+# dependency fixes are folded deliberately rather than merged from bots.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Mondays, 06:41 UTC — after the CodeQL run, off the hour.
+    - cron: "41 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  gitleaks:
+    name: Secret scanning (gitleaks)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository (full history)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # Full history, so the scan covers everything the push or PR
+          # would add, not just the tip commit.
+          fetch-depth: 0
+
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.9
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  osv:
+    name: Vulnerability scan (OSV)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Required so the SARIF results can be published to the Security tab.
+      security-events: write
+      actions: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Run OSV scanner over the repo and lockfile
+        id: osv
+        uses: google/osv-scanner-action/osv-scanner-action@b1d267aea5211fa648d9d442fa64b90dbdcbdd36 # v2.7.0
+        with:
+          scan-args: |-
+            --recursive
+            --skip-git
+            --format sarif
+            --output osv-results.sarif
+            ./
+
+      - name: Publish results to the Security tab
+        if: always()
+        uses: github/codeql-action/upload-sarif@1fc58d04a4d4374f921bdac573c3811c240f9c26 # v4.39.2
+        with:
+          sarif_file: osv-results.sarif
+          category: osv-scanner
+
+  dependency-review:
+    name: Dependency review (pull requests)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Required so the review can leave its summary comment on the PR.
+      pull-requests: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Review the PR's dependency changes
+        uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48 # v4.9.0
+        with:
+          # A PR that introduces a dependency with a known high or
+          # critical vulnerability fails. Lower severities are reported
+          # in the summary comment without blocking.
+          fail-on-severity: high
+          comment-summary-in-pr: on-failure
