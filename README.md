@@ -134,6 +134,18 @@ Release installers for this fork are currently built for Windows (ARM64 + x64) a
 
 ---
 
+## Security
+
+Linerave is maintained independently of upstream Liner, including for security. This fork does not rely on upstream for security updates and does not receive them: upstream's over-the-air bundle channel is disabled in Linerave, and the app updates only from this fork's own release channel — built from this repository and published to the fork's own private releases repository.
+
+Upstream changes are never taken automatically. They are reviewed, folded in deliberately, and verified against the fork's full test battery before they ship, and anything touching dependencies or security-sensitive code is held for individual review. The fork runs its own security audits on its own schedule — the most recent full audit (November 2026) covered the dependency tree (no known vulnerabilities found), a sweep for secrets in the tree, and the app's update and network surfaces — and security fixes ship in this fork's own releases, on the fork's cadence, without waiting for an upstream release.
+
+Vulnerabilities in Linerave are reported to this fork, not to upstream — see [SECURITY.md](./SECURITY.md).
+
+One boundary, stated plainly: Linerave remains a client of the official Liner API for music data. That is a service relationship, not a code or update channel — no code, bundles, or fixes arrive through it.
+
+---
+
 ## Contributing
 
 This is a personal fork, maintained for its author's own use, and it is not accepting contributions. The upstream project — where bug reports, discussions and contributions belong — is [tryliner/desktop](https://github.com/tryliner/desktop). The [license](./LICENSE) limits what a fork is allowed to do, and this fork stays inside it: personal use and local builds, no commercial distribution, no public competing fork.

@@ -1,9 +1,20 @@
-<svg width="435" height="598" viewBox="0 0 435 598" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <g stroke="white" stroke-opacity="0.08" stroke-width="64" stroke-linecap="round">
-    <path d="M-20 470 V300"/>
-    <path d="M110 520 V180"/>
-    <path d="M240 560 V60"/>
-    <path d="M370 500 V230"/>
-    <path d="M500 450 V330"/>
+<svg
+  width="435"
+  height="598"
+  viewBox="0 0 435 598"
+  fill="none"
+  xmlns="http://www.w3.org/2000/svg"
+>
+  <g
+    stroke="white"
+    stroke-opacity="0.08"
+    stroke-width="64"
+    stroke-linecap="round"
+  >
+    <path d="M-20 470 V318" />
+    <path d="M110 520 V277" />
+    <path d="M240 560 V60" />
+    <path d="M370 500 V297" />
+    <path d="M500 450 V317" />
   </g>
 </svg>
