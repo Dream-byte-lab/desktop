@@ -2,6 +2,10 @@ import { useEffect, useMemo, useRef } from "react";
 import type { Lyric } from "@braccato/parsers";
 import { cn } from "@/shared/lib";
 import { useLyricsEdgeBlur, useLyricsEdgeFade } from "../store/visualModeStore";
+import {
+  lyricsDisplayOptionsFor,
+  useLyricsDisplayStore,
+} from "../store/lyricsDisplayStore";
 import { useLyricsCanvas } from "../hooks/useLyricsCanvas";
 import { playerEngine } from "../engine/playerEngine";
 
@@ -29,10 +33,21 @@ export function CanvasLyricsView({ lyrics }: CanvasLyricsViewProps) {
   const freeTimerRef = useRef<number | null>(null);
   const edgeFade = useLyricsEdgeFade();
   const edgeBlur = useLyricsEdgeBlur();
+  // The reference 27 display preferences reach the renderer as one
+  // options value; the store is only re-read when a preference
+  // actually changes, never per frame or per position tick.
+  const textAlign = useLyricsDisplayStore((s) => s.textAlign);
+  const highlightLyrics = useLyricsDisplayStore((s) => s.highlightLyrics);
+  const biggerText = useLyricsDisplayStore((s) => s.biggerText);
+  const displayOptions = useMemo(
+    () => lyricsDisplayOptionsFor({ textAlign, highlightLyrics, biggerText }),
+    [textAlign, highlightLyrics, biggerText],
+  );
   const { rendererRef, edges, releasePin } = useLyricsCanvas(
     refs,
     lyrics,
     edgeFade,
+    displayOptions,
   );
 
   const clearFreeTimer = () => {

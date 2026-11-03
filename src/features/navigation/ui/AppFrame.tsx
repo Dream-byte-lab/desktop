@@ -22,6 +22,7 @@ import {
   User2Fill,
   AlbumFill,
   PlaylistFill,
+  AimingFill,
 } from "@mingcute/react";
 import Header from "./Header";
 import Sidebar from "./Sidebar";
@@ -50,6 +51,8 @@ import {
 } from "@/features/player";
 import { NOW_PLAYING_MORPH_DURATION_S } from "@/features/player/ui/nowPlayingMorph";
 import { WelcomeGreeting } from "@/features/greeting/ui/WelcomeGreeting";
+import { FocusMode, useFocusModeStore } from "@/features/focus";
+import { PANEL_GLASS_CLASS } from "@/shared/ui/Panel";
 import { DjPartyPanel } from "@/features/mixer/ui/DjPartyPanel";
 import { DjProView } from "@/features/mixer/ui/DjProView";
 import { DjSimpleView } from "@/features/mixer/ui/DjSimpleView";
@@ -137,6 +140,9 @@ export default function AppFrame({ children }: AppFrameProps) {
   const setFullscreenPlayerOpen = usePlayerStore(
     (state) => state.setFullscreen,
   );
+  const focusActive = useFocusModeStore((state) => state.active);
+  const enterFocus = useFocusModeStore((state) => state.enter);
+  const exitFocus = useFocusModeStore((state) => state.exit);
   const [fullscreenEffectsReady, setFullscreenEffectsReady] = useState(false);
 
   useEffect(() => {
@@ -345,6 +351,9 @@ export default function AppFrame({ children }: AppFrameProps) {
     fullscreenOpen: isFullscreenPlayer,
     openFullscreen: openFullscreenPlayer,
     closeFullscreen: handleCloseFullscreen,
+    focusOpen: focusActive,
+    enterFocus,
+    exitFocus,
     onEscapeFallback: handleEscapeFallback,
   });
   const [searchScrollMask, setSearchScrollMask] = useState(
@@ -1140,6 +1149,32 @@ export default function AppFrame({ children }: AppFrameProps) {
           <WindowControlsNotch tone="glass" blur={glassBlur} />
         </div>
       )}
+      {/* The Focus doorway (Interface Build 6): the annex enters
+          Focus "from Now Playing" — a quiet glass pill beside the
+          fullscreen player's close notch, in the same forced-dark
+          island as the window notch. Esc, this doorway's reverse
+          (the pill inside Focus), or the Shift+F binding leaves. */}
+      {isFullscreenPlayer && !focusActive && (
+        <div
+          data-theme="dark"
+          className="dark absolute top-1.5 left-[44px] z-[75]"
+        >
+          <button
+            type="button"
+            onClick={enterFocus}
+            data-no-window-drag
+            aria-label={t("focus.enter") || "Focus"}
+            className={cn(
+              PANEL_GLASS_CLASS,
+              "flex h-[26px] cursor-pointer items-center gap-1.5 rounded-full px-2.5 text-[11px] font-medium text-text-secondary transition-colors select-none hover:text-text-primary active:scale-95 motion-reduce:transition-none",
+            )}
+          >
+            <AimingFill size={13} />
+            {t("focus.enter") || "Focus"}
+          </button>
+        </div>
+      )}
+      <FocusMode />
     </div>
   );
 }

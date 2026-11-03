@@ -38,6 +38,7 @@ export interface MainAppShortcutsSettings {
   search: string; // e.g. "/" (1 button)
   toggleQueue: string; // e.g. "Q" (1 button)
   toggleFullscreen: string; // e.g. "F" (1 button)
+  toggleFocusMode: string; // e.g. "Shift+F" (2 buttons)
 }
 
 export interface MiniplayerShortcutsSettings {
@@ -84,6 +85,7 @@ export const DEFAULT_SHORTCUTS: ShortcutsSettings = {
     search: "/",
     toggleQueue: "Q",
     toggleFullscreen: "F",
+    toggleFocusMode: "Shift+F",
   },
   miniplayer: {
     playPause: "Space",

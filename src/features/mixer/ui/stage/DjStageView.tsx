@@ -7,13 +7,17 @@ import { preparedTrack, type PreparedTrack } from "../../engine/trackSource";
 import type { DeckIndex } from "../../engine/twoDeckMixer";
 import { useDjModeStore } from "../../store/djModeStore";
 import { ActivityStrip } from "./ActivityStrip";
+import { ControlLevelSwitcher } from "./ControlLevelSwitcher";
 import { DeckDisplay } from "./DeckDisplay";
+import { DeckPerformanceControls } from "./DeckPerformanceControls";
 import { Fader } from "./Fader";
 import { JogWheel } from "./JogWheel";
 import { PadGrid } from "./PadGrid";
 import { PersonalityPanel } from "./PersonalityPanel";
+import { StageBackButton } from "./StageBackButton";
 import {
   activityLinesForStage,
+  deckRoleLabel,
   landmarkCues,
   sectionSpans,
   waveformBars,
@@ -28,20 +32,29 @@ import { clearUserCues, loadUserCues, saveUserCue } from "./userCues";
 import { WaveformStrip } from "./WaveformStrip";
 
 // The DJ stage (the Pro view's successor): a battle layout — two
-// deck panels around a centre mixer — built entirely on the seams
-// that already exist. The playing deck is whichever physical deck
-// the session says is current; the other deck shows the next track
-// in the queue as standby. Everything hands-on writes through the
-// session's public manual stage (crossfade, per-deck trim and bass
-// cut) and its public seek; everything read comes from the session's
-// public getters, the player store, and the prepared-track cache.
-// The snapshot controls are now wired to the session's
-// stageSnapshot exposure (EQ/filter/FX/curve through the manual
-// setters). There is no master control here on purpose: no such seam exists
-// in the manual stage, and the player's own volume lives in the
-// player bar. The control-level label (autonomous / assisted /
-// manual) is a readout of where hands have been, not a mode switch
-// — no engine seam exists for switching modes from here.
+// deck panels around a centre mixer — built on the session's
+// seams. Each deck panel is driven by the snapshot's per-deck
+// truth (the engine seams): the playing deck shows the current
+// track, and during a sounding join the other panel shows the
+// standing incoming — the track actually sounding on that deck,
+// with its own playhead — through the session's standingIncoming
+// getter. Outside a join the standby panel shows the queue's
+// next track, labelled by deckRoleLabel as "next in queue",
+// never that the track is loaded on the deck (preparation is
+// in-memory; the snapshot's trackId says null and the panel says
+// so). Everything hands-on writes through the session's public
+// manual stage (crossfade, per-deck trim and bass cut), its
+// public seek, and the engine seams (control level, tempo bias,
+// manual loop/roll, deck-move triggers); everything read comes
+// from the session's public getters, the player store, and the
+// prepared-track cache. The snapshot controls are wired to the
+// session's stageSnapshot exposure (EQ/filter/FX/curve through
+// the manual setters). There is no master control here on
+// purpose: no such seam exists in the manual stage, and the
+// player's own volume lives in the player bar. The stage has its
+// own way back (Note 25): the StageBackButton closes the view
+// from inside it, in both of the stage's states, and closing the
+// view never touches the session.
 
 interface DeckStageData {
   prepared: PreparedTrack | undefined;
@@ -168,46 +181,64 @@ export function DjStageView() {
   const [crossfade, setCrossfadeState] = useState(0);
   const [trims, setTrims] = useState<[number, number]>([100, 100]);
   const [bassCut, setBassCut] = useState<[boolean, boolean]>([false, false]);
-  const [lastGrabAt, setLastGrabAt] = useState<number | null>(null);
   const [cueVersion, setCueVersion] = useState(0);
 
+  // --- the snapshot's per-deck truth (the engine seams) ---------
+  // Read once per render, before the deck-data hooks, because the
+  // panels are keyed to it: a deck whose snapshot names the
+  // current track is the playing deck; a deck the standing
+  // incoming names is sounding the incoming; any other standby
+  // panel falls back to the queue's next track, labelled as such.
   const playingDeck: DeckIndex = djSession.currentDeckIndex;
-  const deckTrack = (index: DeckIndex): Track | null =>
-    index === playingDeck ? currentTrack : nextTrack;
-  const data0 = useDeckStageData(deckTrack(0), cueVersion, slowTick);
-  const data1 = useDeckStageData(deckTrack(1), cueVersion, slowTick);
+  const stageSnap = djSession.stageSnapshot();
+  const standing = djSession.standingIncoming;
+  const panelTrack = (index: DeckIndex): Track | null => {
+    const snapTrackId = stageSnap?.decks[index].trackId ?? null;
+    if (
+      snapTrackId !== null &&
+      currentTrack &&
+      snapTrackId === currentTrack.id
+    ) {
+      return currentTrack;
+    }
+    if (standing && standing.deckIndex === index) return standing.track;
+    return index === playingDeck ? currentTrack : nextTrack;
+  };
+  const data0 = useDeckStageData(panelTrack(0), cueVersion, slowTick);
+  const data1 = useDeckStageData(panelTrack(1), cueVersion, slowTick);
 
   if (!proOpen) return null;
   if (!active) {
     // The panel was left open as a set ended: the personality
-    // panel stays reachable on its own, in the stage's frame.
+    // panel stays reachable on its own, in the stage's frame —
+    // with the way back mounted here too (Note 25: the trap
+    // existed in this state as much as in the live one).
     return (
       <div className="w-full border-t border-border-tertiary bg-bg-primary px-3 py-3 text-text-primary">
+        <div className="mb-3">
+          <StageBackButton />
+        </div>
         <PersonalityPanel />
       </div>
     );
   }
 
   const displayPosSec = displayPosMs / 1000;
-  const noteGrab = () => setLastGrabAt(Date.now());
 
   const onCrossfade = (value: number) => {
     setCrossfadeState(value);
-    noteGrab();
     djSession.setCrossfade(value / 50);
   };
   const onTrim = (index: DeckIndex, percent: number) => {
     const next: [number, number] = [...trims];
     next[index] = percent;
     setTrims(next);
-    noteGrab();
     djSession.setDeckTrim(index, percent / 100);
   };
   const onBassCut = (index: DeckIndex) => {
     const next: [boolean, boolean] = [...bassCut];
     next[index] = !next[index];
     setBassCut(next);
-    noteGrab();
     djSession.setDeckBassCut(index, next[index]);
   };
 
@@ -226,7 +257,6 @@ export function DjStageView() {
       Math.max(0, base + deltaSec * 1000),
     );
     jogTargetRef.current = target;
-    noteGrab();
     djSession.seekTo(target);
   };
 
@@ -268,42 +298,64 @@ export function DjStageView() {
     openRequestCount: djSession.liveRaveOpenRequests.length,
     endReason: djSession.endReason,
   };
-  const stageSnap = djSession.stageSnapshot();
   const lines = activityLinesForStage(snapshot, stageSnap?.currentMove ?? null);
+  // The level is the session's standing state now (the engine
+  // seams): the strip's label reads it, the switcher writes it.
+  const controlLevel = stageSnap?.controlLevel ?? djSession.controlLevel;
   const levelLabel = !running
     ? "Manual — DJ off"
-    : lastGrabAt !== null && Date.now() - lastGrabAt < 8000
-      ? "Assisted — your hands are on the mixer"
-      : "Fully autonomous";
+    : controlLevel === "assisted"
+      ? "Assisted — the brain drives, your grabs hold"
+      : controlLevel === "manual"
+        ? "Manual — your hands rule the decks"
+        : "Fully autonomous";
 
   const stageIntents: StageControlIntents = {
     onTrimChange: (deck, ratio) => onTrim(deck as DeckIndex, ratio * 100),
     onEqChange: (deck, band, db) => {
-      noteGrab();
       djSession.setDeckEq(deck, band, db);
     },
     onFilterChange: (deck, hz) => {
-      noteGrab();
       djSession.setDeckFilter(deck, hz);
     },
     onCrossfaderCurveChange: (curve) => {
-      noteGrab();
       djSession.setCrossfaderCurve(curve);
     },
     onFxAssign: (kind, assign) => {
-      noteGrab();
       djSession.setFxAssign(kind, assign);
     },
     onFxWetLevel: (kind, side, level) => {
-      noteGrab();
       djSession.setFxSendLevel(kind, side, level);
     },
+    onControlLevel: (level) => {
+      djSession.setControlLevel(level);
+    },
+    onTempoBias: (deck, ratio) => {
+      djSession.setDeckTempoBias(deck, ratio);
+    },
+    onManualLoop: (deck, region) => djSession.setManualLoop(deck, region),
+    onManualRoll: (deck, beats) => {
+      djSession.setManualRoll(deck, beats);
+    },
+    onDeckMove: (deck, move) => djSession.triggerDeckMove(deck, move),
   };
 
   const renderDeck = (index: DeckIndex) => {
-    const isPlaying = index === playingDeck;
-    const track = deckTrack(index);
+    const track = panelTrack(index);
     const data = index === 0 ? data0 : data1;
+    const snapDeck = stageSnap?.decks[index] ?? null;
+    // The deck sounding the store's current track is the playing
+    // deck (the snapshot's truth, not the mixer's flipped
+    // current); the deck the standing incoming names is sounding
+    // the incoming. With no snapshot (no session) the mixer's
+    // current deck is the fallback, as before the seams.
+    const isPlaying = stageSnap
+      ? !!track &&
+        !!currentTrack &&
+        snapDeck?.trackId === currentTrack.id &&
+        track.id === currentTrack.id
+      : index === playingDeck;
+    const isStanding = !!standing && standing.deckIndex === index;
     const effectiveDurationSec =
       (isPlaying && durationMs > 0 ? durationMs / 1000 : null) ??
       data.durationSec ??
@@ -313,7 +365,9 @@ export function DjStageView() {
       ? effectiveDurationSec > 0
         ? Math.min(displayPosSec, effectiveDurationSec)
         : displayPosSec
-      : null;
+      : isStanding
+        ? (snapDeck?.positionSec ?? null)
+        : null;
 
     return (
       <div
@@ -322,7 +376,7 @@ export function DjStageView() {
       >
         <DeckDisplay
           deckLabel={`Deck ${index + 1}`}
-          role={isPlaying ? "Playing" : "Standby"}
+          role={deckRoleLabel({ isPlaying, blending: isStanding })}
           title={track?.title ?? null}
           artists={track?.artists ?? null}
           bpm={data.bpm}
@@ -346,7 +400,13 @@ export function DjStageView() {
               bars={data.bars}
               sections={data.sections}
               durationSec={effectiveDurationSec}
-              positionSec={isPlaying ? displayPosSec : null}
+              positionSec={
+                isPlaying
+                  ? displayPosSec
+                  : isStanding
+                    ? (snapDeck?.positionSec ?? null)
+                    : null
+              }
               onSeek={isPlaying ? handleWaveformSeek : undefined}
             />
           )}
@@ -354,9 +414,21 @@ export function DjStageView() {
 
         <div className="mt-3 flex flex-wrap items-start gap-3">
           <JogWheel
-            positionSec={isPlaying ? displayPosSec : 0}
+            positionSec={
+              isPlaying
+                ? displayPosSec
+                : isStanding
+                  ? (snapDeck?.positionSec ?? 0)
+                  : 0
+            }
             durationSec={effectiveDurationSec}
-            playing={isPlaying && status === "playing"}
+            playing={
+              isPlaying
+                ? status === "playing"
+                : isStanding &&
+                  status === "playing" &&
+                  snapDeck?.positionSec != null
+            }
             bpm={data.bpm}
             keyLabel={data.keyLabel}
             interactive={isPlaying}
@@ -378,12 +450,27 @@ export function DjStageView() {
             />
           </div>
         </div>
+
+        {stageSnap && snapDeck ? (
+          <DeckPerformanceControls
+            deck={index}
+            snapshot={snapDeck}
+            intents={stageIntents}
+            live={isPlaying}
+            positionSec={isPlaying ? displayPosSec : snapDeck.positionSec}
+          />
+        ) : null}
       </div>
     );
   };
 
   return (
     <div className="w-full border-t border-border-tertiary bg-bg-primary px-3 py-3 text-text-primary">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+        <StageBackButton />
+        <ControlLevelSwitcher level={controlLevel} intents={stageIntents} />
+      </div>
+
       <div className="mb-3">
         <PersonalityPanel />
       </div>

@@ -73,6 +73,14 @@ export interface StageMeterSummary {
   rms: number;
 }
 
+/** A manual loop the host armed on a deck by hand (the engine seams). */
+export interface StageManualLoop {
+  /** Where the loop region starts, in the track's own seconds. */
+  startSec: number;
+  /** The region's length in beats, as the host asked for it. */
+  beats: number;
+}
+
 export interface StageDeckSnapshot {
   /** The deck gain's current value (the blend curves write it). */
   gainValue: number;
@@ -86,6 +94,31 @@ export interface StageDeckSnapshot {
   filterHz: number;
   /** Meter summary, or null when no analyser tap exists yet. */
   meter: StageMeterSummary | null;
+  /**
+   * The track this deck is actually SOUNDING, or null when the
+   * deck holds nothing (the engine seams' standing truth). A
+   * prepared next track is NOT on the standby deck — preparation
+   * is in-memory — so the standby deck reports null here until a
+   * join performs it onto the deck; during a sounding join it
+   * reports the incoming track. Never a guess.
+   */
+  trackId: string | null;
+  /**
+   * The deck's playhead in the track's own seconds, integrated
+   * through the session's rate segments; null whenever trackId
+   * is null (no truthful position exists for an empty deck).
+   */
+  positionSec: number | null;
+  /**
+   * The standing per-deck tempo bias the planner honours in its
+   * next decisions (1 = neutral). A planner-belief correction
+   * only: the deck's live rateValue is untouched by it.
+   */
+  tempoBias: number;
+  /** The manual loop armed on this deck, or null. */
+  manualLoop: StageManualLoop | null;
+  /** The manual slip roll's slice length in beats, or null when no roll is open. */
+  manualRollBeats: number | null;
 }
 
 export interface StageMasterSnapshot {
@@ -126,6 +159,31 @@ export interface StageCurrentMove {
 
 export type StageCrossfaderCurve = "smooth" | "constant-power" | "cut";
 
+/**
+ * The session's control level (the spec's three, made real by
+ * the engine seams): "autonomous" — the brain authors, revises
+ * and commits joins exactly as it always has; "assisted" — the
+ * brain still performs, but a manual grab on a shared automated
+ * parameter (an EQ band, the filter, an FX send, per deck)
+ * becomes a hold the executor's next performance respects;
+ * "manual" — the brain stops authoring entirely (no decisions,
+ * no track choice) and the host's hands rule the decks, with the
+ * session's never-go-silent floor still standing underneath.
+ */
+export type DjControlLevel = "autonomous" | "assisted" | "manual";
+
+/**
+ * The cue tap's standing read: which deck is cued (always the
+ * standby — the one not playing) and its pre-fader meter summary,
+ * or null when no cue tap can be built. A meter, not a listen
+ * path: this architecture has no second output route (the seam
+ * report names the cue-bus residual).
+ */
+export interface StageCueSnapshot {
+  deckIndex: StageDeckIndex;
+  meter: StageMeterSummary | null;
+}
+
 export interface StageSnapshot {
   decks: [StageDeckSnapshot, StageDeckSnapshot];
   master: StageMasterSnapshot;
@@ -134,6 +192,10 @@ export interface StageSnapshot {
   /** The standing decision's narration, or null when none is known. */
   currentMove: StageCurrentMove | null;
   crossfaderCurve: StageCrossfaderCurve;
+  /** The session's control level, as it stands. */
+  controlLevel: DjControlLevel;
+  /** The standby deck's cue-tap read. */
+  cue: StageCueSnapshot;
 }
 
 export type StageEqBand = "bass" | "mid" | "high";
@@ -157,7 +219,47 @@ export interface StageControlIntents {
     side: StageDeckSide,
     level: number,
   ) => void;
+  // The engine seams' intents. Optional in the contract so the
+  // surfaces that predate the seams (and their fixtures) keep
+  // compiling and rendering: a component shows a seam's control
+  // only when the intent exists, and DjStageView — the live
+  // mount — always provides all of them.
+  /** Switch the session's control level. */
+  onControlLevel?: (level: DjControlLevel) => void;
+  /** Set one deck's standing tempo bias (a ratio; 1 = neutral). */
+  onTempoBias?: (deck: StageDeckIndex, ratio: number) => void;
+  /**
+   * Arm (or, with null, release) a manual loop on a deck. The
+   * region start is in the track's own seconds. Returns whether
+   * the loop was armed, so the surface can say honestly when the
+   * session refused (the deck is not the playing deck, a join is
+   * sounding, a buy-time loop owns the deck, …).
+   */
+  onManualLoop?: (
+    deck: StageDeckIndex,
+    region: StageManualLoop | null,
+  ) => boolean;
+  /** Open (or, with null, release) a manual slip roll of the given slice length in beats. */
+  onManualRoll?: (deck: StageDeckIndex, beats: number | null) => void;
+  /**
+   * Trigger one of the R1 stop moves or R2 scratches on a deck
+   * by hand. Returns whether the move was authored and committed
+   * through the executor, so a refusal (no prepared landing, the
+   * material refusing a scratch, a join already sounding) can be
+   * said out loud instead of silently doing nothing.
+   */
+  onDeckMove?: (deck: StageDeckIndex, move: StageDeckMove) => boolean;
 }
+
+/** A deck move the stage can trigger by hand: the R1 stops and the R2 scratches. */
+export type StageDeckMove =
+  | "brake"
+  | "vinyl-stop"
+  | "spinback"
+  | "baby"
+  | "chirp"
+  | "transformer"
+  | "flare";
 
 /** UI display range for the EQ knobs, in dB (centre 0 = flat). */
 export const STAGE_EQ_MIN_DB = -24;

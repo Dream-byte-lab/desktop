@@ -1,14 +1,19 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { playerEngine } from "@/features/player";
 import { useStableNavigate } from "@/shared/hooks/useStableNavigate";
+import { queryCache } from "@/shared/cache/queryCache";
+import type { CollectionPageData } from "@/features/collection/hooks/useCollection";
+import { getDailyMixArtists } from "../hooks/useDailyMixes";
 import { useTranslation, type TFunction } from "@/languages";
 import Button from "@/shared/ui/Button";
 import ScrollableRow from "@/shared/ui/ScrollableRow";
 import { useForYouFeed } from "../hooks/useForYouFeed";
+import { useForYouRecommendations } from "../hooks/useForYouRecommendations";
 import type { ForYouMix } from "../lib/forYouFeed";
 import type { PopularItem } from "../hooks/usePopularTracks";
 import type { Track } from "@/shared/types";
 import HomePageSkeleton from "./HomePageSkeleton";
+import ForYouRecommendations from "./ForYouRecommendations";
 import PopularTracksSection from "./PopularTracksSection";
 import SectionHeading from "./SectionHeading";
 import ForYouMixCard, {
@@ -78,6 +83,28 @@ function toPopularItems(tracks: readonly Track[]): PopularItem[] {
   }));
 }
 
+// The feed primes the collection cache for its mixes, exactly as
+// the Home rail does for its own: a mix this page renders can be
+// opened instantly, and the local resolver remains the cold path
+// (fresh start, aged-out entry), never a server call. Composition
+// mirrors the resolver's so a primed open and a cold-resolved open
+// describe the mix identically.
+function primeForYouMixCollections(mixes: ForYouMix[], t: TFunction): void {
+  for (const mix of mixes) {
+    const artists = getDailyMixArtists(undefined, mix.tracks, 4);
+    const collectionData: CollectionPageData = {
+      type: "playlist",
+      title: mixTitle(mix, t),
+      author: artists.length > 0 ? artists.join(", ") : "Daily Mix",
+      description: mixSubtitle(mix, t),
+      coverUrl: mix.tracks[0]?.coverUrl || "",
+      tracks: mix.tracks,
+      isDailyMix: true,
+    };
+    queryCache.set(`collection:playlist:${mix.id}`, collectionData);
+  }
+}
+
 function FeaturedMix({
   mix,
   marginTop,
@@ -86,15 +113,34 @@ function FeaturedMix({
   marginTop: string;
 }) {
   const { t } = useTranslation();
+  const navigate = useStableNavigate();
   const covers = uniqueCoverUrls(mix.tracks);
   const title = mixTitle(mix, t);
   const subtitle = mixSubtitle(mix, t);
+  const clickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const handleClick = useCallback(() => {
+  const handlePlay = useCallback(() => {
     const firstTrack = mix.tracks[0];
     if (!firstTrack) return;
     void playerEngine.playTrack(firstTrack, mix.tracks, title, covers[0]);
   }, [mix, title, covers]);
+
+  // The mix card contract (Note 23): a single click OPENS the mix
+  // so its songs can be seen; a double click plays it.
+  const handleClick = (e: React.MouseEvent) => {
+    if (e.detail >= 2) {
+      if (clickTimerRef.current) {
+        clearTimeout(clickTimerRef.current);
+        clickTimerRef.current = null;
+      }
+      handlePlay();
+      return;
+    }
+    clickTimerRef.current = setTimeout(() => {
+      clickTimerRef.current = null;
+      navigate(`/collection?type=playlist&id=${encodeURIComponent(mix.id)}`);
+    }, 200);
+  };
 
   return (
     <div className={`${marginTop} px-3`}>
@@ -136,6 +182,16 @@ function ForYouFeed({ onRetry }: { onRetry: () => void }) {
     hasAnyData,
     loadFailed,
   } = useForYouFeed();
+  // Server-recommendation rows (catalogue discovery aimed by the
+  // listener's own taste) sit alongside the local feed; the layer
+  // is absent — never an error — when it has nothing honest to add.
+  const { rows: recoRows } = useForYouRecommendations();
+
+  // Every mix rendered here is primed into the collection cache,
+  // so opening one lists its songs immediately (Note 23).
+  useEffect(() => {
+    if (mixes.length > 0) primeForYouMixCollections(mixes, t);
+  }, [mixes, t]);
 
   if (isLoading) {
     return (
@@ -158,6 +214,7 @@ function ForYouFeed({ onRetry }: { onRetry: () => void }) {
   };
   const featuredMargin = takeMargin(featuredMix != null);
   const mixesMargin = takeMargin(remainingMixes.length > 0);
+  const recoMargins = recoRows.map(() => takeMargin(true));
   const becauseMargins = becauseRows.map(() => takeMargin(true));
   const shelfMargins = genreShelves.map(() => takeMargin(true));
   const moodMargins = moodRows.map(() => takeMargin(true));
@@ -178,7 +235,7 @@ function ForYouFeed({ onRetry }: { onRetry: () => void }) {
   return (
     <div className="relative h-full w-full overflow-y-auto overflow-x-hidden bg-transparent pt-(--page-inset-top) pb-(--page-inset-bottom)">
       <div className="relative z-1 grid grid-cols-1 items-start w-full">
-        {loadFailed && (
+        {loadFailed && recoRows.length === 0 && (
           <div className="col-start-1 row-start-1 flex min-h-[60vh] w-full flex-col items-center justify-center gap-[6px] px-[24px] text-center">
             <span className="text-title font-[600] text-text-primary">
               {t("home.load_failed")}
@@ -196,7 +253,7 @@ function ForYouFeed({ onRetry }: { onRetry: () => void }) {
           </div>
         )}
 
-        {!loadFailed && !hasAnyData && (
+        {!loadFailed && !hasAnyData && recoRows.length === 0 && (
           <div className="col-start-1 row-start-1 flex min-h-[60vh] w-full flex-col items-center justify-center gap-[6px] px-[24px] text-center">
             <span className="text-title font-[600] text-text-primary">
               {t("forYou.emptyTitle")}
@@ -214,7 +271,7 @@ function ForYouFeed({ onRetry }: { onRetry: () => void }) {
           </div>
         )}
 
-        {!loadFailed && hasAnyData && (
+        {!loadFailed && (hasAnyData || recoRows.length > 0) && (
           <div className="col-start-1 row-start-1 w-full pb-[16px]">
             <div className="px-3 mb-[16px]">
               <h1 className="m-0 text-[26px] leading-tight font-bold tracking-tight text-text-primary">
@@ -247,6 +304,8 @@ function ForYouFeed({ onRetry }: { onRetry: () => void }) {
                 </ScrollableRow>
               </div>
             )}
+
+            <ForYouRecommendations rows={recoRows} margins={recoMargins} />
 
             {becauseRows.map((row, index) => (
               <PopularTracksSection

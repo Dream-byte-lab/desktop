@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
 import type { Lyric } from "@braccato/parsers";
-import { LyricsCanvasRenderer } from "@/features/lyrics";
+import {
+  LyricsCanvasRenderer,
+  type LyricsDisplayOptions,
+} from "@/features/lyrics";
 import { usePlayerStore } from "../store/playerStore";
 import { playerEngine } from "../engine/playerEngine";
 import { shouldReleaseTopPin, startsPinnedToTop } from "../ui/lyricsTopPin";
@@ -31,8 +34,11 @@ export function useLyricsCanvas(
   refs: LyricsCanvasRefs,
   lyrics: Lyric[],
   fogEnabled: boolean,
+  displayOptions: LyricsDisplayOptions,
 ): LyricsCanvasHandle {
   const rendererRef = useRef<LyricsCanvasRenderer | null>(null);
+  const displayOptionsRef = useRef(displayOptions);
+  displayOptionsRef.current = displayOptions;
   const pinnedRef = useRef(false);
   const [edges, setEdges] = useState<ScrollEdges>({
     atTop: true,
@@ -59,6 +65,7 @@ export function useLyricsCanvas(
       (atTop, atBottom) => setEdges({ atTop, atBottom }),
     );
     rendererRef.current = renderer;
+    renderer.setDisplayOptions(displayOptionsRef.current);
     const { status, positionMs } = usePlayerStore.getState();
     pinnedRef.current = startsPinnedToTop(status, positionMs);
     renderer.setPinnedTop(pinnedRef.current);
@@ -114,6 +121,13 @@ export function useLyricsCanvas(
   useEffect(() => {
     rendererRef.current?.setFogEnabled(fogEnabled);
   }, [fogEnabled]);
+
+  // Display options are pushed as values, not read per frame: the
+  // renderer applies them in its scene (relayout / repaint) at the
+  // moment they change, and its demand-driven loop does the rest.
+  useEffect(() => {
+    rendererRef.current?.setDisplayOptions(displayOptions);
+  }, [displayOptions]);
 
   return { rendererRef, edges, releasePin };
 }

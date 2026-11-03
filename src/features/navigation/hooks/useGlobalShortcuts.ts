@@ -38,6 +38,11 @@ export interface GlobalShortcutsOptions {
   fullscreenOpen: boolean;
   openFullscreen: () => void;
   closeFullscreen: () => void;
+  // Focus mode (Interface Build 6): optional so existing callers
+  // and tests need not know about it; AppFrame always passes them.
+  focusOpen?: boolean;
+  enterFocus?: () => void;
+  exitFocus?: () => void;
   onEscapeFallback?: () => boolean;
 }
 
@@ -69,6 +74,15 @@ export function useGlobalShortcuts(options: GlobalShortcutsOptions): void {
 
       if (code === "Escape" || event.key === "Escape") {
         if (isBlockingOverlayOpen()) return;
+        // Focus mode sits above everything else in the frame, so
+        // its Escape outranks even Search: one gesture returns
+        // everything exactly as it was (the annex's exit rule).
+        if (opts.focusOpen && opts.exitFocus) {
+          event.preventDefault();
+          event.stopPropagation();
+          opts.exitFocus();
+          return;
+        }
         if (opts.searchOpen) {
           event.preventDefault();
           event.stopPropagation();
@@ -115,6 +129,22 @@ export function useGlobalShortcuts(options: GlobalShortcutsOptions): void {
       if (matchesShortcut(event, mainApp.prevTrack)) {
         event.preventDefault();
         void playerEngine.skipPrevious();
+        return;
+      }
+
+      if (matchesShortcut(event, mainApp.toggleFocusMode)) {
+        event.preventDefault();
+        // The doorway in reverse is also a way in from the
+        // keyboard: the binding toggles Focus, under the same
+        // loaded-track condition as the fullscreen doorway.
+        if (opts.focusOpen) {
+          opts.exitFocus?.();
+        } else if (opts.enterFocus) {
+          const { currentTrack, status } = usePlayerStore.getState();
+          if (currentTrack !== null && status !== "idle") {
+            opts.enterFocus();
+          }
+        }
         return;
       }
 

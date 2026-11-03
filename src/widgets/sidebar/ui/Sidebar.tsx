@@ -1,6 +1,7 @@
 import { memo } from "react";
 import { ListCollapseFill, ListExpansionFill } from "@mingcute/react";
 import { SidebarNavItems } from "./SidebarNavItems";
+import { SidebarPinnedPlaylists } from "./SidebarPinnedPlaylists";
 import { SidebarSettingsButton } from "./SidebarSettingsButton";
 import { SidebarAccountStatus } from "./SidebarAccountStatus";
 import { useSidebarStore } from "../model/useSidebarStore";
@@ -34,6 +35,7 @@ function Sidebar({ searchOpen, onSearchToggle }: SidebarProps) {
           searchOpen={searchOpen}
           onSearchToggle={onSearchToggle}
         />
+        <SidebarPinnedPlaylists />
       </nav>
 
       <div

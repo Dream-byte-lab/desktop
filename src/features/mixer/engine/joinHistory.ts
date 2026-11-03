@@ -76,6 +76,58 @@ export interface JoinRecord {
   heardLengthSec: number | null;
   /** When the join was performed, epoch milliseconds. */
   at: number;
+  /**
+   * Blueprint §28's transition evaluation (revamp R6): how well
+   * this performed join actually went, scored after the fact and
+   * judged relative to the personality that authored it. Absent
+   * on records written before R6 and on records whose caller
+   * supplied no performance outcome — absence is neutral, never
+   * a failing grade (see evaluationWeight in selection.ts).
+   */
+  evaluation?: JoinEvaluation;
+}
+
+/**
+ * §28's post-transition scorecard. Every component is 0..1,
+ * higher is better; `overall` is their personality-relative
+ * weighted mean (see evaluatePerformedJoin in brain.ts).
+ */
+export interface JoinEvaluation {
+  /** Did the join land on the musical grid it aimed at? */
+  beatAlignment: number;
+  /** Did the level stay continuous across the join? */
+  loudnessContinuity: number;
+  /** Harmonic + structural compatibility, as performed. */
+  harmonicStructural: number;
+  /** Did the decks execute the plan fully (vs cut short)? */
+  executionReliability: number;
+  /** The weighted mean the feedback loop spends. */
+  overall: number;
+}
+
+/**
+ * Reads a record's §28 evaluation defensively: stored payloads
+ * are never trusted, so a malformed evaluation reads as absent
+ * (neutral) rather than poisoning the feedback loop.
+ */
+export function evaluationOf(record: JoinRecord): JoinEvaluation | undefined {
+  const e = record.evaluation;
+  if (!e || typeof e !== "object") return undefined;
+  const fields = [
+    e.beatAlignment,
+    e.loudnessContinuity,
+    e.harmonicStructural,
+    e.executionReliability,
+    e.overall,
+  ];
+  if (
+    fields.some(
+      (v) => typeof v !== "number" || !Number.isFinite(v) || v < 0 || v > 1,
+    )
+  ) {
+    return undefined;
+  }
+  return e;
 }
 
 /** The stored log never grows past this many records. */

@@ -16,6 +16,7 @@ const pendingWrites = new Map<string, ScreenCacheEntry | null>();
 let dbPromise: Promise<IDBDatabase> | null = null;
 let flushTimer: ReturnType<typeof setTimeout> | null = null;
 let hydration: Promise<void> | null = null;
+let fullHydration: Promise<void> | null = null;
 
 function openDb(): Promise<IDBDatabase> {
   if (typeof indexedDB === "undefined") {
@@ -94,11 +95,25 @@ async function readAll(): Promise<void> {
 }
 
 export function hydrateScreenCache(): Promise<void> {
+  fullHydration ??= readAll().catch(() => undefined);
   hydration ??= Promise.race([
-    readAll().catch(() => undefined),
+    fullHydration,
     new Promise<void>((resolve) => setTimeout(resolve, HYDRATE_TIMEOUT_MS)),
   ]);
   return hydration;
+}
+
+/**
+ * Resolves when the persisted screen cache has actually been read
+ * into memory (or the read has failed) — unlike hydrateScreenCache,
+ * which resolves on a short first-paint race and may settle while
+ * the IndexedDB scan is still running. For readers that must not
+ * mistake "not loaded yet" for "not there" (e.g. the local mix
+ * resolver deciding a mix does not exist).
+ */
+export function whenScreenCacheHydrated(): Promise<void> {
+  void hydrateScreenCache();
+  return fullHydration as Promise<void>;
 }
 
 function scheduleFlush(): void {

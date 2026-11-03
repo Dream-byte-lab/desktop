@@ -128,6 +128,10 @@ function primeMixCollections(mixes: DailyMix[]): void {
       description: mix.description,
       coverUrl: mix.coverUrl || "",
       tracks: mix.tracks,
+      // Matches the cold-resolved shape (localMixResolver), so a
+      // primed open and a resolver open render the mix the same
+      // way (Note 23).
+      isDailyMix: true,
     };
     queryCache.set(`collection:playlist:${mix.id}`, collectionData);
   }

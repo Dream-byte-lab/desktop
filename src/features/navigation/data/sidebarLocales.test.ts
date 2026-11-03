@@ -15,6 +15,8 @@ import en from "@/languages/locales/en.json";
 // - SidebarAccountStatus: signed_in, guest
 // - section ids (SidebarNavItems: t(`common.sidebar.section_${id}`)):
 //   section_discover, section_collection
+// - SidebarPinnedPlaylists (Interface Build 6): section_pinned, via
+//   the same section_${id} lookup on the pinned section descriptor
 const SIDEBAR_KEYS: Record<string, string> = {
   home: "Home",
   for_you: "For You",
@@ -29,6 +31,7 @@ const SIDEBAR_KEYS: Record<string, string> = {
   guest: "Guest",
   section_discover: "Discover",
   section_collection: "Your Collection",
+  section_pinned: "Pinned",
 };
 
 describe("common.sidebar locales (en)", () => {

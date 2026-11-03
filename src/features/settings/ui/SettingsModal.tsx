@@ -220,6 +220,11 @@ const SETTING_ITEMS: { tabId: TabId; titleKey: string; descKey?: string }[] = [
     titleKey: "settings.playback_bar.title",
     descKey: "settings.playback_bar.description",
   },
+  {
+    tabId: "Appearance",
+    titleKey: "settings.accent.title",
+    descKey: "settings.accent.description",
+  },
 
   // Storage
   {

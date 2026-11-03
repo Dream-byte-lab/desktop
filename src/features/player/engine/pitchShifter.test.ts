@@ -555,3 +555,104 @@ describe("audio effects graph idle cost", () => {
     expect(tap.analyser()).toBe(pitchShifter.masterAnalyser());
   });
 });
+
+describe("audio effects graph — the crossfade's secondary leg", () => {
+  let primary: HTMLAudioElement;
+  let secondary: HTMLAudioElement;
+  let controller: PitchShifterController;
+
+  type GraphShape = {
+    sourceNode: FakeNode;
+    secondarySourceNode: FakeNode | null;
+    secondaryAudio: HTMLAudioElement | null;
+    pitchDryGain: FakeNode;
+    pitchWetGain: FakeNode;
+  };
+
+  const graph = () => (controller as unknown as { graph: GraphShape }).graph;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    FakeAudioContext.instances = [];
+    const win = window as any;
+    delete win.__liner_audio_context;
+    delete win.__liner_media_source_node;
+    delete win.__liner_pitch_graph;
+    win.AudioContext = FakeAudioContext;
+    primary = document.createElement("audio");
+    secondary = document.createElement("audio");
+    controller = new PitchShifterController();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    delete (window as any).AudioContext;
+  });
+
+  it("refuses a secondary leg when no graph is attached", () => {
+    expect(controller.attachSecondary(secondary)).toBe(false);
+    expect(controller.isAttached()).toBe(false);
+  });
+
+  it("joins the second element at the same input points as the primary", () => {
+    controller.attach(primary);
+    expect(controller.attachSecondary(secondary)).toBe(true);
+
+    const g = graph();
+    expect(g.secondaryAudio).toBe(secondary);
+    expect(g.secondarySourceNode).not.toBeNull();
+    expect(
+      (g.secondarySourceNode as unknown as { mediaElement: unknown })
+        .mediaElement,
+    ).toBe(secondary);
+    // the same dry input the primary feeds — everything downstream
+    // (reverb, EQ, master funnel, boost) is shared from there
+    expect(g.secondarySourceNode!.outputs.has(g.pitchDryGain)).toBe(true);
+    expect(
+      reachesDestination(FakeAudioContext.instances[0]).has(
+        g.secondarySourceNode as never,
+      ),
+    ).toBe(true);
+    // idempotent: joining again changes nothing
+    expect(controller.attachSecondary(secondary)).toBe(true);
+    expect(graph().secondarySourceNode).toBe(g.secondarySourceNode);
+  });
+
+  it("detach removes the leg from the graph inputs", () => {
+    controller.attach(primary);
+    controller.attachSecondary(secondary);
+    const leg = graph().secondarySourceNode!;
+    controller.detachSecondary();
+    expect(graph().secondarySourceNode).toBeNull();
+    expect(graph().secondaryAudio).toBeNull();
+    expect(leg.outputs.has(graph().pitchDryGain)).toBe(false);
+  });
+
+  it("promotion hands the graph to the incoming element and disconnects the old leg", () => {
+    controller.attach(primary);
+    controller.attachSecondary(secondary);
+    const g = graph();
+    const oldSource = g.sourceNode;
+    const legSource = g.secondarySourceNode!;
+
+    controller.promoteSecondary(secondary);
+    expect(g.sourceNode).toBe(legSource);
+    expect(g.secondarySourceNode).toBeNull();
+    expect(g.secondaryAudio).toBeNull();
+    expect(oldSource.outputs.has(g.pitchDryGain)).toBe(false);
+    // the graph caches moved to the new primary element
+    expect((secondary as any).__liner_pitch_graph).toBe(g);
+    expect((primary as any).__liner_pitch_graph).toBeUndefined();
+  });
+
+  it("the pitch stage's wet path takes both legs while pitch is active", async () => {
+    controller.attach(primary);
+    controller.attachSecondary(secondary);
+    controller.update({ pitchSemitones: 3, isPitchLinked: false });
+    await vi.advanceTimersByTimeAsync(500);
+
+    const g = graph();
+    expect(g.sourceNode.outputs.has(g.pitchWetGain)).toBe(true);
+    expect(g.secondarySourceNode!.outputs.has(g.pitchWetGain)).toBe(true);
+  });
+});

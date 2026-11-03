@@ -83,6 +83,7 @@ vi.mock("@/shared/ui", () => ({
 }));
 vi.mock("@mingcute/react", () => ({
   DownLine: () => <span />,
+  Text2Line: () => <span />,
 }));
 vi.mock("./BetaVisualsWarning", () => ({
   BetaVisualsWarning: () => <div data-testid="beta-warning" />,

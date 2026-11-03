@@ -229,6 +229,155 @@
   --rim: rgba(255, 255, 255, 0.14);
 }
 
+/* Accent families (Interface Build 6; design read, Open Question 2 —
+   RULED: a curated family plus one guarded custom slot). The default
+   accent is the icon sweep above: NO data-accent attribute is set for
+   it, so an untouched install resolves exactly the blocks above. Each
+   family below restates only the accent-role variables (the three
+   sweep stops and the roles that mirror them); --accent-gradient is
+   built from the sweep variables, so it follows on its own. The
+   light values come first, then the dark values under the same three
+   contexts the base theme uses (explicit dark, OS-dark, and the
+   forced-dark islands such as the Now Playing overlay, whose own
+   [data-theme="dark"] block would otherwise reset the stops). The
+   custom slot's guarded values are injected at runtime in this same
+   shape by the accent sync hook (data-accent="custom"). The TS
+   mirror of these stops lives in
+   src/features/settings/lib/accent.ts and is pinned against this
+   file by its tests. */
+
+:root[data-accent="lagoon"] {
+  --sweep-lime: #0891b2;
+  --sweep-spring: #0369a1;
+  --sweep-teal: #1d4ed8;
+  --accent-primary: #0369a1;
+  --accent-secondary: #1d4ed8;
+  --accent-tertiary: #0891b2;
+  --btn-primary-bg: #0369a1;
+}
+:root[data-theme="dark"][data-accent="lagoon"],
+:root.dark[data-accent="lagoon"],
+:root[data-accent="lagoon"] [data-theme="dark"],
+:root[data-accent="lagoon"] .dark {
+  --sweep-lime: #22d3ee;
+  --sweep-spring: #38bdf8;
+  --sweep-teal: #60a5fa;
+  --accent-primary: #38bdf8;
+  --accent-secondary: #60a5fa;
+  --accent-tertiary: #22d3ee;
+  --btn-primary-bg: #38bdf8;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]):not(.light)[data-accent="lagoon"] {
+    --sweep-lime: #22d3ee;
+    --sweep-spring: #38bdf8;
+    --sweep-teal: #60a5fa;
+    --accent-primary: #38bdf8;
+    --accent-secondary: #60a5fa;
+    --accent-tertiary: #22d3ee;
+    --btn-primary-bg: #38bdf8;
+  }
+}
+
+:root[data-accent="violet"] {
+  --sweep-lime: #4f46e5;
+  --sweep-spring: #6d28d9;
+  --sweep-teal: #a21caf;
+  --accent-primary: #6d28d9;
+  --accent-secondary: #a21caf;
+  --accent-tertiary: #4f46e5;
+  --btn-primary-bg: #6d28d9;
+}
+:root[data-theme="dark"][data-accent="violet"],
+:root.dark[data-accent="violet"],
+:root[data-accent="violet"] [data-theme="dark"],
+:root[data-accent="violet"] .dark {
+  --sweep-lime: #818cf8;
+  --sweep-spring: #a78bfa;
+  --sweep-teal: #e879f9;
+  --accent-primary: #a78bfa;
+  --accent-secondary: #e879f9;
+  --accent-tertiary: #818cf8;
+  --btn-primary-bg: #a78bfa;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]):not(.light)[data-accent="violet"] {
+    --sweep-lime: #818cf8;
+    --sweep-spring: #a78bfa;
+    --sweep-teal: #e879f9;
+    --accent-primary: #a78bfa;
+    --accent-secondary: #e879f9;
+    --accent-tertiary: #818cf8;
+    --btn-primary-bg: #a78bfa;
+  }
+}
+
+:root[data-accent="ember"] {
+  --sweep-lime: #d97706;
+  --sweep-spring: #c2410c;
+  --sweep-teal: #b91c1c;
+  --accent-primary: #c2410c;
+  --accent-secondary: #b91c1c;
+  --accent-tertiary: #d97706;
+  --btn-primary-bg: #c2410c;
+}
+:root[data-theme="dark"][data-accent="ember"],
+:root.dark[data-accent="ember"],
+:root[data-accent="ember"] [data-theme="dark"],
+:root[data-accent="ember"] .dark {
+  --sweep-lime: #fcd34d;
+  --sweep-spring: #fb923c;
+  --sweep-teal: #ef4444;
+  --accent-primary: #fb923c;
+  --accent-secondary: #ef4444;
+  --accent-tertiary: #fcd34d;
+  --btn-primary-bg: #fb923c;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]):not(.light)[data-accent="ember"] {
+    --sweep-lime: #fcd34d;
+    --sweep-spring: #fb923c;
+    --sweep-teal: #ef4444;
+    --accent-primary: #fb923c;
+    --accent-secondary: #ef4444;
+    --accent-tertiary: #fcd34d;
+    --btn-primary-bg: #fb923c;
+  }
+}
+
+:root[data-accent="rose"] {
+  --sweep-lime: #db2777;
+  --sweep-spring: #be123c;
+  --sweep-teal: #a21caf;
+  --accent-primary: #be123c;
+  --accent-secondary: #a21caf;
+  --accent-tertiary: #db2777;
+  --btn-primary-bg: #be123c;
+}
+:root[data-theme="dark"][data-accent="rose"],
+:root.dark[data-accent="rose"],
+:root[data-accent="rose"] [data-theme="dark"],
+:root[data-accent="rose"] .dark {
+  --sweep-lime: #f9a8d4;
+  --sweep-spring: #fb7185;
+  --sweep-teal: #d946ef;
+  --accent-primary: #fb7185;
+  --accent-secondary: #d946ef;
+  --accent-tertiary: #f9a8d4;
+  --btn-primary-bg: #fb7185;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]):not(.light)[data-accent="rose"] {
+    --sweep-lime: #f9a8d4;
+    --sweep-spring: #fb7185;
+    --sweep-teal: #d946ef;
+    --accent-primary: #fb7185;
+    --accent-secondary: #d946ef;
+    --accent-tertiary: #f9a8d4;
+    --btn-primary-bg: #fb7185;
+  }
+}
+
 @theme inline {
   --color-bg-canvas: var(--bg-canvas);
   --color-bg-surface: var(--bg-surface);

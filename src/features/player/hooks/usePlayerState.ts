@@ -22,6 +22,8 @@ const EMPTY_STATE: PlayerState = {
   accentVariant: "default",
   pauseOnDeviceChange: true,
   keepPlayingWhenScreenOff: true,
+  songFadeSeconds: 0,
+  crossfadeSeconds: 0,
   autoplaySimilar: true,
   trackDoubleClickBehavior: "play",
   defaultPlaybackContext: "resume",

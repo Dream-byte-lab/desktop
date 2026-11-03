@@ -160,6 +160,37 @@ describe("useGlobalShortcuts", () => {
     expect(openFullscreen).not.toHaveBeenCalled();
   });
 
+  it("Shift+F enters Focus when a track is loaded, and plain F still means fullscreen", () => {
+    playerState.currentTrack = { id: "track-1" };
+    playerState.status = "playing";
+
+    const enterFocus = vi.fn();
+    const openFullscreen = vi.fn();
+    mounted = mount(
+      baseOptions({ focusOpen: false, enterFocus, openFullscreen }),
+    );
+    press("KeyF", { shiftKey: true });
+    expect(enterFocus).toHaveBeenCalledTimes(1);
+    expect(openFullscreen).not.toHaveBeenCalled();
+  });
+
+  it("Shift+F exits Focus when Focus is open (the doorway in reverse)", () => {
+    const exitFocus = vi.fn();
+    mounted = mount(baseOptions({ focusOpen: true, exitFocus }));
+    press("KeyF", { shiftKey: true });
+    expect(exitFocus).toHaveBeenCalledTimes(1);
+  });
+
+  it("Shift+F does nothing when no track is loaded", () => {
+    playerState.currentTrack = null;
+    playerState.status = "idle";
+
+    const enterFocus = vi.fn();
+    mounted = mount(baseOptions({ focusOpen: false, enterFocus }));
+    press("KeyF", { shiftKey: true });
+    expect(enterFocus).not.toHaveBeenCalled();
+  });
+
   it("Q opens the queue panel when closed and closes it when open", () => {
     const openRightPanel = vi.fn();
     mounted = mount(baseOptions({ rightPanelOpen: false, openRightPanel }));
@@ -312,6 +343,30 @@ describe("useGlobalShortcuts", () => {
   });
 
   describe("Escape priority", () => {
+    it("exits Focus before everything else when Focus is open", () => {
+      const exitFocus = vi.fn();
+      const closeSearch = vi.fn();
+      const closeRightPanel = vi.fn();
+      const closeFullscreen = vi.fn();
+      mounted = mount(
+        baseOptions({
+          focusOpen: true,
+          exitFocus,
+          searchOpen: true,
+          closeSearch,
+          rightPanelOpen: true,
+          closeRightPanel,
+          fullscreenOpen: true,
+          closeFullscreen,
+        }),
+      );
+      press("Escape");
+      expect(exitFocus).toHaveBeenCalledTimes(1);
+      expect(closeSearch).not.toHaveBeenCalled();
+      expect(closeRightPanel).not.toHaveBeenCalled();
+      expect(closeFullscreen).not.toHaveBeenCalled();
+    });
+
     it("closes Search first when Search, the right panel and Fullscreen are all open", () => {
       const closeSearch = vi.fn();
       const closeRightPanel = vi.fn();

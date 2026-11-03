@@ -12,6 +12,7 @@ import {
   type EqCustomPreset,
 } from "../engine/equalizer";
 import { clampUserVolume } from "../engine/volume";
+import { clampCrossfadeSeconds } from "../engine/crossfade";
 
 export { debouncedStorage };
 
@@ -65,6 +66,14 @@ export interface SessionState {
   accentVariant: AccentVariant;
   pauseOnDeviceChange: boolean;
   keepPlayingWhenScreenOff: boolean;
+  /** Plain-playback song fade window in seconds; 0 = off. */
+  songFadeSeconds: number;
+  /**
+   * Plain-playback overlapping crossfade window in seconds; 0 = off.
+   * While on, it takes precedence over the song fade at every boundary
+   * (the two never stack). See engine/crossfade.ts.
+   */
+  crossfadeSeconds: number;
   autoplaySimilar: boolean;
   trackDoubleClickBehavior: TrackDoubleClickBehavior;
   defaultPlaybackContext: DefaultPlaybackContext;
@@ -124,6 +133,8 @@ export interface PlayerStore extends PlayerState {
   setAccentVariant: (variant: AccentVariant) => void;
   setPauseOnDeviceChange: (value: boolean) => void;
   setKeepPlayingWhenScreenOff: (value: boolean) => void;
+  setSongFadeSeconds: (value: number) => void;
+  setCrossfadeSeconds: (value: number) => void;
   setAutoplaySimilar: (value: boolean) => void;
   setTrackDoubleClickBehavior: (value: TrackDoubleClickBehavior) => void;
   setDefaultPlaybackContext: (value: DefaultPlaybackContext) => void;
@@ -198,6 +209,8 @@ export const usePlayerStore = create<PlayerStore>()(
       accentVariant: "default",
       pauseOnDeviceChange: true,
       keepPlayingWhenScreenOff: true,
+      songFadeSeconds: 0,
+      crossfadeSeconds: 0,
       autoplaySimilar: true,
       trackDoubleClickBehavior: "play",
       defaultPlaybackContext: "resume",
@@ -247,6 +260,14 @@ export const usePlayerStore = create<PlayerStore>()(
         set({ pauseOnDeviceChange }),
       setKeepPlayingWhenScreenOff: (keepPlayingWhenScreenOff: boolean) =>
         set({ keepPlayingWhenScreenOff }),
+      setSongFadeSeconds: (songFadeSeconds: number) =>
+        set({
+          songFadeSeconds: Number.isFinite(songFadeSeconds)
+            ? Math.min(30, Math.max(0, Math.round(songFadeSeconds)))
+            : 0,
+        }),
+      setCrossfadeSeconds: (crossfadeSeconds: number) =>
+        set({ crossfadeSeconds: clampCrossfadeSeconds(crossfadeSeconds) }),
       setAutoplaySimilar: (autoplaySimilar: boolean) =>
         set({ autoplaySimilar }),
       setTrackDoubleClickBehavior: (
@@ -367,6 +388,18 @@ export const usePlayerStore = create<PlayerStore>()(
           if (typeof state.keepSpeedAcrossTracks !== "boolean") {
             state.keepSpeedAcrossTracks = true;
           }
+          if (
+            typeof state.songFadeSeconds !== "number" ||
+            isNaN(state.songFadeSeconds)
+          ) {
+            state.songFadeSeconds = 0;
+          }
+          if (
+            typeof state.crossfadeSeconds !== "number" ||
+            isNaN(state.crossfadeSeconds)
+          ) {
+            state.crossfadeSeconds = 0;
+          }
           if (typeof state.isReverbEnabled !== "boolean") {
             state.isReverbEnabled = false;
           }
@@ -405,6 +438,8 @@ export const usePlayerStore = create<PlayerStore>()(
         accentVariant: state.accentVariant,
         pauseOnDeviceChange: state.pauseOnDeviceChange,
         keepPlayingWhenScreenOff: state.keepPlayingWhenScreenOff,
+        songFadeSeconds: state.songFadeSeconds,
+        crossfadeSeconds: state.crossfadeSeconds,
         autoplaySimilar: state.autoplaySimilar,
         trackDoubleClickBehavior: state.trackDoubleClickBehavior,
         defaultPlaybackContext: state.defaultPlaybackContext,

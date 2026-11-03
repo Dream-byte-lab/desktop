@@ -3,13 +3,21 @@ import { showToast } from "@/shared/ui/Toast";
 import { labelsForTrack } from "../../genres/trackGenres";
 import { usePlayerStore } from "../../player/store/playerStore";
 import { usePartyStore } from "../store/partyStore";
-import { DjBrain, type BrainDecision } from "./brain";
+import { DjBrain, type BrainDecision, type TrackChoice } from "./brain";
+import { beatsAtTime, timeAtBeat } from "./beatMap";
+import type { ManualDeckMove } from "./candidates";
 import {
   assembleSet,
   candidateFromAnalysis,
   chooseArcShape,
 } from "./curatedSet";
 import { levelGainFor } from "./levelMatch";
+import {
+  buildPlaylistIntel,
+  buyTimeLoopSpan,
+  type PlaylistIntel,
+  type TrackFacts,
+} from "./playlistIntel";
 import type { ResolvedDecisionSettings } from "./personality";
 import type { RaveDecision, RaveRequest, RaveTrackInfo } from "./liveRave";
 import { LiveRaveQueue, type RaveQueueEntry } from "./liveRaveQueue";
@@ -36,6 +44,7 @@ import {
 } from "@/features/greeting/lib/visualizerSource";
 import {
   STAGE_EFFECT_KINDS,
+  type DjControlLevel,
   type StageCrossfaderCurve,
   type StageCurrentMove,
   type StageEffectKind,
@@ -95,6 +104,45 @@ import {
 //   walks past them), the party's lifecycle is supreme (it lives
 //   and dies with this session's running state), and an auth flip
 //   never wipes playback (nothing here reads auth).
+// R6 (playlist-bounded autonomy) adds, inside the same contracts:
+//
+// - the next track is CHOSEN, not merely walked to: at each
+//   landing the brain weighs the known prefix of the remaining
+//   playlist (playlist intelligence, built progressively from
+//   the analysis cache) and may move its pick to the front of
+//   the tail; the horizon machinery then prepares and performs
+//   exactly as before. The set's opener is chosen the same way
+//   when the cache already knows the playlist's head. A
+//   deliberate ordering act — curation, request scheduling — is
+//   the choice for its landing and is never re-rolled;
+// - §3's double validation: a candidate is validated when it is
+//   chosen (it must stand in the active playlist, preparable,
+//   unblocked) and again immediately before the decks are told
+//   to load it (commit, the floor's promotion, the end-of-track
+//   cut) — a track that stopped qualifying in between is evicted
+//   and the choice re-runs, never a dead deck;
+// - §34's resume-inspection: any manual intervention (a seek, a
+//   skip, a stage grab, a pause/resume) flags the session, and
+//   the next tick inspects the ACTUAL deck/queue state — horizon
+//   slots, the standing decision's pair — and repairs or cancels
+//   what no longer matches before anything is planned (§22's
+//   priority/cancellation, spent at the seam where it bites);
+// - the minimum-play floor (Note 19, ruling 1): no autonomous
+//   join may START before the current song's first big section
+//   has played — enforced as an anchor veto in the brain (the
+//   join's overlap may not begin inside the owed length), while
+//   planning and revision run freely ahead of it. The floor
+//   binds the DJ only — every manual transport acts instantly,
+//   as always;
+// - the buy-time loop (Note 19, ruling 2): when a join is not
+//   ready at the track's end (its rendition still rendering, or
+//   the next track still preparing) the current song's tail
+//   loops on its beat grid to buy the preparation its time —
+//   bounded wraps, bounded seconds — before the standing floor
+//   applies, unchanged;
+// - §28's evaluations: every performed join is scored after the
+//   fact and written into join history, where it shapes later
+//   selections (§15's currency, never an exclusion).
 //
 // Positions are tracked as rate segments against the audio clock, so
 // pausing (which freezes the clock) freezes the position for free.
@@ -125,6 +173,36 @@ export const FAILURE_MARK_TTL_MS = 30_000;
 export const FAILURE_BACKOFF_CAP_MS = 300_000;
 /** Fallback plain cuts beyond this count degrade the session, announced. */
 export const PLAIN_CUT_ANNOUNCE_THRESHOLD = 3;
+/**
+ * The buy-time loop's hard bound (Note 19, ruling 2): at most this
+ * many wraps of the current track's tail, and at most this many
+ * bought seconds in total, per track landing — after which the
+ * loop lets go and the standing plain-cut floor applies exactly
+ * as it always has. The loop buys time for preparations already
+ * in flight; it never extends the 45-second preparation deadline
+ * and never loops without a grid-true span to loop on.
+ */
+export const MAX_BUY_TIME_LOOPS = 3;
+export const MAX_BUY_TIME_SEC = 30;
+
+/**
+ * The tempo bias envelope (the DJ stage engine seams): a bias is
+ * a planner-belief correction, and a belief outside every
+ * profile's rendition reach could only author joins no profile
+ * may perform — so the bias clamps to the widest stretch envelope
+ * the engine ships (the adventurous profile's +15% / −9%).
+ */
+export const TEMPO_BIAS_MIN = 0.91;
+export const TEMPO_BIAS_MAX = 1.15;
+
+/**
+ * The manual roll's slice envelope, in beats: recipe validation's
+ * own roll range. A hand-opened roll circulates in the same
+ * network a recipe roll block drives, so it speaks the same
+ * slice language.
+ */
+export const MANUAL_ROLL_MIN_BEATS = 0.25;
+export const MANUAL_ROLL_MAX_BEATS = 2;
 /**
  * How far the position may run past the current track's duration
  * before the tick's watchdog presumes the end-of-track floor is
@@ -307,6 +385,23 @@ export function describeDecisionMove(
   }
 }
 
+/**
+ * §28's loudness continuity between two tracks, as the decks
+ * actually met them: the level-match gains the session applied
+ * to each, compared in decibels. A 12 dB step reads as a total
+ * discontinuity; matched gains read as perfect continuity.
+ */
+export function loudnessContinuityBetween(
+  outgoing: PreparedTrack,
+  incoming: PreparedTrack,
+): number {
+  const gainA = levelGainFor(outgoing.analysis.loudness);
+  const gainB = levelGainFor(incoming.analysis.loudness);
+  if (!(gainA > 0) || !(gainB > 0)) return 0.5;
+  const db = Math.abs(20 * Math.log10(gainB / gainA));
+  return Math.min(1, Math.max(0, 1 - db / 12));
+}
+
 export class DjSession {
   /**
    * The brain this session thinks with: its signal bank is the
@@ -345,6 +440,14 @@ export class DjSession {
   private queueGeneration = 0;
   /** True while the end-of-track plain-cut advance is looking for a playable track. */
   private endAdvanceInFlight = false;
+  /**
+   * Set when the floor's walk discarded itself because the queue
+   * generation moved under it (Note 24): the finally that
+   * releases the floor latch re-runs the floor once against the
+   * rebuilt queue instead of letting the discard be read as
+   * exhaustion.
+   */
+  private floorRetryAfterDiscard = false;
   /**
    * The queue index the Note 21 watchdog has already rescued once:
    * the watchdog fires at most once per track, so a floor it
@@ -403,6 +506,89 @@ export class DjSession {
    */
   private decisionSettingsValue: ResolvedDecisionSettings | null = null;
 
+  // ---- R6 state ----
+
+  /** The playlist-intelligence picture, rebuilt as the cache deepens. */
+  private intelCache: { key: string; intel: PlaylistIntel } | null = null;
+  /**
+   * The landing the per-join track choice was last spent for, as
+   * `${queueGeneration}:${index}`. One choice per landing: a
+   * deliberate ordering act (curation, request scheduling) marks
+   * its own landing spent, and horizon refills never re-roll.
+   */
+  private choiceSpentKey: string | null = null;
+  /** The most recent track choice the brain made, if any. */
+  private lastTrackChoiceValue: TrackChoice | null = null;
+  /**
+   * §34: a manual intervention (seek, skip, stage grab, resume)
+   * sets this; the next tick inspects the actual state and
+   * repairs/cancels stale plans before anything is planned.
+   */
+  private inspectionNeeded = false;
+  /** The buy-time loop's standing state, while it turns. */
+  private buyTime: {
+    startSec: number;
+    wraps: number;
+    boughtSec: number;
+    /** A wrap-bookkeeping timer is currently scheduled for it. */
+    scheduled: boolean;
+  } | null = null;
+  /** The queue index whose buy-time bound is spent for this landing. */
+  private buyTimeExhaustedIndex = -1;
+  /** Total buy-time wraps this session (the honest count). */
+  private buyTimeWrapsTotal = 0;
+
+  // --- The DJ stage engine seams (Interface Build 6's filing) ---
+  /**
+   * The control level (the spec's three, made real). Session
+   * state, deliberately NOT reset by stop(): like the decision
+   * settings it is the host's standing choice about how the decks
+   * are run, and nothing re-hands it at start() — the snapshot
+   * reports it and the stage's switcher writes it. Default
+   * "autonomous": exactly the behaviour every session had before
+   * the seams. The per-level contracts live on setControlLevel.
+   */
+  private controlLevelValue: DjControlLevel = "autonomous";
+  /**
+   * The standing per-deck tempo bias (a ratio; 1 = neutral),
+   * clamped to the engine's widest stretch envelope at set time.
+   * A planner-belief correction: considerJoin and the manual-move
+   * authoring read the pair's analyses with the biased decks'
+   * tempos scaled, so the authored rates honour the bias; the
+   * decks' live rates are never touched by it. Standing across
+   * stop() like the control level — the host's correction stays
+   * until the host resets it.
+   */
+  private tempoBiasByDeck: [number, number] = [1, 1];
+  /**
+   * The manual loop the host armed on the playing deck, while it
+   * turns: the region, its deck, and whether a wrap-bookkeeping
+   * timer is currently scheduled (the buy-time loop's pattern).
+   * Held until released — a host's loop is a hand on the deck,
+   * not a bounded rescue — but any performance (a commit), any
+   * track change, a seek, or a stop ends it: from a blend's start
+   * the executor owns the decks.
+   */
+  private manualLoop: {
+    deckIndex: DeckIndex;
+    startSec: number;
+    endSec: number;
+    beats: number;
+    scheduled: boolean;
+  } | null = null;
+  /**
+   * The manual slip roll open on a deck, while it sounds: its
+   * deck and slice length in beats. Released by the host, by any
+   * performance, by a track change, or by stop — a standing roll
+   * send must never bleed into a track it was not opened on.
+   */
+  private manualRoll: { deckIndex: DeckIndex; beats: number } | null = null;
+  /** True while this session has placed assisted holds at the mixer.
+   *  The session is the mixer's only hold client, so this is exact
+   *  knowledge: no holds placed means a clear would be a no-op, and
+   *  the clear call is skipped rather than made. */
+  private holdsOutstanding = false;
+
   /** Notified whenever the session starts or stops, for UI state. */
   onRunningChange: ((running: boolean) => void) | null = null;
 
@@ -451,6 +637,26 @@ export class DjSession {
     return this.plainCutFallbacks;
   }
 
+  /** Buy-time loop wraps so far this session (Note 19, ruling 2). */
+  get buyTimeLoopCount(): number {
+    return this.buyTimeWrapsTotal;
+  }
+
+  /** The most recent track choice the brain made (R6), if any. */
+  get lastTrackChoice(): TrackChoice | null {
+    return this.lastTrackChoiceValue;
+  }
+
+  /**
+   * The playlist-intelligence picture (R6) as the cache currently
+   * supports it: known facts, pending tracks, energy groups and
+   * transition clusters for the active queue. Rebuilt lazily as
+   * preparation deepens the cache.
+   */
+  get playlistIntel(): PlaylistIntel {
+    return this.currentIntel();
+  }
+
   /**
    * Guarantee 3's public state: the session is degraded when its
    * joins have fallen back to plain cuts beyond the stated
@@ -482,35 +688,64 @@ export class DjSession {
   // mixer's trim stage; they never touch the automation's scheduling.
 
   setCrossfade(position: number): void {
+    this.inspectionNeeded = true;
     this.mixer?.setCrossfade(position);
   }
 
   setDeckTrim(index: DeckIndex, level: number): void {
+    this.inspectionNeeded = true;
     this.mixer?.setDeckTrim(index, level);
   }
 
   setDeckBassCut(index: DeckIndex, cut: boolean): void {
+    this.inspectionNeeded = true;
     this.mixer?.setDeckBassCut(index, cut);
   }
 
   setDeckEq(index: DeckIndex, band: "bass" | "mid" | "high", db: number): void {
+    this.inspectionNeeded = true;
     this.mixer?.setDeckEq(index, band, db);
+    // Assisted: a grab on a shared automated parameter becomes a
+    // HOLD — the executor's next performance skips that band's
+    // automation on this deck, so the hand's value stands.
+    if (this.controlLevelValue === "assisted") {
+      this.mixer?.holdManualParam(index, { kind: "eq", band });
+      this.holdsOutstanding = true;
+    }
   }
 
   setDeckFilter(index: DeckIndex, hz: number): void {
+    this.inspectionNeeded = true;
     this.mixer?.setDeckFilter(index, hz);
+    if (this.controlLevelValue === "assisted") {
+      this.mixer?.holdManualParam(index, { kind: "filter" });
+      this.holdsOutstanding = true;
+    }
   }
 
   setCrossfaderCurve(curve: StageCrossfaderCurve): void {
+    this.inspectionNeeded = true;
     this.mixer?.setCrossfaderCurve(curve);
   }
 
   setFxAssign(kind: StageEffectKind, assign: StageFxAssign): void {
+    this.inspectionNeeded = true;
     this.mixer?.setManualFxAssign(kind, assign);
   }
 
   setFxSendLevel(kind: StageEffectKind, side: "A" | "B", level: number): void {
+    this.inspectionNeeded = true;
     this.mixer?.setManualFxSend(kind, side, level);
+    // Assisted: the send grab holds that deck's send of this
+    // kind. The stage's sides are deck indices in disguise (the
+    // snapshot's own sideForDeck mapping: A = deck 0, B = deck 1).
+    if (this.controlLevelValue === "assisted") {
+      this.mixer?.holdManualParam(side === "A" ? 0 : 1, {
+        kind: "send",
+        effect: kind,
+      });
+      this.holdsOutstanding = true;
+    }
   }
 
   /** The mixer's master analyser for taps, or null when no session runs. */
@@ -519,24 +754,104 @@ export class DjSession {
   }
 
   /**
-   * The stage snapshot (Build 2A contract): the mixer's current
-   * readings assembled read-only — this never mutates session
-   * state. Null when there is no mixer (no session running).
+   * Which physical deck holds the PLAYING track. The mixer flips
+   * its current deck at PERFORM time, so while a join sounds its
+   * current deck is the INCOMING one and the session's playing
+   * deck is the other; outside a join the two agree. Every
+   * per-deck truth below is derived from this, never from the
+   * mixer's raw current alone.
+   */
+  private get playingDeckIndex(): DeckIndex {
+    if (!this.mixer) return 0;
+    return this.activeJoin
+      ? ((1 - this.mixer.currentDeckIndex) as DeckIndex)
+      : this.mixer.currentDeckIndex;
+  }
+
+  /**
+   * The standing incoming (the engine seams' first request): the
+   * track a sounding join is bringing in, and the deck it sounds
+   * on. Null whenever no join is sounding — a PREPARED next track
+   * is not standing anywhere: preparation is in-memory, and the
+   * standby deck holds nothing until a performance loads it.
+   */
+  get standingIncoming(): { track: Track; deckIndex: DeckIndex } | null {
+    if (!this.activeJoin || !this.mixer) return null;
+    return {
+      track: this.activeJoin.incoming.track,
+      deckIndex: (1 - this.playingDeckIndex) as DeckIndex,
+    };
+  }
+
+  /**
+   * One deck's truthful playhead: the playing deck reads the
+   * session's own position integration; the incoming deck of a
+   * sounding join integrates the join's pending segments with
+   * the same math. Any other deck has no playhead — null.
+   */
+  private deckPositionSec(index: DeckIndex): number | null {
+    if (!this.context || !this.current) return null;
+    if (index === this.playingDeckIndex) {
+      return Math.min(
+        Math.max(0, this.positionNow()),
+        this.current.buffer.duration,
+      );
+    }
+    const join = this.activeJoin;
+    if (!join || index !== 1 - this.playingDeckIndex) return null;
+    const now = this.context.currentTime;
+    let segment = join.pendingSegments[0];
+    if (!segment) return null;
+    for (const candidate of join.pendingSegments) {
+      if (candidate.fromCtxTime <= now) segment = candidate;
+    }
+    const position =
+      segment.trackTimeAtStart + (now - segment.fromCtxTime) * segment.rate;
+    return Math.min(Math.max(0, position), join.incoming.buffer.duration);
+  }
+
+  /** One deck's truthful sounding track id, or null when it holds nothing. */
+  private deckTrackId(index: DeckIndex): string | null {
+    if (!this.current) return null;
+    if (index === this.playingDeckIndex) return this.current.track.id;
+    if (this.activeJoin && index === 1 - this.playingDeckIndex) {
+      return this.activeJoin.incoming.track.id;
+    }
+    return null;
+  }
+
+  /**
+   * The stage snapshot (Build 2A contract, extended by the
+   * engine seams): the mixer's current readings assembled
+   * read-only, plus the session's per-deck truth (trackId /
+   * positionSec), the standing tempo biases, the manual loop and
+   * roll state, the control level, and the standby deck's cue
+   * read. This writes no session state; its only side effect is
+   * the lazy tap construction the session-unlock contract
+   * already allows. Null when there is no mixer (no session
+   * running).
    */
   stageSnapshot(): StageSnapshot | null {
     if (!this.mixer) return null;
     const mixer = this.mixer;
+    const deckSnapshot = (index: DeckIndex) => ({
+      ...mixer.stageDeckReadings(index),
+      meter: mixer.deckMeterSummary(index),
+      trackId: this.deckTrackId(index),
+      positionSec: this.deckPositionSec(index),
+      tempoBias: this.tempoBiasByDeck[index],
+      manualLoop:
+        this.manualLoop && this.manualLoop.deckIndex === index
+          ? { startSec: this.manualLoop.startSec, beats: this.manualLoop.beats }
+          : null,
+      manualRollBeats:
+        this.manualRoll && this.manualRoll.deckIndex === index
+          ? this.manualRoll.beats
+          : null,
+    });
+    const cueDeck = (1 - this.playingDeckIndex) as DeckIndex;
     return {
-      decks: [
-        {
-          ...mixer.stageDeckReadings(0),
-          meter: mixer.deckMeterSummary(0),
-        },
-        {
-          ...mixer.stageDeckReadings(1),
-          meter: mixer.deckMeterSummary(1),
-        },
-      ],
+      decks: [deckSnapshot(0), deckSnapshot(1)],
       master: { meter: mixer.masterMeterSummary() },
       effects: STAGE_EFFECT_KINDS.map((kind) => ({
         kind,
@@ -547,7 +862,373 @@ export class DjSession {
         this.activeJoin?.decision ?? this.decision,
       ),
       crossfaderCurve: mixer.crossfaderCurveName(),
+      controlLevel: this.controlLevelValue,
+      cue: { deckIndex: cueDeck, meter: mixer.cueMeterSummary(cueDeck) },
     };
+  }
+
+  /**
+   * The standby deck's cue tap (the engine seams): the pre-fader
+   * analyser on the deck that is NOT playing — the deck a DJ
+   * would cue. Lazy, on the session-unlock pattern: built on
+   * first read, null when no session runs or the tap cannot be
+   * built. A metering tap only — this architecture has one
+   * output route, so no pre-fader LISTEN path exists to expose
+   * (the seam report names that residual).
+   */
+  cueAnalyser(): AnalyserNode | null {
+    if (!this.mixer) return null;
+    return this.mixer.cueAnalyser((1 - this.playingDeckIndex) as DeckIndex);
+  }
+
+  // --- The control levels ---------------------------------------
+  // The spec's three control levels, as behavioural contracts:
+  //
+  // - "autonomous" (the default): exactly the behaviour every
+  //   session had before the seams. The brain authors, revises
+  //   and commits joins; the R6 chooser spends; manual grabs on
+  //   shared parameters are transient writes the next performance
+  //   overwrites (the session-unlock table).
+  // - "assisted": the brain authors and commits as in autonomous,
+  //   BUT a manual grab on a shared automated parameter — an EQ
+  //   band, the filter, or an FX send, per deck — becomes a HOLD:
+  //   the executor skips automation for held parameters, so the
+  //   hand's value stands through performances and plain starts
+  //   until the host moves that control again (the hold stays;
+  //   the new value replaces the old), the level leaves assisted
+  //   (holds release; the values stay in the nodes), or the
+  //   session stops. Trim, bass cut and the crossfader were never
+  //   automated, so they are unchanged at every level.
+  // - "manual": the brain stops authoring — considerJoin never
+  //   runs, no decision is made or committed, the R6 chooser
+  //   never spends and the opener is the host's pressed track.
+  //   Switching INTO manual drops any standing decision (a
+  //   sounding join is already performed and lands as usual).
+  //   Horizon preparation CONTINUES — the host's triggers and
+  //   the floor need prepared tracks — and the end-of-track
+  //   FLOOR stays in every level: plain cut to the prepared
+  //   next, the buy-time loop, the advance. The floor is the
+  //   session's never-go-silent guarantee, not the brain; in
+  //   manual the host's moves (triggers, loops, transport) are
+  //   the performance, and the floor is only the safety net
+  //   under a host who does nothing.
+  //
+  // At every level, Addendum A stands: a manual act is never
+  // silently overridden by the brain's next tick. Holds are how
+  // assisted keeps that promise for grabs; the trigger's
+  // superseding decision and the manual level's silence are how
+  // the others keep it.
+
+  /** The session's control level, as it stands. */
+  get controlLevel(): DjControlLevel {
+    return this.controlLevelValue;
+  }
+
+  /**
+   * Sets the control level. A manual surface: §34 inspection is
+   * flagged, so the next tick plans against the inspected state.
+   * Leaving assisted releases every hold (the values stay in the
+   * nodes; only the protection lifts). Entering manual drops the
+   * standing decision — the brain's unperformed intent does not
+   * follow the host into manual — while a sounding join, already
+   * performed, is untouched and lands as usual.
+   */
+  setControlLevel(level: DjControlLevel): void {
+    this.inspectionNeeded = true;
+    const previous = this.controlLevelValue;
+    this.controlLevelValue = level;
+    if (previous === "assisted" && level !== "assisted") {
+      this.clearHolds();
+    }
+    if (level === "manual" && this.decision) {
+      this.decision = null;
+      this.decisionInputs = null;
+    }
+  }
+
+  /** Releases this session's assisted holds at the mixer — only
+   *  when holds were actually placed (see holdsOutstanding). */
+  private clearHolds(): void {
+    if (!this.holdsOutstanding) return;
+    this.holdsOutstanding = false;
+    this.mixer?.clearManualHolds();
+  }
+
+  // --- The tempo bias --------------------------------------------
+
+  /**
+   * Sets one deck's standing tempo bias: a ratio (1 = neutral)
+   * clamped to the engine's stretch envelope. The planner
+   * honours it in its next decisions — setting it flags §34
+   * inspection AND drops the standing decision's inputs, so the
+   * standing join is re-authored under the biased tempos at the
+   * next consideration (a sounding join is already performed and
+   * is never re-planned). The decks' live rates are not touched:
+   * the bias corrects what the planner BELIEVES about the deck's
+   * tempo, which is what its rate authoring spends.
+   */
+  setDeckTempoBias(index: DeckIndex, ratio: number): void {
+    this.inspectionNeeded = true;
+    const clamped = Math.min(
+      TEMPO_BIAS_MAX,
+      Math.max(TEMPO_BIAS_MIN, Number.isFinite(ratio) ? ratio : 1),
+    );
+    if (clamped === this.tempoBiasByDeck[index]) return;
+    this.tempoBiasByDeck[index] = clamped;
+    // Force the re-plan: the decision inputs' identity check
+    // reads the real analyses, so without this the biased
+    // re-authoring would never trigger.
+    this.decisionInputs = null;
+  }
+
+  /**
+   * The prepared pair as the PLANNER should see it: the track on
+   * a biased deck is handed over with its analysis's tempo
+   * scaled by the deck's bias. The outgoing sits on the playing
+   * deck, the incoming will sit on the standby. At neutral bias
+   * the originals pass through untouched — zero behaviour change,
+   * and the decision-inputs identity in considerJoin keeps
+   * reading the real analyses either way (the clones are rebuilt
+   * per consideration and never stored). The clone is shallow:
+   * sections, drops and the grid are shared, and the audioHash —
+   * the executor's fingerprint — is unchanged, so a biased
+   * decision still validates against the real analyses at the
+   * deck door.
+   */
+  private biasedPair(): {
+    outgoing: PreparedTrack;
+    incoming: PreparedTrack;
+  } | null {
+    if (!this.current || !this.next) return null;
+    const scaleTempo = (
+      prepared: PreparedTrack,
+      bias: number,
+    ): PreparedTrack => {
+      if (bias === 1) return prepared;
+      return {
+        ...prepared,
+        analysis: {
+          ...prepared.analysis,
+          beatMap: {
+            ...prepared.analysis.beatMap,
+            bpm: prepared.analysis.beatMap.bpm * bias,
+          },
+        },
+      };
+    };
+    const playing = this.playingDeckIndex;
+    return {
+      outgoing: scaleTempo(this.current, this.tempoBiasByDeck[playing]),
+      incoming: scaleTempo(
+        this.next,
+        this.tempoBiasByDeck[(1 - playing) as DeckIndex],
+      ),
+    };
+  }
+
+  // --- Manual loop and slip roll ---------------------------------
+
+  /**
+   * Arms a manual loop on the playing deck, by hand: the region
+   * starts where the host says and runs for the given beats on
+   * the track's own grid. Returns false — the loop does not arm —
+   * when the session cannot honestly perform it: no session, the
+   * deck is not the playing deck, a join is sounding (the
+   * executor owns the decks), the buy-time loop owns the deck, a
+   * loop is already turning (release it first), the track is a
+   * playable shell or its timeline is rate-shifted (a rendition's
+   * buffer time is a different timeline than the region's track
+   * time), the grid cannot convert the beats, or the region
+   * would end past the track. With null, releases the standing
+   * manual loop (on whichever deck holds it) and returns true.
+   *
+   * While the loop turns, the session's position bookkeeping
+   * wraps with it — the buy-time loop's own pattern — so no
+   * position the session reports is ever a lie. §34 applies:
+   * the call flags inspection.
+   */
+  setManualLoop(
+    index: DeckIndex,
+    region: { startSec: number; beats: number } | null,
+  ): boolean {
+    this.inspectionNeeded = true;
+    if (region === null) {
+      this.disarmManualLoop();
+      return true;
+    }
+    if (!this.mixer || !this.context || !this.current) return false;
+    if (index !== this.playingDeckIndex) return false;
+    if (this.activeJoin) return false;
+    if (this.buyTime) return false;
+    if (this.manualLoop) return false;
+    if (this.current.mixable === false) return false;
+    if (this.activeRate() !== 1) return false;
+    const beatMap = this.current.analysis.beatMap;
+    if (!(beatMap.bpm > 0) || !(region.beats > 0)) return false;
+    const startBeat = beatsAtTime(beatMap, region.startSec);
+    const endSec = timeAtBeat(beatMap, startBeat + region.beats);
+    if (!Number.isFinite(endSec) || endSec <= region.startSec) return false;
+    if (endSec > this.current.buffer.duration) return false;
+    this.mixer.setDeckLoopRegion(index, region.startSec, endSec);
+    const state = {
+      deckIndex: index,
+      startSec: region.startSec,
+      endSec,
+      beats: region.beats,
+      scheduled: false,
+    };
+    this.manualLoop = state;
+    this.scheduleManualLoopWrap(state);
+    return true;
+  }
+
+  /** Disarms the manual loop (the deck plays on linearly). */
+  private disarmManualLoop(): void {
+    if (!this.manualLoop) return;
+    const deckIndex = this.manualLoop.deckIndex;
+    this.manualLoop = null;
+    this.mixer?.clearDeckLoop(deckIndex);
+  }
+
+  /**
+   * Schedules the bookkeeping for the manual loop's next wrap,
+   * mirroring the buy-time loop's: the wrap moment is derived
+   * from the audio clock through the active segment, so a pause
+   * (which freezes the clock, not the timer) simply reschedules.
+   * A manual loop has no bound: it wraps until released, each
+   * wrap replacing the position segments so the playhead's track
+   * time stays true.
+   */
+  private scheduleManualLoopWrap(state: {
+    deckIndex: DeckIndex;
+    startSec: number;
+    endSec: number;
+    beats: number;
+    scheduled: boolean;
+  }): void {
+    if (!this.context || !this.current) return;
+    state.scheduled = true;
+    const segment = this.activeSegment();
+    const wrapCtxTime = segment
+      ? segment.fromCtxTime +
+        (state.endSec - segment.trackTimeAtStart) / segment.rate
+      : this.context.currentTime;
+    const delaySec = Math.max(0, wrapCtxTime - this.context.currentTime);
+    this.after(delaySec * 1000, () => {
+      state.scheduled = false;
+      if (this.manualLoop !== state || !this.context || !this.current) return;
+      if (this.context.currentTime < wrapCtxTime - 0.05) {
+        // The clock was frozen (a pause) while the timer ran:
+        // the wrap has not happened yet — wait for it properly.
+        this.scheduleManualLoopWrap(state);
+        return;
+      }
+      this.segments = [
+        {
+          fromCtxTime: wrapCtxTime,
+          trackTimeAtStart: state.startSec,
+          rate: segment?.rate ?? 1,
+        },
+      ];
+      this.scheduleManualLoopWrap(state);
+    });
+  }
+
+  /**
+   * Opens (or, with null beats, releases) a manual slip roll on
+   * the playing deck: the captured slice — the host's beats,
+   * clamped to recipe validation's roll range — circulates in
+   * the one roll network while the deck plays on, through the
+   * mixer's manual roll hand. Only the playing deck can roll,
+   * and never under a sounding join; a call that cannot apply is
+   * ignored (the snapshot keeps reporting the truth either way).
+   * Re-opening with a different slice length retunes the standing
+   * roll. §34 applies: the call flags inspection.
+   */
+  setManualRoll(index: DeckIndex, beats: number | null): void {
+    this.inspectionNeeded = true;
+    if (beats === null) {
+      this.releaseManualRoll();
+      return;
+    }
+    if (!this.mixer || !this.current) return;
+    if (index !== this.playingDeckIndex) return;
+    if (this.activeJoin) return;
+    const clamped = Math.min(
+      MANUAL_ROLL_MAX_BEATS,
+      Math.max(MANUAL_ROLL_MIN_BEATS, beats),
+    );
+    const bpm = this.current.analysis.beatMap.bpm;
+    if (!(bpm > 0) || !Number.isFinite(clamped)) return;
+    this.mixer.openDeckRoll(index, (clamped * 60) / bpm);
+    this.manualRoll = { deckIndex: index, beats: clamped };
+  }
+
+  /** Releases the standing manual roll, if any. */
+  private releaseManualRoll(): void {
+    if (!this.manualRoll) return;
+    const deckIndex = this.manualRoll.deckIndex;
+    this.manualRoll = null;
+    this.mixer?.closeDeckRoll(deckIndex);
+  }
+
+  // --- Manual deck moves ------------------------------------------
+
+  /**
+   * Triggers one of the R1 stop moves (brake / vinyl-stop /
+   * spinback) or R2 scratches on the playing deck, by hand. The
+   * move is authored by the brain's manual authors — the same
+   * recipes, the same executor — and committed through the
+   * standing commit path, so §3's deck-door validation, the
+   * rendition discipline, and §28's performed-join record all
+   * apply unchanged. The manual decision REPLACES any standing
+   * decision (§22's priority: the host's deliberate act outranks
+   * the brain's standing intent) and, anchored at the current
+   * position, it is inside considerJoin's imminent-anchor guard
+   * from the moment it stands — the brain's next tick cannot
+   * re-plan over it.
+   *
+   * Returns false — nothing is performed, and any standing
+   * decision is left exactly as it was — when the move cannot be
+   * performed: no session, the deck is not the playing deck, a
+   * join is already sounding, no prepared incoming is standing,
+   * either side is a playable shell, or the author refuses (no
+   * landing to hand to, a spinback without runway, a scratch
+   * window the material refuses).
+   */
+  triggerDeckMove(index: DeckIndex, move: ManualDeckMove): boolean {
+    this.inspectionNeeded = true;
+    if (!this.mixer || !this.context || !this.current || !this.next) {
+      return false;
+    }
+    if (index !== this.playingDeckIndex) return false;
+    if (this.activeJoin) return false;
+    if (this.current.mixable === false || this.next.mixable === false) {
+      return false;
+    }
+    const pair = this.biasedPair();
+    if (!pair) return false;
+    const arcPosition =
+      (this.index + this.nextIndex) / (2 * Math.max(1, this.queue.length - 1));
+    const decision = this.brain.authorManualMove(
+      {
+        outgoing: pair.outgoing,
+        outgoingPositionSec: this.positionNow(),
+        incoming: pair.incoming,
+      },
+      arcPosition,
+      move,
+    );
+    if (!decision) return false;
+    this.decision = decision;
+    this.decisionInputs = {
+      outgoingAnalysis: this.current.analysis as unknown,
+      incomingAnalysis: this.next.analysis as unknown,
+      signalEvents: this.brain.signals.journal().length,
+    };
+    this.noteStretchNeed();
+    this.commitDecision();
+    return true;
   }
 
   async start(queue: Track[], startIndex = 0): Promise<void> {
@@ -573,6 +1254,13 @@ export class DjSession {
     // The brain opens the set: history loaded, signals fresh.
     void this.brain.beginSet();
     this.subscribePartyReactions();
+    // The opener is liveRave's choice too (Addendum A), spent
+    // when the analysis cache already knows the playlist's head
+    // — a repeat visit, a second set. On a first play the cache
+    // is empty, the field is empty, and the walked opener is the
+    // user's pressed track, exactly as before R6.
+    this.applyOpeningChoice(startIndex);
+    if (this.queue !== queue) store.setQueue(this.queue);
 
     // The start walks, like every other door into the session: from
     // the requested position forward to the first track that can
@@ -613,6 +1301,9 @@ export class DjSession {
 
   resume(): void {
     if (!this.context) return;
+    // Autonomous control resumes after a human pause: the next
+    // tick inspects the actual state before planning (§34).
+    this.inspectionNeeded = true;
     void this.context.resume();
     usePlayerStore.getState().setStatus("playing");
   }
@@ -691,6 +1382,9 @@ export class DjSession {
       ...failedTail,
     ];
     this.queueGeneration += 1;
+    // Curation IS this landing's track-ordering act: the per-join
+    // chooser does not re-roll what curation just decided.
+    this.choiceSpentKey = `${this.queueGeneration}:${this.index}`;
     usePlayerStore.getState().setQueue(this.queue);
     this.next = null;
     this.nextIndex = -1;
@@ -828,6 +1522,9 @@ export class DjSession {
         ...unweighed,
       ];
       this.queueGeneration += 1;
+      // The request scheduler's order is this landing's choice:
+      // the per-join chooser does not re-roll it.
+      this.choiceSpentKey = `${this.queueGeneration}:${this.index}`;
       usePlayerStore.getState().setQueue(this.queue);
       this.next = null;
       this.nextIndex = -1;
@@ -841,6 +1538,7 @@ export class DjSession {
   /** Cuts straight to the next track, abandoning any planned blend. */
   skipNext(): void {
     if (!this.mixer || !this.current) return;
+    this.inspectionNeeded = true;
     // A decided-but-uncommitted join is simply dropped. A SOUNDING
     // join is finalised as interrupted by beginTrack below (the
     // room heard part of it; history and signals are told).
@@ -883,6 +1581,7 @@ export class DjSession {
    */
   skipPrevious(): void {
     if (!this.mixer || !this.current) return;
+    this.inspectionNeeded = true;
     if (this.index <= 0 || this.positionNow() > 3) {
       this.restartCurrent();
       return;
@@ -904,6 +1603,7 @@ export class DjSession {
   /** Restarts the current track from the beginning. */
   restartCurrent(): void {
     if (!this.mixer || !this.current) return;
+    this.inspectionNeeded = true;
     // A restart after really hearing the track is a replay; a
     // restart two seconds in is a correction, and is not read as one.
     const viaRepeat = this.positionNow() >= 30;
@@ -920,6 +1620,12 @@ export class DjSession {
    */
   seekTo(positionMs: number): void {
     if (!this.mixer || !this.context || !this.current) return;
+    this.inspectionNeeded = true;
+    this.disarmBuyTimeLoop();
+    // A seek moves the playhead out from under any manual loop
+    // or roll the host had standing on this track: both end.
+    this.disarmManualLoop();
+    this.releaseManualRoll();
     const duration = this.current.buffer.duration;
     const target = Math.min(Math.max(0, positionMs / 1000), duration - 0.1);
     const positionBefore = this.positionNow();
@@ -954,6 +1660,10 @@ export class DjSession {
       this.ticker = null;
     }
     if (this.mixer) {
+      // The assisted level's holds end with the session (their
+      // values stay in the nodes, which are about to be torn
+      // down with the mixer anyway).
+      this.clearHolds();
       this.mixer.stopAll();
       this.mixer = null;
     }
@@ -971,11 +1681,23 @@ export class DjSession {
     this.afterNext = null;
     this.afterNextIndex = -1;
     this.endAdvanceInFlight = false;
+    this.floorRetryAfterDiscard = false;
     this.watchdogRescuedIndex = -1;
     this.segments = [];
     this.decision = null;
     this.decisionInputs = null;
     this.renditionRequest = null;
+    this.intelCache = null;
+    this.choiceSpentKey = null;
+    this.lastTrackChoiceValue = null;
+    this.inspectionNeeded = false;
+    this.buyTime = null;
+    // The manual loop and roll end with the session; the control
+    // level and the tempo biases deliberately stand (see their
+    // field notes — the host's standing choices, not set state).
+    this.manualLoop = null;
+    this.manualRoll = null;
+    this.buyTimeExhaustedIndex = -1;
     this.failures.clear();
     this.deliveredBy.clear();
     this.plainCutFallbacks = 0;
@@ -1036,6 +1758,14 @@ export class DjSession {
     // A sounding join interrupted by this switch is finalised first:
     // the room heard part of it, and it is recorded as such.
     this.finaliseInterruptedJoin();
+    // A landing ends any buy-time loop: the loop belonged to the
+    // track that was ending, and its bound resets with the landing.
+    this.disarmBuyTimeLoop();
+    // A track change likewise ends the host's manual loop and
+    // roll: both belonged to the track that was playing.
+    this.disarmManualLoop();
+    this.releaseManualRoll();
+    this.buyTimeExhaustedIndex = -1;
     if (this.current && this.current.track.id !== prepared.track.id) {
       this.noteOutgoingLeft(false);
     }
@@ -1231,6 +1961,361 @@ export class DjSession {
     this.afterNextIndex = held[1]?.index ?? -1;
   }
 
+  // -------------------------------------------------------------------
+  // R6: playlist intelligence, track choice, double validation,
+  // resume-inspection, and the buy-time loop
+  // -------------------------------------------------------------------
+
+  /**
+   * The playlist-intelligence picture over the active queue,
+   * rebuilt whenever the queue's generation or the cache's known
+   * count moves — the picture deepens as preparation lands, and
+   * a rebuild is the only cost (cheap, synchronous, cache reads).
+   */
+  private currentIntel(): PlaylistIntel {
+    let known = 0;
+    const entries = this.queue.map((track) => {
+      const prepared = preparedTrack(track.id);
+      const ready = prepared && prepared.mixable !== false ? prepared : null;
+      if (ready) known += 1;
+      return {
+        trackId: track.id,
+        prepared: ready,
+        labels: labelsForTrack(track.id),
+      };
+    });
+    const key = `${this.queueGeneration}:${this.queue.length}:${known}`;
+    if (this.intelCache?.key === key) return this.intelCache.intel;
+    const intel = buildPlaylistIntel(entries);
+    this.intelCache = { key, intel };
+    return intel;
+  }
+
+  /**
+   * The known prefix of the queue from `fromIndex`: entries in
+   * standing order whose facts the intelligence layer holds and
+   * which no failure mark currently blocks. The prefix STOPS at
+   * the first unknown or blocked track — the chooser reorders
+   * only territory the DJ has actually mapped, never reaching
+   * past an unmapped track to grab a later one (the standing
+   * order — the user's own playlist order — governs the rest).
+   */
+  private knownField(
+    intel: PlaylistIntel,
+    fromIndex: number,
+  ): { trackId: string; facts: TrackFacts }[] {
+    const field: { trackId: string; facts: TrackFacts }[] = [];
+    for (let i = fromIndex; i < this.queue.length; i += 1) {
+      const track = this.queue[i];
+      if (this.failureBlocked(track.id)) break;
+      const facts = intel.factsById.get(track.id);
+      if (!facts) break;
+      field.push({ trackId: track.id, facts });
+    }
+    return field;
+  }
+
+  /**
+   * The set's opener, chosen (Addendum A) when the cache already
+   * knows the playlist's head: the user's pressed track holds
+   * the incumbency head start, and a band rival may still open
+   * instead. With an empty field (a first play) nothing moves —
+   * the walk opens with the pressed track, as before R6.
+   */
+  private applyOpeningChoice(startIndex: number): void {
+    // The manual control level: the opener is the host's pressed
+    // track — the chooser does not spend in manual.
+    if (this.controlLevelValue === "manual") return;
+    if (this.queue.length - startIndex < 2) return;
+    const intel = this.currentIntel();
+    const field = this.knownField(intel, startIndex);
+    if (field.length < 2) return;
+    const choice = this.brain.chooseNextTrack({
+      current: null,
+      field,
+      arcPosition: 0,
+      curation: this.decisionSettingsValue?.curation,
+    });
+    if (!choice) return;
+    this.lastTrackChoiceValue = choice;
+    if (choice.trackId === field[0].trackId) return;
+    const from = this.queue.findIndex(
+      (track, i) => i > startIndex && track.id === choice.trackId,
+    );
+    if (from < 0) return;
+    const reordered = [...this.queue];
+    const [moved] = reordered.splice(from, 1);
+    reordered.splice(startIndex, 0, moved);
+    this.queue = reordered;
+  }
+
+  /**
+   * The per-join track choice, spent at most once per landing
+   * and only while the horizon's first slot is open: the brain
+   * weighs the known prefix of the remaining tail (playlist
+   * intelligence + the arc's target at the winner's slot + §15
+   * shaping) and its pick moves to the front of the tail, where
+   * the standing horizon machinery prepares and performs it. A
+   * pick that equals the standing next changes nothing. The
+   * hybrid view (Note 19, ruling 3) in one method: set-level
+   * arc steering here, pair-level joins underneath, untouched.
+   */
+  private spendTrackChoiceIfNeeded(): void {
+    // The manual control level: the standing order is the host's
+    // — the chooser does not spend in manual.
+    if (this.controlLevelValue === "manual") return;
+    if (!this.current || !this.mixer) return;
+    if (this.next) return;
+    if (this.joinLocked) return;
+    if (this.endAdvanceInFlight) return;
+    const key = `${this.queueGeneration}:${this.index}`;
+    if (this.choiceSpentKey === key) return;
+    this.choiceSpentKey = key;
+    const intel = this.currentIntel();
+    const field = this.knownField(intel, this.index + 1);
+    if (field.length < 2) return;
+    const currentFacts = intel.factsById.get(this.current.track.id) ?? null;
+    const choice = this.brain.chooseNextTrack({
+      current: currentFacts,
+      field,
+      arcPosition: (this.index + 1) / Math.max(1, this.queue.length - 1),
+      curation: this.decisionSettingsValue?.curation,
+    });
+    if (!choice) return;
+    this.lastTrackChoiceValue = choice;
+    if (choice.trackId === field[0].trackId) return;
+    const from = this.queue.findIndex(
+      (track, i) => i > this.index && track.id === choice.trackId,
+    );
+    if (from < 0) return;
+    const reordered = [...this.queue];
+    const [moved] = reordered.splice(from, 1);
+    reordered.splice(this.index + 1, 0, moved);
+    this.queue = reordered;
+    this.queueGeneration += 1;
+    this.choiceSpentKey = `${this.queueGeneration}:${this.index}`;
+    usePlayerStore.getState().setQueue(this.queue);
+  }
+
+  /**
+   * §3's second validation, run immediately before the decks are
+   * told to load a track: the track must still stand at its slot
+   * in the ACTIVE playlist (not removed, not replaced), must not
+   * have failed preparation since it was chosen, and — for a
+   * blend — must still be mixable. The first validation is the
+   * chooser's field construction (known, unblocked, in-queue);
+   * this is the re-check at the deck door.
+   */
+  private validateBeforeDeckLoad(
+    prepared: PreparedTrack,
+    index: number,
+    options: { requireMixable: boolean },
+  ): boolean {
+    if (this.queue[index]?.id !== prepared.track.id) return false;
+    if (this.failureBlocked(prepared.track.id)) return false;
+    if (options.requireMixable && prepared.mixable === false) return false;
+    return true;
+  }
+
+  /** Drops the horizon's first slot, promoting the second into it. */
+  private evictNextSlot(): void {
+    if (this.afterNext && this.afterNextIndex > this.index) {
+      this.next = this.afterNext;
+      this.nextIndex = this.afterNextIndex;
+    } else {
+      this.next = null;
+      this.nextIndex = -1;
+    }
+    this.afterNext = null;
+    this.afterNextIndex = -1;
+  }
+
+  /**
+   * §34's resume-inspection: after any manual intervention the
+   * session does not plan from what it ASSUMES the decks hold —
+   * it reads the state it can actually verify (the live queue's
+   * contents at the horizon's slots, the standing decision's
+   * pair identity against the held tracks) and repairs what no
+   * longer matches: stale slots are dropped for re-preparation,
+   * and a decision whose pair is no longer the pair on the decks
+   * is CANCELLED, never performed (§22's cancellation, spent
+   * here). Runs at the head of the tick whenever the flag is
+   * set, before any planning or committing.
+   */
+  private inspectStateBeforePlanning(): void {
+    this.inspectionNeeded = false;
+    if (!this.mixer || !this.current) return;
+    let repaired = false;
+    const slotStale = (prepared: PreparedTrack, index: number): boolean =>
+      index <= this.index || this.queue[index]?.id !== prepared.track.id;
+    if (this.next && slotStale(this.next, this.nextIndex)) {
+      this.next = null;
+      this.nextIndex = -1;
+      repaired = true;
+    }
+    if (this.afterNext && slotStale(this.afterNext, this.afterNextIndex)) {
+      this.afterNext = null;
+      this.afterNextIndex = -1;
+      repaired = true;
+    }
+    if (this.next && this.afterNext && this.nextIndex === this.afterNextIndex) {
+      this.afterNext = null;
+      this.afterNextIndex = -1;
+      repaired = true;
+    }
+    if (this.decision) {
+      const incomingHash = this.next?.analysis.audioHash ?? null;
+      if (
+        !this.next ||
+        this.decision.recipe.fingerprints.bAudioHash !== incomingHash
+      ) {
+        this.decision = null;
+        this.decisionInputs = null;
+        repaired = true;
+      }
+    }
+    if (repaired) void this.prepareNext();
+  }
+
+  /** The rate segment the playhead is currently inside. */
+  private activeSegment(): RateSegment | null {
+    if (!this.context || this.segments.length === 0) return null;
+    const now = this.context.currentTime;
+    let segment = this.segments[0];
+    for (const candidate of this.segments) {
+      if (candidate.fromCtxTime <= now) segment = candidate;
+    }
+    return segment;
+  }
+
+  /** The playback rate of the segment the playhead is inside. */
+  private activeRate(): number {
+    return this.activeSegment()?.rate ?? 1;
+  }
+
+  /**
+   * Whether the buy-time loop may turn for the current track:
+   * the track is mixable (a shell's cut needs no bought time),
+   * its timeline runs at rate 1 (a rendition's buffer time is a
+   * different timeline than the analysis's span arithmetic), its
+   * landing's bound is unspent, a tail worth waiting for exists,
+   * and the analysis names a grid-true loop span. A tail counts
+   * as worth waiting for when ANY track remains beyond the
+   * current one: a failure mark is a delay, not a verdict (Note
+   * 24) — the first backoff step is 30 s, inside the loop's own
+   * bought-time bound, so a momentarily blocked track is a
+   * reason to loop and retry, not a reason to stop the set.
+   */
+  private buyTimeEligible(): boolean {
+    if (!this.current || !this.mixer) return false;
+    if (this.buyTime) return true;
+    // The host's manual loop owns the deck's one loop region
+    // while it turns (Addendum A: the hand stands) — the
+    // buy-time loop never arms over it.
+    if (this.manualLoop) return false;
+    if (this.current.mixable === false) return false;
+    if (this.index === this.buyTimeExhaustedIndex) return false;
+    if (this.activeRate() !== 1) return false;
+    if (this.index + 1 >= this.queue.length) return false;
+    return buyTimeLoopSpan(this.current.analysis) !== null;
+  }
+
+  /** Arms the buy-time loop on the current deck; false when it cannot. */
+  private armBuyTimeLoop(): boolean {
+    if (!this.current || !this.mixer) return false;
+    if (this.buyTime) {
+      // Already turning: make sure its wrap bookkeeping is alive.
+      if (!this.buyTime.scheduled) this.scheduleBuyTimeWrap(this.buyTime);
+      return true;
+    }
+    const span = buyTimeLoopSpan(this.current.analysis);
+    if (!span) return false;
+    this.mixer.loopCurrentDeck(span.startSec, span.endSec);
+    const state = {
+      startSec: span.startSec,
+      wraps: 0,
+      boughtSec: 0,
+      scheduled: false,
+    };
+    this.buyTime = state;
+    this.scheduleBuyTimeWrap(state);
+    return true;
+  }
+
+  /** Disarms the buy-time loop (the deck plays on linearly). */
+  private disarmBuyTimeLoop(): void {
+    if (!this.buyTime) return;
+    this.buyTime = null;
+    this.mixer?.clearCurrentDeckLoop();
+  }
+
+  /**
+   * Schedules the bookkeeping for the loop's next wrap: when the
+   * playhead reaches the track's end it wraps to the span start,
+   * and the session's position segments must say so or every
+   * position read afterwards is a lie. The check re-derives the
+   * wrap moment from the audio clock, so a pause (which freezes
+   * the clock, not the timer) simply reschedules the wrap.
+   */
+  private scheduleBuyTimeWrap(state: {
+    startSec: number;
+    wraps: number;
+    boughtSec: number;
+    scheduled: boolean;
+  }): void {
+    if (!this.context || !this.current) return;
+    state.scheduled = true;
+    const duration = this.current.buffer.duration;
+    // The wrap moment, derived from the segment the playhead is
+    // inside — exact, however late the timer itself is noticed.
+    const segment = this.activeSegment();
+    const wrapCtxTime = segment
+      ? segment.fromCtxTime +
+        (duration - segment.trackTimeAtStart) / segment.rate
+      : this.context.currentTime;
+    const delaySec = Math.max(0, wrapCtxTime - this.context.currentTime);
+    this.after(delaySec * 1000, () => {
+      state.scheduled = false;
+      if (this.buyTime !== state || !this.context || !this.current) return;
+      if (this.context.currentTime < wrapCtxTime - 0.05) {
+        // The clock was frozen (a pause) while the timer ran:
+        // the wrap has not happened yet — wait for it properly.
+        this.scheduleBuyTimeWrap(state);
+        return;
+      }
+      // The wrap: position integration restarts at the span start
+      // from the wrap moment, so the playhead's track time stays
+      // true while the deck repeats the tail.
+      this.segments = [
+        {
+          fromCtxTime: wrapCtxTime,
+          trackTimeAtStart: state.startSec,
+          rate: 1,
+        },
+      ];
+      state.wraps += 1;
+      this.buyTimeWrapsTotal += 1;
+      state.boughtSec += duration - state.startSec;
+      if (
+        state.wraps >= MAX_BUY_TIME_LOOPS ||
+        state.boughtSec >= MAX_BUY_TIME_SEC
+      ) {
+        // The bound: the loop lets go NOW, at the wrap, so the
+        // span plays out once linearly and the standing floor
+        // meets the track's real end exactly as it always has.
+        this.buyTimeExhaustedIndex = this.index;
+        this.disarmBuyTimeLoop();
+        return;
+      }
+      // Each wrap re-kicks the horizon: a preparation that was
+      // still in flight — or a failure mark that has since
+      // expired — gets its chance to land the next track and end
+      // the wait early (Note 24).
+      void this.prepareNext();
+      this.scheduleBuyTimeWrap(state);
+    });
+  }
+
   /**
    * Refills the two-track horizon: the walks for both open slots
    * run CONCURRENTLY — each is deadline-bound per candidate (the
@@ -1242,6 +2327,12 @@ export class DjSession {
    * the farther candidate landed, it sits in the first slot.
    */
   private async prepareNext(): Promise<void> {
+    // R6: at a fresh landing with the first slot open, the brain
+    // may choose which known tail track the horizon prepares
+    // first; the choice reorders the tail (bumping the
+    // generation), so it is spent BEFORE this pass captures its
+    // anchors.
+    this.spendTrackChoiceIfNeeded();
     const anchorIndex = this.index;
     const generation = this.queueGeneration;
     for (let pass = 0; pass < 3; pass += 1) {
@@ -1331,23 +2422,47 @@ export class DjSession {
     ) {
       const beyond = this.afterNext;
       const beyondIndex = this.afterNextIndex;
-      try {
-        this.notePlainCutFallback();
-        this.clearTimers();
-        this.mixer.stopAll();
-        this.beginTrack(beyond, beyondIndex);
-        return;
-      } catch {
-        // A promotion that throws part-way must not die inside
-        // the floor (Note 21): fall through to the walk, which
-        // finds its own answer or ends the set honestly.
+      // §3 at the floor's door too: a promoted track that no
+      // longer stands in the playlist (or has since failed) is
+      // dropped, and the walk below finds the floor's own answer.
+      if (
+        !this.validateBeforeDeckLoad(beyond, beyondIndex, {
+          requireMixable: false,
+        })
+      ) {
+        this.afterNext = null;
+        this.afterNextIndex = -1;
+      } else {
+        try {
+          this.notePlainCutFallback();
+          this.clearTimers();
+          this.mixer.stopAll();
+          this.beginTrack(beyond, beyondIndex);
+          return;
+        } catch {
+          // A promotion that throws part-way must not die inside
+          // the floor (Note 21): fall through to the walk, which
+          // finds its own answer or ends the set honestly.
+        }
       }
     }
     this.endAdvanceInFlight = true;
+    const walkGeneration = this.queueGeneration;
     void this.findNextPlayable(anchorIndex + 1)
       .then((found) => {
         if (!this.mixer || !this.current || this.index !== anchorIndex) return;
         if (!found) {
+          // Note 24: the walk DISCARDS itself (returns null)
+          // when the queue generation moved under it — a rebuild
+          // by curation, requests, or the track choice is not
+          // exhaustion. Reading that discard as "nothing left"
+          // stopped sets with playable tracks still listed, so a
+          // discarded walk re-runs the floor once the latch
+          // releases instead of ending the set.
+          if (this.queueGeneration !== walkGeneration) {
+            this.floorRetryAfterDiscard = true;
+            return;
+          }
           usePlayerStore.getState().setStatus("idle");
           showToast(
             "The set ended — nothing playable was left in the queue.",
@@ -1376,6 +2491,18 @@ export class DjSession {
         // fulfilment handler; that single missing path is the
         // prime suspect for the field wedge this note answers.
         this.endAdvanceInFlight = false;
+        // A walk discarded by a mid-walk queue rebuild re-runs
+        // the floor against the rebuilt queue (Note 24) — but
+        // only while this landing still owns the floor.
+        if (
+          this.floorRetryAfterDiscard &&
+          this.mixer &&
+          this.current &&
+          this.index === anchorIndex
+        ) {
+          this.floorRetryAfterDiscard = false;
+          this.advancePastTrackEnd();
+        }
       });
   }
 
@@ -1422,12 +2549,23 @@ export class DjSession {
    * away (the author's minimum lead), stranding a good plan.
    */
   private considerJoin(position: number): void {
+    // The manual control level: the brain does not author. The
+    // host's hands rule the decks; only the floor beneath this
+    // method (the tick's end branch) still stands.
+    if (this.controlLevelValue === "manual") return;
     if (!this.current || !this.next) return;
     // A playable shell (decoded, not analysed) can be played
     // plainly but never blended: no join is considered into or out
     // of one — the pair falls to the counted plain-cut floor at
     // the track end instead (Note 20).
     if (this.current.mixable === false || this.next.mixable === false) return;
+    // The minimum-play floor (Note 19, ruling 1) is NOT gated
+    // here: it is an anchor veto inside the brain's consider()
+    // (no candidate whose overlap starts before the outgoing's
+    // first big section has played is eligible). Planning opens
+    // on the standing window and decisions are authored and
+    // revised freely — the floor binds the moment the DJ moves
+    // on, which is the anchor, not the planning.
     if (this.decision) {
       const anchorMs = this.decision.recipe.overlap.startAMs;
       if (
@@ -1459,11 +2597,16 @@ export class DjSession {
     // only join of a two-track set is a mid-set join).
     const arcPosition =
       (this.index + this.nextIndex) / (2 * Math.max(1, this.queue.length - 1));
+    // The planner reads the pair through the standing tempo
+    // biases (the engine seams): at neutral bias these are the
+    // prepared tracks themselves, untouched.
+    const pair = this.biasedPair();
+    if (!pair) return;
     this.decision = this.brain.consider(
       {
-        outgoing: this.current,
+        outgoing: pair.outgoing,
         outgoingPositionSec: position,
-        incoming: this.next,
+        incoming: pair.incoming,
       },
       arcPosition,
     );
@@ -1548,6 +2691,12 @@ export class DjSession {
       leadInSec === decision.recipe.leadInSec
         ? decision.recipe
         : { ...decision.recipe, leadInSec };
+    // No minimum-play re-gate here (Note 19, ruling 1): the
+    // brain's anchor veto already guarantees the recipe's
+    // overlap starts at or after the floor, and a commit fires
+    // up to the horizon BEFORE its anchor precisely so the
+    // audible overlap begins AT the anchor — re-gating the call
+    // would break ripe commits without protecting anything.
     // A stretch recipe performs against the RENDITION, never the
     // original buffer — the two are different timelines, and a
     // mismatch would start B at the wrong musical point at the
@@ -1569,6 +2718,33 @@ export class DjSession {
       if (!ready) return;
       performBuffer = ready;
     }
+    // §3's second validation, at the deck door: the incoming
+    // must still stand in the active playlist at its slot, still
+    // be unblocked by any failure since, still be mixable. A
+    // track that stopped qualifying after the decision was made
+    // kills the decision — the slot is evicted and a fresh
+    // choice and preparation run; the decks are never told to
+    // load a track the playlist no longer offers.
+    if (
+      !this.validateBeforeDeckLoad(incoming, landedIndex, {
+        requireMixable: true,
+      })
+    ) {
+      this.decision = null;
+      this.decisionInputs = null;
+      this.evictNextSlot();
+      void this.prepareNext();
+      return;
+    }
+    // Performing ends any buy-time loop: the outgoing must play
+    // linearly into the blend the recipe describes.
+    this.disarmBuyTimeLoop();
+    // Performing also ends the host's manual loop and roll: from
+    // the blend's start the executor owns the decks, and a
+    // standing roll send or loop region would fight the recipe's
+    // own choreography (the engine seams).
+    this.disarmManualLoop();
+    this.releaseManualRoll();
     this.decision = null;
     this.decisionInputs = null;
     const commitCtxTime = this.context.currentTime;
@@ -1597,6 +2773,10 @@ export class DjSession {
    */
   private executeTransition(plan: TransitionPlan): void {
     if (!this.mixer || !this.next || !this.context || !this.current) return;
+    // A performance ends the host's manual loop and roll, as in
+    // commitDecision: the executor owns the decks from here.
+    this.disarmManualLoop();
+    this.releaseManualRoll();
     const incoming = this.next;
     const landedIndex = this.nextIndex;
     const recipe = recipeFromPlan(plan, {
@@ -1665,6 +2845,15 @@ export class DjSession {
     if (join.decision) {
       this.brain.recordPerformed(join.decision, {
         heardLengthSec: join.heardLengthSec,
+        // §28: the join completed as authored; its evaluation is
+        // written into history here, loudness read from the pair
+        // the decks actually met.
+        outcome: {
+          interrupted: false,
+          loudnessContinuity: this.current
+            ? loudnessContinuityBetween(this.current, join.incoming)
+            : undefined,
+        },
       });
       this.brain.signals.record({
         kind: "blend-completed",
@@ -1704,6 +2893,15 @@ export class DjSession {
     if (join.decision) {
       this.brain.recordPerformed(join.decision, {
         heardLengthSec: Math.max(0, this.positionNow()),
+        // §28: an interrupted join is still evaluated — its
+        // execution grade says it was cut short, and that grade
+        // is what later selections are shaped by.
+        outcome: {
+          interrupted: true,
+          loudnessContinuity: this.current
+            ? loudnessContinuityBetween(this.current, join.incoming)
+            : undefined,
+        },
       });
       this.brain.signals.record({
         kind: "blend-interrupted",
@@ -1858,6 +3056,11 @@ export class DjSession {
     );
     const remaining = duration - position;
 
+    // §34: a flagged intervention is inspected before anything
+    // else this tick does — planning, committing and the floor
+    // all read the inspected state, never the stale assumption.
+    if (this.inspectionNeeded) this.inspectStateBeforePlanning();
+
     if (remaining <= 0.05) {
       // Guarantee 6: while a blend is sounding, its completion owns
       // the landing — the end branch must not fire underneath it.
@@ -1868,6 +3071,14 @@ export class DjSession {
           // The decision's moment is here: perform it rather than
           // cutting past it.
           this.commitDecision();
+          if (!this.decision) return;
+          // The decision stands but could not be performed — its
+          // pitch-preserved rendition is still rendering. Buy it
+          // time with the loop (Note 19, ruling 2): the playhead
+          // wraps, the same decision window comes round again,
+          // and the commit is retried as the anchor nears. If the
+          // loop cannot turn, the standing retry cadence applies.
+          if (this.buyTimeEligible()) this.armBuyTimeLoop();
           return;
         }
         // Its moment has passed unperformed; do not perform a ghost.
@@ -1897,9 +3108,31 @@ export class DjSession {
         this.notePlainCutFallback();
       }
       if (this.next) {
+        // §3 at the cut's door: a waiting next that no longer
+        // stands in the playlist (or has since failed) is
+        // evicted and re-prepared, never cut to.
+        if (
+          !this.validateBeforeDeckLoad(this.next, this.nextIndex, {
+            requireMixable: false,
+          })
+        ) {
+          this.evictNextSlot();
+          void this.prepareNext();
+          return;
+        }
         // A pair the brain could not join: the floor, announced.
         this.notePlainCutFallback();
         this.skipNext();
+      } else if (this.buyTimeEligible()) {
+        // Nothing mix-ready is waiting, but a tail worth waiting
+        // for is still preparing: loop the current song's tail on
+        // its beat grid to buy that preparation its time (Note
+        // 19, ruling 2) instead of cutting at the end. The
+        // horizon keeps filling while the loop turns; when the
+        // bound is spent, the loop lets go and this branch falls
+        // to the floor below at the real end, exactly as before.
+        this.armBuyTimeLoop();
+        void this.prepareNext();
       } else {
         // No mix-ready track is waiting — but that is a reason to
         // cut plainly to the next playable track, not to end the

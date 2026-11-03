@@ -136,6 +136,11 @@ describe("midBlendFixture", () => {
       highDb: 2,
       filterHz: 20000,
       meter: { peak: 0.8, rms: 0.5 },
+      trackId: "current-song",
+      positionSec: 42.5,
+      tempoBias: 1,
+      manualLoop: null,
+      manualRollBeats: null,
     });
     expect(snapshot.decks[1]).toEqual({
       gainValue: 0.45,
@@ -145,6 +150,11 @@ describe("midBlendFixture", () => {
       highDb: 0,
       filterHz: 1200,
       meter: { peak: 0.6, rms: 0.3 },
+      trackId: "next-song",
+      positionSec: 3.25,
+      tempoBias: 1,
+      manualLoop: null,
+      manualRollBeats: null,
     });
     expect(snapshot.master.meter).toEqual({ peak: 0.85, rms: 0.55 });
     expect(snapshot.currentMove).toEqual({

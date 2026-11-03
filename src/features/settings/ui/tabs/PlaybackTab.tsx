@@ -4,6 +4,7 @@ import { usePlayerStore } from "@/features/player";
 import { useLyricsStore } from "@/features/lyrics";
 import { ToggleSwitch } from "@/shared/ui";
 import { SettingRow, SettingSection, SegmentedControl } from "../controls";
+import { LyricsDisplaySetting } from "./LyricsDisplaySetting";
 
 export function PlaybackTab({ searchQuery }: { searchQuery?: string }) {
   const { t } = useTranslation();
@@ -41,6 +42,14 @@ export function PlaybackTab({ searchQuery }: { searchQuery?: string }) {
   );
   const setKeepPlayingWhenScreenOff = usePlayerStore(
     (state) => state.setKeepPlayingWhenScreenOff,
+  );
+  const songFadeSeconds = usePlayerStore((state) => state.songFadeSeconds);
+  const setSongFadeSeconds = usePlayerStore(
+    (state) => state.setSongFadeSeconds,
+  );
+  const crossfadeSeconds = usePlayerStore((state) => state.crossfadeSeconds);
+  const setCrossfadeSeconds = usePlayerStore(
+    (state) => state.setCrossfadeSeconds,
   );
 
   useEffect(() => {
@@ -138,6 +147,74 @@ export function PlaybackTab({ searchQuery }: { searchQuery?: string }) {
             checked={lrclibFallbackEnabled}
             onChange={setLrclibFallbackEnabled}
           />
+        }
+      />
+
+      <LyricsDisplaySetting searchQuery={searchQuery} />
+
+      <SettingRow
+        title={t("settings.playback.song_fade.title") || "Fade between songs"}
+        description={
+          t("settings.playback.song_fade.description") ||
+          "When one song ends and the next begins, the first fades out and the next fades in over this many seconds instead of switching hard. This is a fade through the change, not an overlapping crossfade — overlapping mixes belong to DJ mode."
+        }
+        titleKey="settings.playback.song_fade.title"
+        descKey="settings.playback.song_fade.description"
+        searchQuery={searchQuery}
+        control={
+          mounted ? (
+            <SegmentedControl
+              ariaLabel={
+                t("settings.playback.song_fade.title") || "Fade between songs"
+              }
+              value={String(songFadeSeconds)}
+              onChange={(value) => setSongFadeSeconds(Number(value))}
+              options={[
+                {
+                  value: "0",
+                  label: t("settings.playback.song_fade.off") || "Off",
+                },
+                { value: "2", label: "2s" },
+                { value: "4", label: "4s" },
+                { value: "6", label: "6s" },
+                { value: "10", label: "10s" },
+              ]}
+            />
+          ) : (
+            <span />
+          )
+        }
+      />
+
+      <SettingRow
+        title={t("settings.playback.crossfade.title") || "Crossfade"}
+        description={
+          t("settings.playback.crossfade.description") ||
+          "Songs overlap: the next song starts playing before the current one ends, fading in while the current song fades out over this many seconds — both songs are heard together during the overlap. If a song is too short, the overlap shrinks to fit: it never takes more than half of either song. While crossfade is on, it replaces the fade between songs at each change; the two never stack."
+        }
+        titleKey="settings.playback.crossfade.title"
+        descKey="settings.playback.crossfade.description"
+        searchQuery={searchQuery}
+        control={
+          mounted ? (
+            <SegmentedControl
+              ariaLabel={t("settings.playback.crossfade.title") || "Crossfade"}
+              value={String(crossfadeSeconds)}
+              onChange={(value) => setCrossfadeSeconds(Number(value))}
+              options={[
+                {
+                  value: "0",
+                  label: t("settings.playback.crossfade.off") || "Off",
+                },
+                { value: "2", label: "2s" },
+                { value: "4", label: "4s" },
+                { value: "6", label: "6s" },
+                { value: "10", label: "10s" },
+              ]}
+            />
+          ) : (
+            <span />
+          )
         }
       />
 

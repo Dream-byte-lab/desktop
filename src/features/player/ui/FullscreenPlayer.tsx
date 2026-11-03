@@ -10,7 +10,9 @@ import { FullscreenFrameGlass } from "./FullscreenFrameGlass";
 import { useLyricsStore, LyricsProviderIsland } from "@/features/lyrics";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { PlayerUiElements } from "./PlayerUiElements";
-import { DownLine } from "@mingcute/react";
+import { DownLine, Text2Line } from "@mingcute/react";
+import { LyricsFullscreenView } from "./LyricsFullscreenView";
+import { lyricsLabel } from "./LyricsAccessibilityPanel";
 import { preloadCoverArt, useCoverSrc } from "@/features/covers";
 import KawarpWrapper from "./KawarpWrapper";
 import AmbientLayer from "./AmbientLayer";
@@ -74,6 +76,7 @@ export function FullscreenPlayer({
   const reduceMotion = useReducedMotion();
   const [queueOpen, setQueueOpen] = useState(false);
   const toggleQueue = useCallback(() => setQueueOpen((open) => !open), []);
+  const [lyricsViewOpen, setLyricsViewOpen] = useState(false);
   const [kawarpShown, setKawarpShown] = useState(false);
   const [kawarpWasEnabled, setKawarpWasEnabled] = useState(kawarpEnabled);
   if (kawarpWasEnabled !== kawarpEnabled) {
@@ -108,6 +111,13 @@ export function FullscreenPlayer({
     lyricsLoading,
     hasLyrics,
   });
+
+  // The full-screen Lyrics view (reference 27) replaces the split
+  // Now Playing surface while it is open; playback, lyrics state
+  // and the sync renderer are shared with it.
+  if (lyricsViewOpen && currentTrack) {
+    return <LyricsFullscreenView onExit={() => setLyricsViewOpen(false)} />;
+  }
 
   return (
     <div
@@ -234,7 +244,7 @@ export function FullscreenPlayer({
         </FullscreenTopNotch>
       </div>
 
-      <div className="absolute top-1.5 left-1.5 z-30">
+      <div className="absolute top-1.5 left-1.5 z-30 flex gap-1.5">
         <Notch align="start" tone="glass" blur={glassBlur}>
           <button
             type="button"
@@ -244,6 +254,21 @@ export function FullscreenPlayer({
             className="inline-flex h-[26px] w-[26px] cursor-pointer items-center justify-center rounded-control border-none bg-transparent text-white/70 transition-colors select-none hover:bg-white/10 hover:text-white active:scale-95"
           >
             <DownLine size={16} />
+          </button>
+        </Notch>
+        <Notch align="start" tone="glass" blur={glassBlur}>
+          <button
+            type="button"
+            aria-label={lyricsLabel(
+              t,
+              "player.lyrics_view.open",
+              "Open lyrics",
+            )}
+            onClick={() => setLyricsViewOpen(true)}
+            data-no-window-drag
+            className="inline-flex h-[26px] w-[26px] cursor-pointer items-center justify-center rounded-control border-none bg-transparent text-white/70 transition-colors select-none hover:bg-white/10 hover:text-white active:scale-95"
+          >
+            <Text2Line size={16} />
           </button>
         </Notch>
       </div>

@@ -438,7 +438,11 @@ describe("Player auto-skip on playback error", () => {
     );
     await playerEngine.playTrack(tracks[0], tracks);
 
-    for (let i = 0; i < 8; i++) {
+    // Note 24 rule change: the auto-skip breaker no longer stops after a
+    // fixed count — it stops once every queued track has failed in a row
+    // (here: the queue exhausts). The intent of this test is unchanged:
+    // consecutive failures must terminate, never skip forever.
+    for (let i = 0; i < 12; i++) {
       const current = usePlayerStore.getState().currentTrack;
       if (!current) break;
       playerRuntime!.onError!({ trackId: current.id, message: "dead track" });

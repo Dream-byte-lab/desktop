@@ -79,7 +79,7 @@
 // and hands each decision its stream.
 
 import type { DecisionProfile, JoinFamily } from "./decisionProfile";
-import type { JoinRecord } from "./joinHistory";
+import { evaluationOf, type JoinRecord } from "./joinHistory";
 import type { ScoredCandidate } from "./scoring";
 
 // ---------------------------------------------------------------------
@@ -333,9 +333,57 @@ export function countRecentFamilyUses(
   );
 }
 
+/**
+ * §28's feedback, spent in §15's currency (revamp R6). A past join
+ * of this family counts toward `recentUses` by how WELL it went:
+ *
+ *   weight = 1 + (0.5 − evaluation.overall), bounded to [0.5, 1.5]
+ *
+ * A join that scored perfectly counts half (success earns relief
+ * from the repetition charge — the move proved itself); a join
+ * that scored zero counts one and a half (the room is steered
+ * away from repeating a move that went badly); a middling join
+ * counts exactly one. Records carrying no evaluation — everything
+ * written before R6, and any caller that supplied no outcome —
+ * count exactly one, so this weighting is invisible until §28
+ * evaluations exist: parity by construction. Shaping only, per
+ * the doctrine: the weight is bounded on both sides, so an
+ * evaluation can lean the lottery but can never exclude a family
+ * or guarantee one.
+ */
+export function evaluationUseWeight(record: JoinRecord): number {
+  const evaluation = evaluationOf(record);
+  if (!evaluation) return 1;
+  return Math.min(1.5, Math.max(0.5, 1 + (0.5 - evaluation.overall)));
+}
+
+/** countRecentFamilyUses, with each use weighed by its §28 outcome. */
+export function countRecentFamilyUsesWeighted(
+  history: readonly JoinRecord[],
+  family: JoinFamily,
+  windowJoins: number,
+): number {
+  const window = windowJoins > 0 ? history.slice(-windowJoins) : [];
+  return window.reduce(
+    (n, record) =>
+      record.family === family ? n + evaluationUseWeight(record) : n,
+    0,
+  );
+}
+
 /** The auditable record of one selection, carried on the decision. */
 export interface SelectionRecord {
-  method: "softmax";
+  /**
+   * How the performed candidate was chosen: "softmax" — sampled
+   * from the near-equal band by the §16 lottery (the brain's own
+   * decisions); "manual" — the host's deliberate trigger on the
+   * stage (the DJ stage engine seams): no draw was made, the band
+   * holds the single authored candidate at probability 1, and the
+   * seed names the standing lottery coordinate WITHOUT consuming
+   * it, so a manual act never shifts the stream the brain's next
+   * own decision draws from.
+   */
+  method: "softmax" | "manual";
   /** The full seed coordinate the decision sampled from. */
   seed: string;
   /** Temperature spent (the profile's band, floored). */
@@ -412,7 +460,11 @@ export function selectFromBand(
   const pool = performed.length > 0 ? performed : band;
   const entries: SoftmaxEntry[] = pool.map((scored) => ({
     score: scored.score,
-    recentUses: countRecentFamilyUses(
+    // §15's input, §28-weighed (R6): a family whose recent joins
+    // went badly counts more heavily here than one whose joins
+    // landed — see countRecentFamilyUsesWeighted. Evaluation-free
+    // histories count exactly as the raw count always did.
+    recentUses: countRecentFamilyUsesWeighted(
       history,
       scored.candidate.family,
       profile.antiRepetition.windowJoins,

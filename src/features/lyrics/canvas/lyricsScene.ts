@@ -4,7 +4,13 @@ import { LYRICS_TYPOGRAPHY, loadLyricsFonts, resolveFamily } from "./fonts";
 import { layoutLines, type LayoutFrame } from "./layoutLines";
 import { createTextMeasure, type TextMeasure } from "./textMeasure";
 import { maxScrollFor } from "./scrollPlan";
-import type { LineLayout, LyricLineModel, LyricsTypography } from "./types";
+import {
+  DEFAULT_LYRICS_DISPLAY_OPTIONS,
+  type LineLayout,
+  type LyricsDisplayOptions,
+  type LyricLineModel,
+  type LyricsTypography,
+} from "./types";
 
 const SIDE_INSET = 24;
 const TOP_INSET = 32;
@@ -18,16 +24,58 @@ export class LyricsScene {
   typography: LyricsTypography = LYRICS_TYPOGRAPHY;
   measure: TextMeasure;
   version = 0;
+  /** Presentation options (reference 27 controls); see types.ts. */
+  display: LyricsDisplayOptions = { ...DEFAULT_LYRICS_DISPLAY_OPTIONS };
+  private lyricsText = "";
 
   constructor(
     private readonly ctx: CanvasRenderingContext2D,
     host: Element,
     private readonly onFontsReady: () => void,
   ) {
-    this.typography = { ...LYRICS_TYPOGRAPHY, family: resolveFamily(host) };
+    this.typography = {
+      ...LYRICS_TYPOGRAPHY,
+      family: resolveFamily(host),
+    };
     this.measure = createTextMeasure(ctx);
     document.fonts?.addEventListener("loadingdone", this.remeasure);
     void loadLyricsFonts(this.typography).then(this.remeasure);
+  }
+
+  /**
+   * Applies the user's display options. A text-scale change rebuilds
+   * the typography and remeasures (the measure cache is keyed by font
+   * string, and the bigger face must be loaded before it is painted);
+   * alignment/highlight changes only relayout. Unchanged options are
+   * a no-op so callers may push state freely.
+   */
+  setDisplayOptions(next: Partial<LyricsDisplayOptions>) {
+    const merged = { ...this.display, ...next };
+    if (
+      merged.align === this.display.align &&
+      merged.highlight === this.display.highlight &&
+      merged.textScale === this.display.textScale
+    ) {
+      return;
+    }
+    const scaleChanged = merged.textScale !== this.display.textScale;
+    this.display = merged;
+    if (!scaleChanged) {
+      this.relayout();
+      this.onFontsReady();
+      return;
+    }
+    const scale = merged.textScale;
+    this.typography = {
+      ...this.typography,
+      size: Math.round(LYRICS_TYPOGRAPHY.size * scale),
+      lineHeight: LYRICS_TYPOGRAPHY.lineHeight * scale,
+      paddingY: LYRICS_TYPOGRAPHY.paddingY * scale,
+    };
+    void loadLyricsFonts(this.typography, this.lyricsText || undefined).then(
+      this.remeasure,
+    );
+    this.remeasure();
   }
 
   private readonly remeasure = () => {
@@ -50,8 +98,8 @@ export class LyricsScene {
     this.lines = model.lines;
     this.shiftMs = model.shiftMs;
     this.relayout();
-    const text = lyrics.map((line) => line.words ?? "").join("\n");
-    void loadLyricsFonts(this.typography, text);
+    this.lyricsText = lyrics.map((line) => line.words ?? "").join("\n");
+    void loadLyricsFonts(this.typography, this.lyricsText);
   }
 
   setSize(width: number, height: number) {
@@ -63,10 +111,24 @@ export class LyricsScene {
 
   relayout() {
     this.version += 1;
-    this.layouts =
-      this.width > 0
-        ? layoutLines(this.lines, this.measure, this.typography, this.frame)
-        : [];
+    if (this.width <= 0) {
+      this.layouts = [];
+      return;
+    }
+    // The user's Text Align choice replaces every line's source
+    // alignment; with no choice (null) lines keep their own.
+    const align = this.display.align;
+    const lines = align
+      ? this.lines.map((line) =>
+          line.align === align ? line : { ...line, align },
+        )
+      : this.lines;
+    this.layouts = layoutLines(
+      lines,
+      this.measure,
+      this.typography,
+      this.frame,
+    );
   }
 
   maxScroll(): number {

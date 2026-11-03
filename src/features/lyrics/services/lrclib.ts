@@ -14,6 +14,11 @@ const SEARCH_DURATION_TOLERANCE_S = 2;
 // LRCLIB asks API clients to identify themselves with this header
 const LRCLIB_CLIENT_HEADER = "Linerave (https://lrclib.net)";
 
+// The exact provider spelling only this fallback produces. The server's
+// own lrclib provider uses lowercase, so the spelling doubles as a
+// provenance marker on persisted candidates.
+const LRCLIB_PROVIDER = "LRCLIB";
+
 export interface LrclibTrackHint {
   title: string;
   artist: string;
@@ -79,18 +84,30 @@ function normalizeForMatch(value: string): string {
     .trim();
 }
 
+// Note 22 / M3: a plain-only fallback result is a miss, not lyrics —
+// plain text can never sync, so serving it would trade the server's
+// honest "no lyrics found" for lyrics that sit static on screen. Fresh
+// records are rejected in recordToCandidate below; this predicate applies
+// the same rule to candidates persisted before the fix, and the engine's
+// cached-serve points consult it before showing one.
+export function isPlainOnlyLrclibFallback(candidate: LyricsCandidate): boolean {
+  return (
+    candidate.provider === LRCLIB_PROVIDER && candidate.syncLevel === "plain"
+  );
+}
+
 function recordToCandidate(record: LrclibRecord): LyricsCandidate | null {
   if (record.instrumental) return null;
 
+  // Note 22 / M3: only a record carrying synced (LRC) lyrics qualifies.
+  // A plain-only record is a miss (see isPlainOnlyLrclibFallback).
   const synced = record.syncedLyrics?.trim() ? record.syncedLyrics : null;
-  const plain = record.plainLyrics?.trim() ? record.plainLyrics : null;
-  if (!synced && !plain) return null;
+  if (!synced) return null;
 
-  const isSynced = Boolean(synced);
   return {
-    provider: "LRCLIB",
-    contentKind: isSynced ? "line_synced" : "plain",
-    syncLevel: isSynced ? "line_level" : "plain",
+    provider: LRCLIB_PROVIDER,
+    contentKind: "line_synced",
+    syncLevel: "line_level",
     quality: {
       // deliberately below typical server candidates (65-95 in fixtures):
       // this is an unverified direct fallback, shown only when the server
@@ -98,13 +115,13 @@ function recordToCandidate(record: LrclibRecord): LyricsCandidate | null {
       total: 50,
       match: 15,
       content: 20,
-      sync: isSynced ? 10 : 0,
+      sync: 10,
       source: 5,
       reasons: ["client-side LRCLIB fallback (lrclib.net)"],
     },
     lyrics: {
-      format: isSynced ? "lrc" : "plain",
-      content: (synced ?? plain) as string,
+      format: "lrc",
+      content: synced,
     },
   };
 }

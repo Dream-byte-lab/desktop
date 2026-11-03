@@ -109,3 +109,21 @@ export const sidebarSections: SidebarSection[] = [
     itemIds: ["library", "favorites", "downloads"],
   },
 ];
+
+/**
+ * The Pinned section (Interface Build 6; the Wave 3 playlist
+ * identity pack's sidebar companion, cut there and assigned to this
+ * stream). It is deliberately NOT part of sidebarSections: its rows
+ * are not navigation items but the user's pinned playlists —
+ * dynamic content owned by the library's identity store
+ * (features/library/lib/playlistIdentity), rendered by
+ * widgets/sidebar's SidebarPinnedPlaylists under the nav sections.
+ * It exists only while at least one pin resolves to a real
+ * playlist; this descriptor keeps the shell's data model naming it,
+ * in the order it renders (after Your Collection).
+ */
+export const pinnedSidebarSection: SidebarSection = {
+  id: "pinned",
+  label: "Pinned",
+  itemIds: [],
+};

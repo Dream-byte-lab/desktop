@@ -627,10 +627,55 @@ export class TwoDeckMixer {
     AnalyserNode | null,
   ] = [null, null];
   private masterAnalyserNode: AnalyserNode | null = null;
+  // The CUE taps (the DJ stage engine seams): one lazy analyser
+  // per deck on the deck's fxGate — the last PRE-FADER stage of
+  // the chain (post EQ, filter and gates; pre fader, pre trim) —
+  // so the stage can meter what the deck sounds like before the
+  // fader, the way a DJ hears a deck in the cans. Same laziness
+  // contract as the deck taps: the constructor creates none, a
+  // tap is built on the first read that asks for it, and a
+  // context that cannot make an analyser leaves the tap unbuilt
+  // and every read answering null. NOTE: this is a metering tap,
+  // not a cue BUS — this architecture has one AudioContext with
+  // one destination, so there is no second output route a
+  // pre-fader LISTEN path could honestly take (the seam report
+  // names that residual).
+  private readonly cueAnalyserNodes: [
+    AnalyserNode | null,
+    AnalyserNode | null,
+  ] = [null, null];
   // The manual FX stage's remembered state, per effect kind. This
   // is STATE ONLY — the sends themselves are written through
   // writeManualFxSend, so the one-writer story stays readable.
   private readonly manualFxStates = new Map<RecipeEffectKind, ManualFxState>();
+  // The ASSISTED control level's holds (the DJ stage engine
+  // seams): per deck, the automated parameters the host's hand
+  // currently owns — EQ bands, the filter, FX sends. While a
+  // parameter is held, the executor skips its automation for it
+  // (performRecipe's curves and effect blocks, playNow's
+  // neutralisations): the host's grab stands until the host moves
+  // the control again, leaves the assisted level, or the session
+  // stops — the session owns that lifecycle and calls
+  // holdManualParam / clearManualHolds; the mixer only keeps the
+  // state and honours it at performance time. Holds are consulted
+  // ONLY at performance time: with no holds set (the standing
+  // state outside the assisted level) every performance is
+  // byte-identical to before.
+  private readonly manualHolds: [
+    {
+      eqBands: Set<"bass" | "mid" | "high">;
+      filter: boolean;
+      sends: Set<RecipeEffectKind>;
+    },
+    {
+      eqBands: Set<"bass" | "mid" | "high">;
+      filter: boolean;
+      sends: Set<RecipeEffectKind>;
+    },
+  ] = [
+    { eqBands: new Set(), filter: false, sends: new Set() },
+    { eqBands: new Set(), filter: false, sends: new Set() },
+  ];
 
   constructor(private readonly context: AudioContext) {
     this.master = context.createGain();
@@ -912,6 +957,20 @@ export class TwoDeckMixer {
     for (const block of blocks) {
       const isA = block.side === "A";
       const deck = isA ? outgoing : incoming;
+      // The assisted level's holds: an effect block whose send
+      // the host's hand holds on that deck does not perform —
+      // the hand owns that send until it lets go. trans has no
+      // send and no manual writer, so it is never held and never
+      // skipped here.
+      if (
+        block.kind !== "trans" &&
+        this.manualParamHeld(deck === this.decks[0] ? 0 : 1, {
+          kind: "send",
+          effect: block.kind,
+        })
+      ) {
+        continue;
+      }
       const rate = isA ? working.overlap.rateA : working.overlap.rateB;
       const bpm = isA ? working.overlap.bpmA : working.overlap.bpmB;
       const overlapStartTrack = isA
@@ -1027,6 +1086,38 @@ export class TwoDeckMixer {
     return this.current as DeckIndex;
   }
 
+  /**
+   * Arms a loop on the CURRENT deck's live source (buffer-time
+   * seconds) — the same deck loop region recipe performances are
+   * armed through, exposed for the session's buy-time loop (R6):
+   * the playing track repeats the region until the loop is
+   * cleared or the deck stops.
+   */
+  loopCurrentDeck(startSec: number, endSec: number): void {
+    this.decks[this.current].setLoopRegion(startSec, endSec);
+  }
+
+  /** Disarms any loop on the current deck's live source. */
+  clearCurrentDeckLoop(): void {
+    this.decks[this.current].clearLoop();
+  }
+
+  /**
+   * Arms a loop region on ONE deck's live source (buffer-time
+   * seconds) — the per-deck form of loopCurrentDeck, for the
+   * session's manual loop (the DJ stage engine seams): the same
+   * deck loop region recipe performances arm, never a second
+   * mechanism.
+   */
+  setDeckLoopRegion(index: DeckIndex, startSec: number, endSec: number): void {
+    this.decks[index].setLoopRegion(startSec, endSec);
+  }
+
+  /** Disarms any loop on one deck's live source. */
+  clearDeckLoop(index: DeckIndex): void {
+    this.decks[index].clearLoop();
+  }
+
   /** Manual crossfader, -1 (deck 1 only) .. 1 (deck 2 only). */
   setCrossfade(position: number): void {
     this.crossfadePosition = Math.min(1, Math.max(-1, position));
@@ -1105,6 +1196,24 @@ export class TwoDeckMixer {
     return node;
   }
 
+  /**
+   * The deck's CUE tap (the DJ stage engine seams): a lazy
+   * analyser on the deck's fxGate — the last pre-fader stage —
+   * built on first call and cached; null when the context cannot
+   * make one. Metering only: it hears the deck before the fader,
+   * it does not route it anywhere (see the field note on the cue
+   * bus residual).
+   */
+  cueAnalyser(index: DeckIndex): AnalyserNode | null {
+    const cached = this.cueAnalyserNodes[index];
+    if (cached) return cached;
+    const node = this.createAnalyserTap();
+    if (!node) return null;
+    this.decks[index].fxGate.connect(node);
+    this.cueAnalyserNodes[index] = node;
+    return node;
+  }
+
   /** The master analyser tap, built on first call; null when the context cannot make one. */
   masterAnalyser(): AnalyserNode | null {
     if (this.masterAnalyserNode) return this.masterAnalyserNode;
@@ -1134,6 +1243,15 @@ export class TwoDeckMixer {
    */
   deckMeterSummary(index: DeckIndex): { peak: number; rms: number } | null {
     const tap = this.deckAnalyser(index);
+    return tap ? this.meterSummary(tap) : null;
+  }
+
+  /**
+   * The deck's pre-fader peak/RMS summary, from the cue tap, at
+   * call time. Null when no tap can be built.
+   */
+  cueMeterSummary(index: DeckIndex): { peak: number; rms: number } | null {
+    const tap = this.cueAnalyser(index);
     return tap ? this.meterSummary(tap) : null;
   }
 
@@ -1377,6 +1495,107 @@ export class TwoDeckMixer {
     }
   }
 
+  // --- The assisted level's holds, and the manual roll ---------
+  // (The DJ stage engine seams. Holds are policy state the
+  // session drives; the manual roll is the stage's hand on the
+  // ONE roll network, through the same send the recipe blocks
+  // write — never a second audio path.)
+
+  /** The send level a manual roll opens at — the roll block's own level in the R3 authors. */
+  static readonly MANUAL_ROLL_LEVEL = 0.8;
+  /** The feedback a manual roll circulates at — the roll block's own feedback in the R3 authors. */
+  static readonly MANUAL_ROLL_FEEDBACK = 0.94;
+
+  /**
+   * Marks one automated parameter on one deck as HELD by the
+   * host's hand (the assisted control level): the executor will
+   * skip its automation for this parameter until the holds are
+   * cleared. Re-grabbing a held parameter simply keeps the hold —
+   * the hold is on the parameter, not on a value; the value the
+   * hand last wrote stands in the node.
+   */
+  holdManualParam(
+    index: DeckIndex,
+    target:
+      | { kind: "eq"; band: "bass" | "mid" | "high" }
+      | { kind: "filter" }
+      | { kind: "send"; effect: RecipeEffectKind },
+  ): void {
+    const holds = this.manualHolds[index];
+    if (target.kind === "eq") holds.eqBands.add(target.band);
+    else if (target.kind === "filter") holds.filter = true;
+    else holds.sends.add(target.effect);
+  }
+
+  /** Releases every hold on both decks. Values stay where the hands left them. */
+  clearManualHolds(): void {
+    for (const holds of this.manualHolds) {
+      holds.eqBands.clear();
+      holds.filter = false;
+      holds.sends.clear();
+    }
+  }
+
+  /** Whether one parameter on one deck is currently held. */
+  manualParamHeld(
+    index: DeckIndex,
+    target:
+      | { kind: "eq"; band: "bass" | "mid" | "high" }
+      | { kind: "filter" }
+      | { kind: "send"; effect: RecipeEffectKind },
+  ): boolean {
+    const holds = this.manualHolds[index];
+    if (target.kind === "eq") return holds.eqBands.has(target.band);
+    if (target.kind === "filter") return holds.filter;
+    return holds.sends.has(target.effect);
+  }
+
+  /**
+   * Opens a manual slip roll on one deck: the deck's roll send
+   * opens into the ONE roll network, tuned to the host's slice —
+   * the recipe roll block's own choreography, held open by hand
+   * instead of for one block window. The deck itself never
+   * loops: the captured slice circulates in the feedback delay
+   * while the track plays on (a true slip roll). The wet return
+   * is pinned at unity BEFORE the send opens, the manual stage's
+   * no-click rule. A context that cannot build the network
+   * leaves the send closed — the roll simply does not sound.
+   */
+  openDeckRoll(index: DeckIndex, sliceSec: number): void {
+    const deck = this.decks[index];
+    let net: RollNetwork | null = null;
+    try {
+      net = this.ensureRoll();
+    } catch {
+      net = null;
+    }
+    if (!net) return;
+    const now = this.context.currentTime;
+    net.delay.delayTime.setValueAtTime(Math.max(0.01, sliceSec), now);
+    net.feedback.gain.setValueAtTime(TwoDeckMixer.MANUAL_ROLL_FEEDBACK, now);
+    net.wet.gain.setValueAtTime(1, now);
+    deck.rollSend.gain.setValueAtTime(TwoDeckMixer.MANUAL_ROLL_LEVEL, now);
+  }
+
+  /**
+   * Releases one deck's manual roll: the send closes at once (the
+   * capture ends) and the network's feedback and wet ramp home
+   * over a short tail, exactly as a recipe roll block's window
+   * ends — the ringing slice dies inside the gesture, never into
+   * whatever plays next.
+   */
+  closeDeckRoll(index: DeckIndex): void {
+    const deck = this.decks[index];
+    const now = this.context.currentTime;
+    deck.rollSend.gain.setValueAtTime(0, now);
+    const net = this.rollNet;
+    if (!net) return;
+    net.feedback.gain.setValueAtTime(net.feedback.gain.value, now);
+    net.feedback.gain.linearRampToValueAtTime(0, now + 0.3);
+    net.wet.gain.setValueAtTime(net.wet.gain.value, now);
+    net.wet.gain.linearRampToValueAtTime(0, now + 0.35);
+  }
+
   private applyManualStage(): void {
     const [a, b] = crossfadeGains(this.crossfadePosition, this.crossfaderCurve);
     const levels: [number, number] = [
@@ -1411,24 +1630,58 @@ export class TwoDeckMixer {
     deck.load(buffer);
     deck.setLevel(levelGain);
     const now = this.context.currentTime;
+    // The assisted level's holds: a parameter the host's hand
+    // holds on this deck is NOT neutralised — the hand's value
+    // stands into the plain start, exactly as a physical knob
+    // would. With no holds, every neutralisation below runs
+    // exactly as before.
+    const deckIndex = this.current as DeckIndex;
+    const held = (
+      target:
+        | { kind: "eq"; band: "bass" | "mid" | "high" }
+        | { kind: "filter" }
+        | { kind: "send"; effect: RecipeEffectKind },
+    ): boolean => this.manualParamHeld(deckIndex, target);
     deck.gain.gain.setValueAtTime(1, now);
-    deck.bass.gain.setValueAtTime(BASS_FLAT_DB, now);
+    if (!held({ kind: "eq", band: "bass" })) {
+      deck.bass.gain.setValueAtTime(BASS_FLAT_DB, now);
+    }
     // Neutralise anything a previous recipe left on this deck, so a
     // plain start is plain: flat mid/high, open filter, no echo send,
     // no loop.
-    deck.mid.gain.setValueAtTime(BASS_FLAT_DB, now);
-    deck.high.gain.setValueAtTime(BASS_FLAT_DB, now);
-    deck.filter.frequency.setValueAtTime(20_000, now);
+    if (!held({ kind: "eq", band: "mid" })) {
+      deck.mid.gain.setValueAtTime(BASS_FLAT_DB, now);
+    }
+    if (!held({ kind: "eq", band: "high" })) {
+      deck.high.gain.setValueAtTime(BASS_FLAT_DB, now);
+    }
+    if (!held({ kind: "filter" })) {
+      deck.filter.frequency.setValueAtTime(20_000, now);
+    }
     deck.echoSend.gain.setValueAtTime(0, now);
     deck.scratchGate.gain.setValueAtTime(1, now);
     deck.fxGate.gain.setValueAtTime(1, now);
-    deck.reverbSend.gain.setValueAtTime(0, now);
-    deck.delaySend.gain.setValueAtTime(0, now);
-    deck.flangerSend.gain.setValueAtTime(0, now);
-    deck.phaserSend.gain.setValueAtTime(0, now);
-    deck.distortionSend.gain.setValueAtTime(0, now);
-    deck.spiralSend.gain.setValueAtTime(0, now);
-    deck.rollSend.gain.setValueAtTime(0, now);
+    if (!held({ kind: "send", effect: "reverb" })) {
+      deck.reverbSend.gain.setValueAtTime(0, now);
+    }
+    if (!held({ kind: "send", effect: "delay" })) {
+      deck.delaySend.gain.setValueAtTime(0, now);
+    }
+    if (!held({ kind: "send", effect: "flanger" })) {
+      deck.flangerSend.gain.setValueAtTime(0, now);
+    }
+    if (!held({ kind: "send", effect: "phaser" })) {
+      deck.phaserSend.gain.setValueAtTime(0, now);
+    }
+    if (!held({ kind: "send", effect: "distortion" })) {
+      deck.distortionSend.gain.setValueAtTime(0, now);
+    }
+    if (!held({ kind: "send", effect: "spiral" })) {
+      deck.spiralSend.gain.setValueAtTime(0, now);
+    }
+    if (!held({ kind: "send", effect: "roll" })) {
+      deck.rollSend.gain.setValueAtTime(0, now);
+    }
     if (this.cascadeGain) {
       this.cascadeGain.gain.setValueAtTime(0, now);
     }
@@ -1756,15 +2009,39 @@ export class TwoDeckMixer {
         blendStart,
       );
     }
-    scheduleEvents(incoming.bass.gain, a.eqIn.low, blendStart);
-    scheduleEvents(incoming.mid.gain, a.eqIn.mid, blendStart);
-    scheduleEvents(incoming.high.gain, a.eqIn.high, blendStart);
-    scheduleEvents(incoming.filter.frequency, a.filterIn, blendStart);
+    // The assisted level's holds: a held band or filter on a
+    // deck is not automated by this performance — the curve for
+    // it is simply not scheduled, so the value the host's hand
+    // left in the node stands through the join. With no holds
+    // (every other level, and assisted before any grab) every
+    // curve schedules exactly as before.
+    const outgoingIndex = this.current as DeckIndex;
+    const incomingIndex = (1 - this.current) as DeckIndex;
+    if (!this.manualParamHeld(incomingIndex, { kind: "eq", band: "bass" })) {
+      scheduleEvents(incoming.bass.gain, a.eqIn.low, blendStart);
+    }
+    if (!this.manualParamHeld(incomingIndex, { kind: "eq", band: "mid" })) {
+      scheduleEvents(incoming.mid.gain, a.eqIn.mid, blendStart);
+    }
+    if (!this.manualParamHeld(incomingIndex, { kind: "eq", band: "high" })) {
+      scheduleEvents(incoming.high.gain, a.eqIn.high, blendStart);
+    }
+    if (!this.manualParamHeld(incomingIndex, { kind: "filter" })) {
+      scheduleEvents(incoming.filter.frequency, a.filterIn, blendStart);
+    }
     scheduleEvents(incoming.echoSend.gain, a.echoSendIn, blendStart);
-    scheduleEvents(outgoing.bass.gain, a.eqOut.low, blendStart);
-    scheduleEvents(outgoing.mid.gain, a.eqOut.mid, blendStart);
-    scheduleEvents(outgoing.high.gain, a.eqOut.high, blendStart);
-    scheduleEvents(outgoing.filter.frequency, a.filterOut, blendStart);
+    if (!this.manualParamHeld(outgoingIndex, { kind: "eq", band: "bass" })) {
+      scheduleEvents(outgoing.bass.gain, a.eqOut.low, blendStart);
+    }
+    if (!this.manualParamHeld(outgoingIndex, { kind: "eq", band: "mid" })) {
+      scheduleEvents(outgoing.mid.gain, a.eqOut.mid, blendStart);
+    }
+    if (!this.manualParamHeld(outgoingIndex, { kind: "eq", band: "high" })) {
+      scheduleEvents(outgoing.high.gain, a.eqOut.high, blendStart);
+    }
+    if (!this.manualParamHeld(outgoingIndex, { kind: "filter" })) {
+      scheduleEvents(outgoing.filter.frequency, a.filterOut, blendStart);
+    }
     scheduleEvents(outgoing.echoSend.gain, a.echoSendOut, blendStart);
     const rate = incoming.rateControl;
     if (rate) {

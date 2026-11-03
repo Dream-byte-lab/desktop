@@ -14,7 +14,7 @@ import {
 
 const GRAIN_PERIOD = 0.038;
 const NUM_TAPS = 4;
-const GRAPH_VERSION = 3;
+const GRAPH_VERSION = 4;
 const BRANCH_TEARDOWN_MS = 200;
 const IDLE_SUSPEND_MS = 400;
 const REVERB_TAIL_SUSPEND_MS = 3000;
@@ -222,6 +222,12 @@ interface AudioEffectsGraph {
   version: number;
   ctx: AudioContext;
   sourceNode: MediaElementAudioSourceNode;
+  // The crossfade's second leg: a second element's source node feeding
+  // the same input points as sourceNode (dry + pitch-wet), so during an
+  // overlap both elements pass through pitch / reverb / EQ / boost
+  // identically. Null whenever no crossfade standby is attached.
+  secondarySourceNode: MediaElementAudioSourceNode | null;
+  secondaryAudio: HTMLAudioElement | null;
   pitchDryGain: GainNode;
   pitchWetGain: GainNode;
   pitchStageOutput: GainNode;
@@ -287,6 +293,9 @@ function setPitchStage(
     if (!graph.shifter) {
       const shifter = new HannPitchShifter(graph.ctx);
       graph.sourceNode.connect(graph.pitchWetGain);
+      if (graph.secondarySourceNode) {
+        graph.secondarySourceNode.connect(graph.pitchWetGain);
+      }
       graph.pitchWetGain.connect(shifter.input);
       shifter.output.connect(graph.pitchStageOutput);
       graph.shifter = shifter;
@@ -308,6 +317,9 @@ function setPitchStage(
     graph.shifter = null;
     shifter.dispose();
     graph.sourceNode.disconnect(graph.pitchWetGain);
+    if (graph.secondarySourceNode) {
+      graph.secondarySourceNode.disconnect(graph.pitchWetGain);
+    }
     graph.pitchWetGain.disconnect();
   });
 }
@@ -416,6 +428,7 @@ function disposeStaleGraph(graph: any): void {
     graph.shifter?.dispose?.();
     graph.shifter?.output?.disconnect();
     graph.sourceNode?.disconnect();
+    graph.secondarySourceNode?.disconnect();
     graph.dryGain?.disconnect();
     graph.wetGain?.disconnect();
     graph.outputGain?.disconnect();
@@ -524,6 +537,8 @@ function buildGraph(
     version: GRAPH_VERSION,
     ctx,
     sourceNode,
+    secondarySourceNode: null,
+    secondaryAudio: null,
     pitchDryGain,
     pitchWetGain,
     pitchStageOutput,
@@ -613,6 +628,7 @@ export class PitchShifterController {
           g &&
           g.version === GRAPH_VERSION &&
           g.sourceNode === sourceNode &&
+          g.secondarySourceNode !== undefined &&
           g.convolver &&
           g.reverbWetGain &&
           g.reverbSendGain &&
@@ -673,6 +689,121 @@ export class PitchShifterController {
 
   public isAttached(): boolean {
     return this.isConnected;
+  }
+
+  /**
+   * Source-node resolution for a NON-primary element, mirroring
+   * attach()'s lookup (per-element cache, then the window stash when it
+   * belongs to this element, then creation). Unlike attach() it never
+   * writes the window stash — that slot names the primary's node.
+   */
+  private resolveElementSourceNode(
+    audio: HTMLAudioElement,
+  ): MediaElementAudioSourceNode | null {
+    if (!this.context) return null;
+    const win = typeof window !== "undefined" ? (window as any) : null;
+    const audioObj = audio as any;
+    let sourceNode = audioObj.__liner_source_node as
+      MediaElementAudioSourceNode | undefined;
+    if (!sourceNode) {
+      if (
+        win?.__liner_media_source_node &&
+        win.__liner_media_source_node.mediaElement === audio
+      ) {
+        sourceNode = win.__liner_media_source_node;
+        audioObj.__liner_source_node = sourceNode;
+      } else {
+        try {
+          sourceNode = this.context.createMediaElementSource(audio);
+          audioObj.__liner_source_node = sourceNode;
+        } catch {
+          return null;
+        }
+      }
+    }
+    return sourceNode ?? null;
+  }
+
+  /**
+   * Joins a second element into the running graph as the crossfade's
+   * incoming leg: its source feeds the same input points as the
+   * primary's (pitch dry always, pitch wet while the pitch stage
+   * exists), so everything downstream — reverb, EQ, master funnel,
+   * boost, the greeting's analyser tap — treats both legs identically.
+   * No-ops (false) when no graph is attached: with no effects or boost
+   * in play there is nothing to be at parity with, and the overlap is
+   * carried by the elements' own volume ramps.
+   */
+  public attachSecondary(audio: HTMLAudioElement): boolean {
+    if (!this.isConnected || !this.graph || !this.context) return false;
+    try {
+      const sourceNode = this.resolveElementSourceNode(audio);
+      if (!sourceNode) return false;
+      const graph = this.graph;
+      if (graph.secondarySourceNode === sourceNode) {
+        graph.secondaryAudio = audio;
+        return true;
+      }
+      this.detachSecondary();
+      sourceNode.connect(graph.pitchDryGain);
+      if (graph.shifter) sourceNode.connect(graph.pitchWetGain);
+      graph.secondarySourceNode = sourceNode;
+      graph.secondaryAudio = audio;
+      return true;
+    } catch (err) {
+      console.error("[AudioEffects] Failed to attach secondary:", err);
+      return false;
+    }
+  }
+
+  /** Removes the secondary leg (the standby was released unpromoted). */
+  public detachSecondary(): void {
+    const graph = this.graph;
+    if (!graph || !graph.secondarySourceNode) return;
+    try {
+      graph.secondarySourceNode.disconnect(graph.pitchDryGain);
+    } catch {}
+    try {
+      graph.secondarySourceNode.disconnect(graph.pitchWetGain);
+    } catch {}
+    graph.secondarySourceNode = null;
+    graph.secondaryAudio = null;
+  }
+
+  /**
+   * Hand-off: the secondary element becomes the primary. Its source
+   * node takes over the graph's sourceNode slot, the old primary's
+   * source is disconnected from the graph inputs (that element is now
+   * the silent standby), and the graph caches move to the new primary
+   * so a later attach() finds the live graph instead of rebuilding it.
+   * No-ops when the graph has no secondary leg for this element.
+   */
+  public promoteSecondary(audio: HTMLAudioElement): void {
+    const graph = this.graph;
+    if (!graph || !this.isConnected) return;
+    if (graph.secondaryAudio !== audio || !graph.secondarySourceNode) return;
+    const oldSource = graph.sourceNode;
+    try {
+      oldSource.disconnect(graph.pitchDryGain);
+    } catch {}
+    try {
+      oldSource.disconnect(graph.pitchWetGain);
+    } catch {}
+    graph.sourceNode = graph.secondarySourceNode;
+    graph.secondarySourceNode = null;
+    graph.secondaryAudio = null;
+    this.sourceNode = graph.sourceNode;
+    const previousAudio = this.audio;
+    this.audio = audio;
+    if (previousAudio && previousAudio !== audio) {
+      // the old element must not present this graph as its own later
+      delete (previousAudio as any).__liner_pitch_graph;
+    }
+    (audio as any).__liner_pitch_graph = graph;
+    if (typeof window !== "undefined") {
+      (window as any).__liner_pitch_graph = graph;
+    }
+    this.bindPlaybackState(audio);
   }
 
   public setUserVolume(volume: number, audio?: HTMLAudioElement): void {

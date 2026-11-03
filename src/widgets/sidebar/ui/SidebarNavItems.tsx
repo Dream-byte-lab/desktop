@@ -10,6 +10,7 @@ import { useTranslation } from "@/languages";
 import { Tooltip } from "@/shared/ui";
 import { cn } from "@/shared/lib";
 import { useOfflineModeStore } from "@/features/connectivity";
+import { usePinnedPlaylistIds } from "@/features/library/lib/playlistIdentity";
 import { useSidebarStore } from "../model/useSidebarStore";
 
 export interface SidebarNavItemsProps {
@@ -21,11 +22,12 @@ export function SidebarNavItems({
   searchOpen,
   onSearchToggle,
 }: SidebarNavItemsProps) {
-  const { pathname } = useLocation();
+  const { pathname, search } = useLocation();
   const { t } = useTranslation();
   const [pendingHref, setPendingHref] = useState<string | null>(null);
   const offline = useOfflineModeStore((state) => state.offline);
   const collapsed = useSidebarStore((state) => state.collapsed);
+  const pinnedIds = usePinnedPlaylistIds();
   const reduceMotion = useReducedMotion();
 
   useEffect(() => {
@@ -57,6 +59,13 @@ export function SidebarNavItems({
           pathname?.startsWith("/library/cached/")
         ) {
           return false;
+        }
+        // A pinned playlist's own sidebar row (the Pinned section)
+        // is the more specific entry: Library yields to it, exactly
+        // as it yields to Favorites and Downloads above.
+        if (pathname === "/library/playlist") {
+          const openId = new URLSearchParams(search).get("id");
+          if (openId && pinnedIds.includes(openId)) return false;
         }
         return pathname === href || pathname?.startsWith(`${href}/`);
       }

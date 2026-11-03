@@ -19,6 +19,7 @@ import {
   FastForwardLine,
   FastRewindLine,
   ExternalLinkLine,
+  AimingFill,
 } from "@mingcute/react";
 import { useTranslation } from "@/languages";
 import { ConfirmPill, useToast } from "@/shared/ui";
@@ -248,6 +249,12 @@ export function ShortcutsTab({
         desc:
           t("settings.shortcuts.toggle_fullscreen_desc") ||
           "Toggle immersive fullscreen player view.",
+      },
+      toggleFocusMode: {
+        title: t("settings.shortcuts.toggle_focus") || "Focus mode",
+        desc:
+          t("settings.shortcuts.toggle_focus_desc") ||
+          "Toggle the single-purpose listening view.",
       },
     }),
     [t],
@@ -534,6 +541,18 @@ export function ShortcutsTab({
         onChange: (val) => setMainAppShortcut("toggleFullscreen", val),
         onReset: () => resetShortcut("mainApp", "toggleFullscreen"),
         validateCandidate: validateMainAppCandidate("toggleFullscreen"),
+      },
+      {
+        id: "mainApp-toggleFocusMode",
+        scope: "mainApp",
+        title: mainAppLabels.toggleFocusMode.title,
+        desc: mainAppLabels.toggleFocusMode.desc,
+        icon: AimingFill,
+        value: mainApp.toggleFocusMode,
+        defaultValue: DEFAULT_SHORTCUTS.mainApp.toggleFocusMode,
+        onChange: (val) => setMainAppShortcut("toggleFocusMode", val),
+        onReset: () => resetShortcut("mainApp", "toggleFocusMode"),
+        validateCandidate: validateMainAppCandidate("toggleFocusMode"),
       },
 
       // Miniplayer Actions

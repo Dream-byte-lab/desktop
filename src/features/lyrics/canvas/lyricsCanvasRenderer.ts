@@ -7,6 +7,7 @@ import { FrameLoop, type FrameDemand } from "./frameLoop";
 import { LyricsScene } from "./lyricsScene";
 import { ScrollFollower } from "./scrollFollow";
 import { ScrollMotion } from "./scrollMotion";
+import type { LyricsDisplayOptions } from "./types";
 
 export interface LyricsClock {
   timeMs: () => number;
@@ -58,6 +59,18 @@ export class LyricsCanvasRenderer {
 
   setFogEnabled(enabled: boolean) {
     this.fog.enabled = enabled;
+    this.signature = "";
+    this.loop.poke();
+  }
+
+  /**
+   * Pushes the user's display options (alignment / highlight / text
+   * scale) into the scene. Presentation only — the scene relayouts
+   * and the frame loop is poked once; the demand discipline is
+   * unchanged (a poked loop still idles when nothing animates).
+   */
+  setDisplayOptions(options: Partial<LyricsDisplayOptions>) {
+    this.scene.setDisplayOptions(options);
     this.signature = "";
     this.loop.poke();
   }

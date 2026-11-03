@@ -138,6 +138,7 @@ vi.mock("./twoDeckMixer", () => ({
     // The stage API (the parallel mixer's fixed surface).
     stageDeckReadings = vi.fn((index: 0 | 1) => stageMock.deckReadings[index]);
     deckMeterSummary = vi.fn((index: 0 | 1) => stageMock.deckMeters[index]);
+    cueMeterSummary = vi.fn((index: 0 | 1) => stageMock.deckMeters[index]);
     masterMeterSummary = vi.fn(() => stageMock.masterMeter);
     stageEffectReadings = vi.fn(
       (kind: string) => stageMock.effectReadings[kind],
@@ -334,8 +335,24 @@ describe("DjSession — stage unlock (snapshot, setters, narration, tap)", () =>
     if (!snapshot) return;
 
     expect(snapshot.decks).toEqual([
-      { ...stageMock.deckReadings[0], meter: { peak: 0.9, rms: 0.5 } },
-      { ...stageMock.deckReadings[1], meter: null },
+      {
+        ...stageMock.deckReadings[0],
+        meter: { peak: 0.9, rms: 0.5 },
+        trackId: "a",
+        positionSec: 0,
+        tempoBias: 1,
+        manualLoop: null,
+        manualRollBeats: null,
+      },
+      {
+        ...stageMock.deckReadings[1],
+        meter: null,
+        trackId: null,
+        positionSec: null,
+        tempoBias: 1,
+        manualLoop: null,
+        manualRollBeats: null,
+      },
     ]);
     expect(snapshot.master).toEqual({
       meter: { peak: 0.95, rms: 0.6 },

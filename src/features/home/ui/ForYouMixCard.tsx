@@ -1,7 +1,8 @@
-import { memo, useCallback } from "react";
+import { memo, useCallback, useRef } from "react";
 import { MusicFill } from "@mingcute/react";
 import CoverImage from "@/features/covers/ui/CoverImage";
 import { playerEngine } from "@/features/player";
+import { useStableNavigate } from "@/shared/hooks/useStableNavigate";
 import type { Track } from "@/shared/types";
 import type { ForYouMix } from "../lib/forYouFeed";
 
@@ -84,18 +85,38 @@ export function MixCoverCollage({
 }
 
 // A generated mix in the DailyMixCard family: same 175px footprint
-// and play idiom, but deliberately no context menu — a mix is a
+// and click contract as the Home rail's DailyMixCard — a single
+// click OPENS the mix (its collection page lists the songs), a
+// double click plays it. Deliberately no context menu: a mix is a
 // generated view over the listener's own library, not a library
-// object with its own actions.
+// object with its own actions. (Before Note 23 the single click
+// only played, so a mix shown here could never be opened at all.)
 function ForYouMixCard({ mix, title, subtitle }: ForYouMixCardProps) {
+  const navigate = useStableNavigate();
   const covers = uniqueCoverUrls(mix.tracks);
   const firstCover = covers[0];
+  const clickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const handleClick = useCallback(() => {
+  const handlePlay = useCallback(() => {
     const firstTrack = mix.tracks[0];
     if (!firstTrack) return;
     void playerEngine.playTrack(firstTrack, mix.tracks, title, firstCover);
   }, [mix, title, firstCover]);
+
+  const handleClick = (e: React.MouseEvent) => {
+    if (e.detail >= 2) {
+      if (clickTimerRef.current) {
+        clearTimeout(clickTimerRef.current);
+        clickTimerRef.current = null;
+      }
+      handlePlay();
+      return;
+    }
+    clickTimerRef.current = setTimeout(() => {
+      clickTimerRef.current = null;
+      navigate(`/collection?type=playlist&id=${encodeURIComponent(mix.id)}`);
+    }, 200);
+  };
 
   return (
     <div

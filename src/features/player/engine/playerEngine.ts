@@ -35,6 +35,7 @@ import {
   shouldAttemptLrclibFallback,
   hasAttemptedLrclibFallback,
   markLrclibFallbackAttempted,
+  isPlainOnlyLrclibFallback,
   type CachedLyricsItem,
 } from "@/features/lyrics";
 import { preloadCoverArt } from "@/features/covers";
@@ -1011,7 +1012,9 @@ class PlayerEngine {
     if (store.shuffle) {
       this.originalUpcomingQueue.push(track);
     }
-    this.preloadNextTrack(store);
+    // fresh state: the snapshot above predates setQueue, so preloading
+    // from it would aim at the pre-addition "next" (often nothing)
+    this.preloadNextTrack(usePlayerStore.getState());
   }
 
   public playNext(track: Track): void {
@@ -1044,7 +1047,9 @@ class PlayerEngine {
     if (store.shuffle) {
       this.originalUpcomingQueue.unshift(track);
     }
-    this.preloadNextTrack(store);
+    // fresh state, as in addToQueue: the inserted track IS the next
+    // track now, and the stale snapshot cannot see it
+    this.preloadNextTrack(usePlayerStore.getState());
   }
 
   /**
@@ -1234,7 +1239,16 @@ class PlayerEngine {
     };
     this.consecutiveAutoSkips += 1;
 
-    if (this.consecutiveAutoSkips > MAX_CONSECUTIVE_AUTO_SKIPS) {
+    // Stop only once every track in the queue has failed in a row (or
+    // the small-queue floor is passed): a fixed cap of 3 used to kill
+    // playback outright in a long queue — e.g. a mix — while tracks
+    // that were never tried remained (Note 24). The cycle rule mirrors
+    // the offline branch above and still bounds a repeat-all loop
+    // through a fully broken queue.
+    if (
+      this.consecutiveAutoSkips >
+      Math.max(MAX_CONSECUTIVE_AUTO_SKIPS, store.queue.length)
+    ) {
       log(
         "red",
         "playback",
@@ -1636,7 +1650,15 @@ class PlayerEngine {
       }
     }
 
-    if (cached && cached.candidate) {
+    // Note 22 / M3: a persisted plain-only LRCLIB fallback candidate
+    // counts as absent here — it can never sync, so the track falls
+    // through to the stream (and the fallback rule below) instead of
+    // being served from the cache forever
+    if (
+      cached &&
+      cached.candidate &&
+      !isPlainOnlyLrclibFallback(cached.candidate)
+    ) {
       bestCandidate = cached.candidate;
       const parsed = parseRawLyrics(
         cached.candidate.lyrics.content,
@@ -1700,7 +1722,11 @@ class PlayerEngine {
         if (token !== this.lyricsLoadToken || controller.signal.aborted) return;
         const freshCached =
           lyricsCache.get(trackId) || (await linerDb.getLyrics(trackId));
-        if (freshCached && freshCached.candidate) {
+        if (
+          freshCached &&
+          freshCached.candidate &&
+          !isPlainOnlyLrclibFallback(freshCached.candidate)
+        ) {
           const parsed = parseRawLyrics(
             freshCached.candidate.lyrics.content,
             freshCached.candidate.lyrics.format,
@@ -1879,13 +1905,19 @@ class PlayerEngine {
       !bestCandidate &&
       !streamInstrumental
     ) {
-      const cachedFallback =
+      const persistedFallback =
         lyricsCache.getProvider(trackId, "lrclib") ||
         (cached as CachedLyricsRecord | null)?.providers?.["lrclib"] ||
         (cached as CachedLyricsRecord | null)?.availableProviders?.find(
           (p) => p.provider.toLowerCase().trim() === "lrclib",
         )?.candidate ||
         null;
+      // Note 22 / M3: a plain-only persisted fallback entry counts as
+      // absent, so installs carrying one heal without a cache wipe
+      const cachedFallback =
+        persistedFallback && !isPlainOnlyLrclibFallback(persistedFallback)
+          ? persistedFallback
+          : null;
 
       if (cachedFallback) {
         const cachedItem = lyricsCache.get(trackId);

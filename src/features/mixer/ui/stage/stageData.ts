@@ -339,6 +339,25 @@ export function activityLines(s: ActivitySnapshot): ActivityLine[] {
   return lines.slice(0, 3);
 }
 
+/**
+ * The deck role line (Interface Build 6, closing the display half
+ * of HD-4's standby-truth gap). The standby deck's panel shows the
+ * queue's next track — it must not claim that track is loaded on
+ * the deck, because the session's preparation walk can land on a
+ * later track (see the report's seam requests). What the UI CAN
+ * say truthfully: during a blend the non-playing deck is sounding
+ * its half of the join, so it is the incoming deck; otherwise it
+ * is standby, next in queue. The playing deck is simply playing.
+ */
+export function deckRoleLabel(state: {
+  isPlaying: boolean;
+  blending: boolean;
+}): string {
+  if (state.isPlaying) return "Playing";
+  if (state.blending) return "Incoming — blending in";
+  return "Standby — next in queue";
+}
+
 export function activityLinesForStage(
   s: ActivitySnapshot,
   move: StageCurrentMove | null | undefined,

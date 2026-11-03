@@ -31,6 +31,7 @@ export {
   shouldAttemptLrclibFallback,
   hasAttemptedLrclibFallback,
   markLrclibFallbackAttempted,
+  isPlainOnlyLrclibFallback,
   type LrclibTrackHint,
   type LrclibFallbackDecision,
 } from "./services/lrclib";
@@ -39,3 +40,4 @@ export {
   type LyricsClock,
   type EdgesListener,
 } from "./canvas/lyricsCanvasRenderer";
+export type { LyricsDisplayOptions } from "./canvas/types";

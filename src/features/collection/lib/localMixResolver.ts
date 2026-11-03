@@ -6,8 +6,8 @@ import {
   type TFunction,
 } from "@/languages";
 import {
-  hydrateScreenCache,
   readScreenCache,
+  whenScreenCacheHydrated,
 } from "@/shared/cache/screenCache";
 import {
   FOR_YOU_LIMITS,
@@ -149,8 +149,32 @@ function mixDescription(basis: ForYouMixBasis, t: TFunction): string {
  * made; whatever the app has already gathered is what a local mix
  * may draw from.
  */
+/**
+ * How long universe assembly may wait for the persisted screen
+ * cache's IndexedDB scan to land. The scan itself is a single
+ * cursor pass that finishes in well under a second on a healthy
+ * machine; the cap exists only so a pathological hang degrades to
+ * reading whatever is in memory instead of spinning forever.
+ */
+const HYDRATION_WAIT_CAP_MS = 10_000;
+
 async function loadLocalUniverseById(): Promise<Map<string, Track>> {
-  await hydrateScreenCache();
+  // Wait for the persisted cache to actually arrive, not for the
+  // first-paint hydration race: hydrateScreenCache() resolves
+  // after ~250 ms even while the IndexedDB scan is still running,
+  // and reading the universe before the history entry lands would
+  // report an existing mix as not found (Note 23).
+  let capTimer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      whenScreenCacheHydrated(),
+      new Promise<void>((resolve) => {
+        capTimer = setTimeout(resolve, HYDRATION_WAIT_CAP_MS);
+      }),
+    ]);
+  } finally {
+    if (capTimer) clearTimeout(capTimer);
+  }
   const owner = getAuthSession()?.user?.id ?? "";
   const heard =
     readScreenCache<HeardEntry[]>(forYouHistoryKey(owner))?.data ?? [];

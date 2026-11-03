@@ -13,7 +13,10 @@ import {
   hasAttemptedLrclibFallback,
   markLrclibFallbackAttempted,
   resetLrclibFallbackAttempts,
+  isPlainOnlyLrclibFallback,
 } from "./services/lrclib";
+import { parseRawLyrics } from "./engine/lyricsParser";
+import type { LyricsCandidate } from "@/shared/contracts/lyrics";
 import { lyricsCache } from "./store/lyricsCache";
 
 const HINT = {
@@ -74,14 +77,22 @@ describe("fetchLrclibCandidate", () => {
     });
   });
 
-  it("falls back to plain lyrics when no synced lyrics exist", async () => {
+  it("treats a plain-only record as a miss (Note 22 / M3)", async () => {
     fetchMock.mockResolvedValueOnce(
       jsonResponse({ ...SYNCED_RECORD, syncedLyrics: null }),
     );
-    const candidate = await fetchLrclibCandidate(HINT);
-    expect(candidate?.syncLevel).toBe("plain");
-    expect(candidate?.lyrics.format).toBe("plain");
-    expect(candidate?.lyrics.content).toBe("Blue skies smiling at me");
+    // plain-only lyrics can never sync: no candidate, so the track keeps
+    // its "no lyrics found" outcome instead of unsyncable words
+    expect(await fetchLrclibCandidate(HINT)).toBeNull();
+    // an /api/get answer is definitive: no search attempt either
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats whitespace-only synced lyrics as no synced lyrics", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ ...SYNCED_RECORD, syncedLyrics: "  \n " }),
+    );
+    expect(await fetchLrclibCandidate(HINT)).toBeNull();
   });
 
   it("on 404 searches and accepts only a strict title/artist/duration match", async () => {
@@ -101,6 +112,52 @@ describe("fetchLrclibCandidate", () => {
     const candidate = await fetchLrclibCandidate(HINT);
     expect(candidate?.lyrics.content).toContain("matched");
     expect(String(fetchMock.mock.calls[1][0])).toContain("/api/search?");
+  });
+
+  it("search skips a plain-only match and takes a later synced one (Note 22 / M3)", async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({}, 404))
+      .mockResolvedValueOnce(
+        jsonResponse([
+          { ...SYNCED_RECORD, duration: 180, syncedLyrics: null },
+          {
+            ...SYNCED_RECORD,
+            duration: 179,
+            syncedLyrics: "[00:02.00]synced match",
+          },
+        ]),
+      );
+
+    const candidate = await fetchLrclibCandidate(HINT);
+    expect(candidate?.syncLevel).toBe("line_level");
+    expect(candidate?.lyrics.content).toContain("synced match");
+  });
+
+  it("pins the chain: a fallback candidate's LRC parses to timed lines", async () => {
+    const lrc = [
+      "[00:01.00]first line",
+      "[00:05.50]second line",
+      "[00:10.25]third line",
+    ].join("\n");
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ ...SYNCED_RECORD, plainLyrics: null, syncedLyrics: lrc }),
+    );
+
+    const candidate = await fetchLrclibCandidate(HINT);
+    expect(candidate).not.toBeNull();
+
+    const parsed = parseRawLyrics(
+      candidate!.lyrics.content,
+      candidate!.lyrics.format,
+    );
+    // the parser may prepend an instrumental intro at 0ms; the sung lines
+    // themselves must carry their LRC stamps — non-zero, strictly
+    // increasing — or the fullscreen view can never highlight in time
+    const sungTimes = parsed.syncedLines
+      .filter((line) => line.timeMs > 0)
+      .map((line) => line.timeMs);
+    expect(sungTimes).toEqual([1000, 5500, 10250]);
+    expect(parsed.plainLyrics).toContain("second line");
   });
 
   it("rejects loose search matches (wrong duration or different title)", async () => {
@@ -260,5 +317,82 @@ describe("lrclib candidate persistence through lyricsCache", () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  // Candidates as an install from before the Note 22 / M3 fix could have
+  // persisted them: the fallback's own output shape, plain and synced,
+  // plus the server's own lowercase-lrclib candidate for contrast.
+  function persistedCandidate(
+    overrides: Partial<LyricsCandidate>,
+  ): LyricsCandidate {
+    return {
+      provider: "LRCLIB",
+      contentKind: "line_synced",
+      syncLevel: "line_level",
+      quality: {
+        total: 50,
+        match: 15,
+        content: 20,
+        sync: 10,
+        source: 5,
+        reasons: ["client-side LRCLIB fallback (lrclib.net)"],
+      },
+      lyrics: { format: "lrc", content: "[00:01.00]Blue skies" },
+      ...overrides,
+    };
+  }
+
+  const PLAIN_PERSISTED = persistedCandidate({
+    contentKind: "plain",
+    syncLevel: "plain",
+    quality: {
+      total: 50,
+      match: 15,
+      content: 20,
+      sync: 0,
+      source: 5,
+      reasons: ["client-side LRCLIB fallback (lrclib.net)"],
+    },
+    lyrics: { format: "plain", content: "Blue skies smiling at me" },
+  });
+
+  it("a plain-only persisted fallback entry is treated as absent at the serve points", () => {
+    // persisted exactly the way the pre-fix engine wrote a fallback hit
+    lyricsCache.setProvider("track-old", PLAIN_PERSISTED);
+    lyricsCache.set("track-old", PLAIN_PERSISTED);
+
+    // both read paths the engine's cached-serve points consult — the
+    // track winner and the per-provider slot — must be flagged, so the
+    // entry is never shown again and the install heals with no cache wipe
+    const winner = lyricsCache.get("track-old")?.candidate;
+    const slot = lyricsCache.getProvider("track-old", "lrclib");
+    expect(winner).not.toBeNull();
+    expect(slot).not.toBeNull();
+    expect(isPlainOnlyLrclibFallback(winner!)).toBe(true);
+    expect(isPlainOnlyLrclibFallback(slot!)).toBe(true);
+  });
+
+  it("a synced persisted fallback entry stays servable; server candidates are never flagged", () => {
+    const syncedPersisted = persistedCandidate({});
+    lyricsCache.setProvider("track-synced", syncedPersisted);
+    lyricsCache.set("track-synced", syncedPersisted);
+    expect(
+      isPlainOnlyLrclibFallback(lyricsCache.get("track-synced")!.candidate),
+    ).toBe(false);
+    expect(
+      isPlainOnlyLrclibFallback(
+        lyricsCache.getProvider("track-synced", "lrclib")!,
+      ),
+    ).toBe(false);
+
+    // the server's own lrclib provider (lowercase) is not our fallback —
+    // its candidates stay servable even when plain
+    const serverPlain = persistedCandidate({
+      provider: "lrclib",
+      contentKind: "plain",
+      syncLevel: "plain",
+      lyrics: { format: "plain", content: "Blue skies smiling at me" },
+    });
+    expect(isPlainOnlyLrclibFallback(serverPlain)).toBe(false);
   });
 });

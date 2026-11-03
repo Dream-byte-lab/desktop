@@ -60,7 +60,8 @@
       "signed_in": "Signed in",
       "guest": "Guest",
       "section_discover": "Discover",
-      "section_collection": "Your Collection"
+      "section_collection": "Your Collection",
+      "section_pinned": "Pinned"
     },
     "minimize": "Minimize",
     "exitFullscreen": "Exit fullscreen",
@@ -233,9 +234,9 @@
   },
   "forYou": {
     "title": "For You",
-    "subtitle": "Built only from your listening — your plays, your likes, your shelves. Nothing here comes from anyone else.",
+    "subtitle": "Built from your listening — your plays, your likes, your shelves, and new finds from the catalogue chosen by your taste.",
     "doorTitle": "For You",
-    "doorSubtitle": "Mixes and shelves made only from your listening",
+    "doorSubtitle": "Mixes, shelves and new finds — all from your listening",
     "featuredLabel": "Featured mix",
     "mixesTitle": "Made for you",
     "mixGenreTitle": "Your {label} shelf",
@@ -252,6 +253,8 @@
     "becausePlayed": "Because you played {title}",
     "becauseArtist": "Because you play {artist}",
     "becauseSubtitle": "Matched from your own library — by sound, shelf and artist",
+    "recoGenreTitle": "More {label}",
+    "recoSubtitle": "New to you — from the catalogue, chosen from your listening",
     "genreShelfSubtitle": "Your Playlist Genre shelf",
     "genreBasicSubtitle": "Genre shelf",
     "moodsDerived": "Derived from your library's own analysis",
@@ -457,6 +460,11 @@
     },
     "btn_continue_guest": "Continue without an account"
   },
+  "focus": {
+    "enter": "Focus",
+    "exit": "Exit focus",
+    "coming_up": "Coming up"
+  },
   "player": {
     "repeat_off": "Repeat: off",
     "repeat_all": "Repeat: all",
@@ -598,6 +606,26 @@
           "hint": "Still cover, plain lyrics"
         }
       }
+    },
+    "lyrics_view": {
+      "tab_next": "Next",
+      "tab_lyrics": "Lyrics",
+      "tab_recommended": "Recommended",
+      "open": "Open lyrics",
+      "back": "Back to player",
+      "up_next": "Up next",
+      "no_next": "Nothing up next",
+      "recommended_basis": "Radio based on this track",
+      "recommended_empty": "No recommendations right now"
+    },
+    "lyrics_display": {
+      "accessibility": "Accessibility",
+      "gaussian_blur": "Gaussian blur",
+      "bigger_text": "Bigger text",
+      "highlight_lyrics": "Highlight lyrics",
+      "text_align": "Text Align",
+      "align_left": "Left",
+      "align_center": "Center"
     }
   },
   "playlist": {
@@ -686,6 +714,25 @@
       "lrclib_fallback": {
         "title": "LRCLIB fallback",
         "description": "When the built-in sources have no lyrics for a track, Linerave can ask LRCLIB (lrclib.net), sending the track's title, artist and duration. Lyrics found this way are labelled LRCLIB."
+      },
+      "song_fade": {
+        "title": "Fade between songs",
+        "description": "When one song ends and the next begins, the first fades out and the next fades in over this many seconds instead of switching hard. This is a fade through the change, not an overlapping crossfade — overlapping mixes belong to DJ mode.",
+        "off": "Off"
+      },
+      "lyrics_display": {
+        "title": "Lyrics display",
+        "gaussian_blur": "Gaussian blur",
+        "bigger_text": "Bigger text",
+        "highlight_lyrics": "Highlight lyrics",
+        "text_align": "Text Align",
+        "align_left": "Left",
+        "align_center": "Center"
+      },
+      "crossfade": {
+        "title": "Crossfade",
+        "description": "Songs overlap: the next song starts playing before the current one ends, fading in while the current song fades out over this many seconds — both songs are heard together during the overlap. If a song is too short, the overlap shrinks to fit: it never takes more than half of either song. While crossfade is on, it replaces the fade between songs at each change; the two never stack.",
+        "off": "Off"
       }
     },
     "shortcuts": {
@@ -725,6 +772,8 @@
       "toggle_queue_desc": "Open or close the playback queue panel.",
       "toggle_fullscreen": "Fullscreen / Player view",
       "toggle_fullscreen_desc": "Toggle immersive fullscreen player view.",
+      "toggle_focus": "Focus mode",
+      "toggle_focus_desc": "Toggle the single-purpose listening view.",
       "like_track": "Like / Unlike",
       "like_track_desc": "Add or remove track from favorite tracks.",
       "focus_main_window": "Switch to main window",
@@ -1015,6 +1064,21 @@
       "standard": "Standard",
       "expanded": "Expanded"
     },
+    "accent": {
+      "title": "Accent colour",
+      "description": "The colour family the app's accents are drawn from. The default is the app icon's own sweep. A custom colour is checked for readability in light and dark mode, and adjusted to the nearest readable shade when it needs to be.",
+      "families": {
+        "sweep": "Sweep",
+        "lagoon": "Lagoon",
+        "violet": "Violet",
+        "ember": "Ember",
+        "rose": "Rose",
+        "custom": "Custom"
+      },
+      "custom_label": "Custom colour",
+      "adjusted_note": "Adjusted so it stays readable in both modes:",
+      "rejected_note": "That colour can't stay readable on both light and dark surfaces, so it wasn't applied."
+    },
     "branding": {
       "title": "Branding",
       "description": "Choose the logo accent color.",
@@ -1273,6 +1337,50 @@
     "support": "Contact support",
     "wall_title_unreachable": "Linerave's servers aren't responding",
     "wall_subtitle_unreachable": "Your internet works, but Linerave can't reach its servers. They may be down, or your network may be blocking Linerave. A VPN often helps."
+  },
+  "dj": {
+    "stage": {
+      "control": "Control",
+      "level": {
+        "autonomous": "Fully autonomous",
+        "assisted": "Assisted",
+        "manual": "Manual"
+      },
+      "levelNote": {
+        "autonomous": "The DJ authors and performs every join.",
+        "assisted": "The DJ performs — and whatever your hands grab (EQ, filter, FX sends) stays yours through the next joins.",
+        "manual": "The brain stops authoring. Your hands rule the decks; the set still never goes silent underneath you."
+      },
+      "tempoBias": {
+        "note": "Tempo bias — what the planner believes this deck's tempo is; joins are authored against it."
+      },
+      "loop": {
+        "arm": "Loop from here",
+        "release": "Looping {beats} beats — release"
+      },
+      "roll": "Roll",
+      "scratch": "Scratch",
+      "move": {
+        "brake": "Brake",
+        "vinylStop": "Vinyl stop",
+        "spinback": "Spinback",
+        "baby": "Baby",
+        "chirp": "Chirp",
+        "transformer": "Transformer",
+        "flare": "Flare"
+      },
+      "reset": "Reset",
+      "refused": {
+        "move": "That move can't be performed right now.",
+        "loop": "That loop can't be armed right now.",
+        "noPlayhead": "No playhead to loop from on this deck."
+      },
+      "deckEmpty": "This deck holds no track — a prepared track waits in memory, not on the deck, until a join performs it here.",
+      "levelLabel": {
+        "assisted": "Assisted — the brain drives, your grabs hold",
+        "manual": "Manual — your hands rule the decks"
+      }
+    }
   },
   "updater": {
     "modal_title": "New Update Available",

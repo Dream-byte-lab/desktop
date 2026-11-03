@@ -1193,6 +1193,257 @@ function authorScratchOut(
 }
 
 // ---------------------------------------------------------------------
+// The manual authors (the DJ stage engine seams)
+// ---------------------------------------------------------------------
+
+/**
+ * The R1 stop moves and R2 scratches authored for the HOST's
+ * hand, on the stage's trigger. A manual trigger is the host's
+ * deliberate act — spec Addendum A: the stage is the host's, and
+ * a user intervention always stands — so the moment gates the
+ * brain's own authors obey do NOT apply here: no price gate (a
+ * profile may price a family out of the BRAIN's reach; the host's
+ * hand is not the brain), no outro requirement, no falling-energy
+ * gate, no minimum-play floor (the floor binds the DJ only), and
+ * no lottery. The exit is HERE, at the position the hand fires
+ * from.
+ *
+ * What still gates, because it is structural or material, not
+ * taste:
+ * - The incoming must offer a real landing (entryIsLanding) for
+ *   the move to hand over TO, and B must be able to start early
+ *   and silent so its entry lands as the move completes
+ *   (startBSec ≥ 0) — the stop exits' geometry, unchanged.
+ * - A spinback needs its runway behind the stop point, or the
+ *   record would run off the track's start.
+ * - A scratch is performed ON material: the window the hand
+ *   would touch must be witnessed, low-vocal and transient-rich
+ *   — the R2 material gates, unchanged. Material can refuse the
+ *   host exactly as it refuses the brain; scratching across a
+ *   lead vocal is not the host's intent either, it is an accident
+ *   the engine can prevent.
+ * - The window must fit inside the outgoing: a move that would
+ *   end past the track's end cannot be performed as written.
+ *
+ * The recipes are the brain's own shapes — same blocks, same
+ * automation, same ownJoin — so the executor performs a manual
+ * move through exactly the path it performs an authored one, and
+ * validateRecipe still has the last word (the brain checks it
+ * before the decision stands).
+ */
+export type ManualDeckMove =
+  "brake" | "vinyl-stop" | "spinback" | ScratchTechnique;
+
+/** The stop moves a manual trigger can name. */
+export type ManualStopMove = "brake" | "vinyl-stop" | "spinback";
+
+export function isManualStopMove(move: ManualDeckMove): move is ManualStopMove {
+  return move === "brake" || move === "vinyl-stop" || move === "spinback";
+}
+
+/**
+ * A stop exit authored for the host's hand: the outgoing is
+ * stopped DEAD here — at the position the trigger fires from —
+ * braked, vinyl-stopped or spun back, and the incoming lands its
+ * entry exactly as the stop completes. The technique is the one
+ * the host named: unlike authorStopExit, the tail's length does
+ * not get a vote.
+ */
+export function authorManualStopExit(
+  request: RecipeRequest,
+  profile: DecisionProfile,
+  move: ManualStopMove,
+): TransitionRecipe | null {
+  const { outgoing, incoming } = request;
+  const outMap = outgoing.beatMap;
+  const inMap = incoming.beatMap;
+  const spbA = secondsPerBeat(outMap.bpm);
+  const exitSec = request.outgoingPositionSec;
+
+  const beats =
+    move === "spinback"
+      ? SPINBACK_BEATS
+      : move === "brake"
+        ? BRAKE_BEATS
+        : VINYL_STOP_BEATS;
+  const durationMs = beats * spbA * 1000;
+  const durationSec = durationMs / 1000;
+  // The move must fit inside the outgoing: past the track's end
+  // there is nothing left to stop.
+  if (exitSec + durationSec > outMap.durationSec) return null;
+
+  if (move === "spinback") {
+    // The record runs backwards at an average |rate| of ~2.5 over
+    // the spin: the stop point needs that much track behind it,
+    // plus a margin, or the spin would run off the track's start.
+    if (exitSec < durationSec * 2.5 + 2) return null;
+  }
+
+  // The incoming must offer a real landing for the stop to hand to.
+  const entry = chooseEntry(incoming, profile);
+  if (!entryIsLanding(incoming, entry.beat)) return null;
+
+  // B starts early and silent, so its entry beat lands exactly as
+  // the stop completes.
+  const startBSec = timeAtBeat(inMap, entry.beat) - durationSec;
+  if (startBSec < 0) return null;
+
+  const block: RecipeLoopBlock =
+    move === "spinback"
+      ? {
+          type: "spinback",
+          side: "A",
+          startMs: exitSec * 1000,
+          endMs: exitSec * 1000 + durationMs,
+          beats,
+          peakRate: SPINBACK_PEAK_RATE,
+        }
+      : {
+          type: move,
+          side: "A",
+          startMs: exitSec * 1000,
+          endMs: exitSec * 1000 + durationMs,
+          beats,
+        };
+
+  return ownJoin(request, {
+    preset: "cut",
+    startASec: exitSec,
+    startBSec,
+    durationMs,
+    automation: {
+      // A plays at full level THROUGH the stop — the rate fall is
+      // the sound — and is gone at its end; B is silent until the
+      // stop completes, then arrives whole.
+      volumeOut: curve("linear-gain", "linear", [
+        [0, 1],
+        [durationMs, 1],
+        [durationMs, 0],
+      ]),
+      volumeIn: curve("linear-gain", "linear", [
+        [0, 0],
+        [durationMs, 0],
+        [durationMs, 1],
+      ]),
+      eqOut: { low: flatEq(), mid: flatEq(), high: flatEq() },
+      eqIn: { low: flatEq(), mid: flatEq(), high: flatEq() },
+      filterOut: flatCurve("filter-cutoff", "hertz", OPEN_FILTER_HZ),
+      filterIn: flatCurve("filter-cutoff", "hertz", OPEN_FILTER_HZ),
+      rateB: flatCurve("rate", "ratio", 1),
+      echoSendOut: flatCurve("dry-wet", "percent", 0),
+      echoSendIn: flatCurve("dry-wet", "percent", 0),
+    },
+    loops: [block],
+    entryReason: entry.reason,
+    exitReason:
+      move === "spinback"
+        ? "the host spun the outgoing back, by hand, from here — a manual stop exit, handed to the incoming's entry"
+        : move === "brake"
+          ? "the host braked the outgoing to a stop, by hand, from here — a manual stop exit, handed to the incoming's entry"
+          : "the host vinyl-stopped the outgoing, by hand, from here — a manual stop exit, handed to the incoming's entry",
+  });
+}
+
+/** The window each scratch technique works, in the R2 authors' own shapes. */
+const MANUAL_SCRATCH_SHAPES: Record<ScratchTechnique, ScratchShape> = {
+  baby: { technique: "baby", beats: 2, strokes: 2, excursionBeats: 0.75 },
+  chirp: { technique: "chirp", beats: 2, strokes: 2, excursionBeats: 0.75 },
+  flare: { technique: "flare", beats: 2, strokes: 2, excursionBeats: 0.75 },
+  transformer: {
+    technique: "transformer",
+    beats: 4,
+    strokes: 1,
+    excursionBeats: 0.4,
+    clicksPerBeat: 2,
+  },
+};
+
+/**
+ * A scratch authored for the host's hand, in the scratch-out's
+ * geometry: the named technique is performed on the outgoing
+ * starting HERE, across its window, and the incoming lands its
+ * entry as the window ends. The technique is the one the host
+ * named — no energy read gets to substitute another — but the
+ * window's material gates stand exactly as the R2 authors wrote
+ * them: witnessed, low-vocal, transient-rich, or no scratch.
+ */
+export function authorManualScratch(
+  request: RecipeRequest,
+  profile: DecisionProfile,
+  technique: ScratchTechnique,
+): TransitionRecipe | null {
+  const { outgoing, incoming } = request;
+  const outMap = outgoing.beatMap;
+  const inMap = incoming.beatMap;
+  const spbA = secondsPerBeat(outMap.bpm);
+  const shape = MANUAL_SCRATCH_SHAPES[technique];
+  const startSec = request.outgoingPositionSec;
+  const windowSec = shape.beats * spbA;
+  const endSec = startSec + windowSec;
+  // The window must fit inside the outgoing.
+  if (endSec > outMap.durationSec) return null;
+
+  // The window's material gates, on the outgoing's own audio —
+  // the material the host's hand would actually touch.
+  const vocal = windowVocalReading(outgoing, startSec, endSec, profile);
+  if (!vocal.witnessed || vocal.mean > SCRATCH_MAX_VOCAL_ACTIVITY) return null;
+  const startBeat = beatsAtTime(outMap, startSec);
+  if (
+    !windowTransientRich(
+      outgoing,
+      startBeat,
+      startBeat + shape.beats,
+      startSec,
+      endSec,
+    )
+  ) {
+    return null;
+  }
+
+  // The incoming must offer a real landing for the handover.
+  const entry = chooseEntry(incoming, profile);
+  if (!entryIsLanding(incoming, entry.beat)) return null;
+  const entrySec = timeAtBeat(inMap, entry.beat);
+  // B starts early and silent (the stop exits' geometry), so its
+  // entry lands exactly as the scratch window ends.
+  const startBSec = entrySec - windowSec;
+  if (startBSec < 0) return null;
+
+  const durationMs = windowSec * 1000;
+  return ownJoin(request, {
+    preset: "cut",
+    startASec: startSec,
+    startBSec,
+    durationMs,
+    automation: {
+      // A plays at full level THROUGH the scratch — the hand and
+      // the gate are the sound — and is gone at its end; B is
+      // silent until the window completes, then arrives whole.
+      volumeOut: curve("linear-gain", "linear", [
+        [0, 1],
+        [durationMs, 1],
+        [durationMs, 0],
+      ]),
+      volumeIn: curve("linear-gain", "linear", [
+        [0, 0],
+        [durationMs, 0],
+        [durationMs, 1],
+      ]),
+      eqOut: { low: flatEq(), mid: flatEq(), high: flatEq() },
+      eqIn: { low: flatEq(), mid: flatEq(), high: flatEq() },
+      filterOut: flatCurve("filter-cutoff", "hertz", OPEN_FILTER_HZ),
+      filterIn: flatCurve("filter-cutoff", "hertz", OPEN_FILTER_HZ),
+      rateB: flatCurve("rate", "ratio", 1),
+      echoSendOut: flatCurve("dry-wet", "percent", 0),
+      echoSendIn: flatCurve("dry-wet", "percent", 0),
+    },
+    loops: [scratchBlock(shape, "A", startSec, windowSec)],
+    entryReason: entry.reason,
+    exitReason: `the host scratched the outgoing out by hand — a ${technique} across ${shape.beats} beats from here, over witnessed low-vocal material, handed to the incoming's entry`,
+  });
+}
+
+// ---------------------------------------------------------------------
 // The effect dressings (the revamp's R3)
 // ---------------------------------------------------------------------
 

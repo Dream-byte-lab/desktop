@@ -6,6 +6,7 @@ import { revealThemeChange } from "@/shared/lib";
 import { SettingBlock, SettingRow, SettingSection } from "../controls";
 import { ThemeCard } from "./ThemeCard";
 import { PlaybackBarSetting } from "./PlaybackBarSetting";
+import { AccentSetting } from "./AccentSetting";
 
 export function AppearanceTab({ searchQuery }: { searchQuery?: string }) {
   const { t, locale, setLocale } = useTranslation();
@@ -75,6 +76,8 @@ export function AppearanceTab({ searchQuery }: { searchQuery?: string }) {
       </SettingBlock>
 
       <PlaybackBarSetting searchQuery={searchQuery} />
+
+      <AccentSetting searchQuery={searchQuery} />
     </SettingSection>
   );
 }
