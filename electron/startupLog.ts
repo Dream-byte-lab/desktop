@@ -1,8 +1,13 @@
-// LINERAVE DIAGNOSTIC (temporary): a synchronous startup log so a
-// launch that fails silently still leaves evidence behind. The log
-// lands on the Desktop when possible, else in the app's data folder.
-// Every write is a direct append: if the process dies a line later,
-// everything up to that line is already on disk.
+// LINERAVE FLIGHT RECORDER (kept by decision — see the startup block in
+// main.ts): a synchronous startup log so a launch that fails silently
+// still leaves evidence behind. The log lands on the Desktop when
+// possible, else in the app's data folder. Every write is a direct
+// append: if the process dies a line later, everything up to that line
+// is already on disk. (Originally added as a temporary diagnostic during
+// the launch-failure investigation; retained deliberately as the flight
+// recorder. SA-1 M-4 once recommended removal — that recommendation and
+// this retention are both on record; the standing behaviour is: it
+// stays.)
 import { app } from "electron";
 import fs from "node:fs";
 import path from "node:path";

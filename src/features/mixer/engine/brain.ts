@@ -12,8 +12,18 @@
 //   candidatesForPair(pair, { profiles: [derivedProfile] })
 //     → scoreCandidates(candidates,
 //         { history, arcPosition, arcTargetEnergy }, derivedProfile)
-//     → the session performs pick.candidate.recipe through the
-//       executor, then recordPerformed() writes the join to history.
+//     → selection.selectFromBand(scored.band, …) — blueprint §16's
+//       temperature-softmax over the near-equal band, shaped by
+//       §15's recent-use penalties, drawn from a generator seeded
+//       by session state (seed + set index + decision index)
+//     → the session performs the sampled candidate's recipe
+//       through the executor, then recordPerformed() writes the
+//       join to history.
+//
+// Scoring's own deterministic pick (lowest history cost in the
+// band) survives as the reference the selection record is checked
+// against (`agreedWithScorer`) — the audit trail keeps both what
+// the old rule would have done and what the lottery did.
 //
 // "Derived profile" is how signals move decisions: the session's
 // base temperament (the decision profile) is adjusted by the signal
@@ -35,6 +45,12 @@
 
 import { candidatesForPair, type Candidate } from "./candidates";
 import { scoreCandidates, type ScoredCandidate } from "./scoring";
+import {
+  decisionSeed,
+  randomForDecision,
+  selectFromBand,
+  type SelectionRecord,
+} from "./selection";
 import { STANDARD_PROFILE, type DecisionProfile } from "./decisionProfile";
 import {
   joinHistory,
@@ -104,6 +120,13 @@ export interface BrainDecision {
   recipe: TransitionRecipe;
   candidate: Candidate;
   scored: ScoredCandidate;
+  /**
+   * How the performed candidate was chosen from the scored band
+   * (R5): the §16/§15 selection record — temperature, seed
+   * coordinate, every band member's probability, and whether the
+   * sample agreed with scoring's deterministic pick.
+   */
+  selection: SelectionRecord;
   /** The derived profile the decision was authored and scored with. */
   profile: DecisionProfile;
   arcPosition: number;
@@ -125,9 +148,18 @@ export interface DjBrainOptions {
   history?: JoinHistoryLog;
   /** The night's arc shape; "classic" unless chosen otherwise. */
   arcShape?: ArcShapeName;
+  /**
+   * The seed the selection lottery's coordinates hang from (R5).
+   * A fixed default keeps a replayed call sequence reproducible;
+   * a caller wanting per-occasion streams of its own injects one.
+   */
+  sessionSeed?: string;
   /** Clock, injectable for tests. */
   now?: () => number;
 }
+
+/** The default selection seed: a brain replays its picks exactly. */
+export const DEFAULT_SESSION_SEED = "linerave";
 
 export class DjBrain {
   readonly signals: SignalBank;
@@ -135,6 +167,11 @@ export class DjBrain {
   private readonly history: JoinHistoryLog;
   private arcShapeName: ArcShapeName;
   private readonly now: () => number;
+  private readonly sessionSeed: string;
+  /** Sets begun on this brain (the seed's set coordinate). */
+  private setIndex = 0;
+  /** Selections made in the current set (the decision coordinate). */
+  private decisionIndex = 0;
 
   constructor(options: DjBrainOptions = {}) {
     this.now = options.now ?? (() => Date.now());
@@ -142,12 +179,17 @@ export class DjBrain {
     this.baseProfile = options.profile ?? STANDARD_PROFILE;
     this.history = options.history ?? joinHistory;
     this.arcShapeName = options.arcShape ?? "classic";
+    this.sessionSeed = options.sessionSeed ?? DEFAULT_SESSION_SEED;
   }
 
   /** A new set: history loaded, yesterday's signals gone. */
   async beginSet(): Promise<void> {
     await this.history.load();
     this.signals.clear();
+    // A new set is a new seed coordinate: the same playlist on a
+    // later set of the same session draws a different stream.
+    this.setIndex += 1;
+    this.decisionIndex = 0;
   }
 
   get profile(): DecisionProfile {
@@ -219,10 +261,35 @@ export class DjBrain {
       profile,
     );
     if (!scored.pick) return null;
+    // R5: the performed candidate is SAMPLED from the near-equal
+    // band (blueprint §16 softmax, §15-shaped), not taken from
+    // scoring's deterministic pick — that pick is kept in the
+    // record as the reference the sample is audited against. The
+    // draw's stream is a pure function of the session coordinates
+    // (seed, set, decision), so a replayed session reproduces its
+    // picks exactly and a different set draws differently.
+    this.decisionIndex += 1;
+    const seed = decisionSeed(
+      this.sessionSeed,
+      this.setIndex,
+      this.decisionIndex,
+    );
+    const { chosen, record } = selectFromBand(scored.band, {
+      profile,
+      history: this.history.all(),
+      random: randomForDecision(
+        this.sessionSeed,
+        this.setIndex,
+        this.decisionIndex,
+      ),
+      seed,
+      scorerPick: scored.pick,
+    });
     return {
-      recipe: scored.pick.candidate.recipe,
-      candidate: scored.pick.candidate,
-      scored: scored.pick,
+      recipe: chosen.candidate.recipe,
+      candidate: chosen.candidate,
+      scored: chosen,
+      selection: record,
       profile,
       arcPosition,
       arcTargetEnergy,

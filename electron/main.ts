@@ -288,8 +288,11 @@ function createWindow() {
     minWidth: MIN_WINDOW_WIDTH,
     minHeight: MIN_WINDOW_HEIGHT,
     frame: false,
-    // LINERAVE DIAGNOSTIC (temporary): a solid window instead of upstream's
+    // LINERAVE, deliberate: a solid window instead of upstream's
     // transparent one, so a failure to paint is visible, never a ghost.
+    // (Originally a launch-era diagnostic; kept as the settled behaviour
+    // — the interface's glass lives inside the window, not in the OS
+    // window's transparency.)
     transparent: false,
     backgroundColor: "#0e0e13",
     hasShadow: true,
@@ -514,12 +517,13 @@ function createWindow() {
       defaultRendererDist: RENDERER_DIST,
     });
     bundleManager.setMainWindow(mainWindow);
-    // LINERAVE DIAGNOSTIC (temporary): upstream awaits a network update
-    // check (updateBeforeLaunch) before loading the first screen, so a
-    // hanging fetch can leave the window blank forever. This build logs
-    // what the bundle system would have served, then skips that gate and
-    // loads the built-in screen directly, logging every step the
-    // renderer takes so a silent failure names its own step.
+    // LINERAVE, deliberate: upstream awaits a network update check
+    // (updateBeforeLaunch) before loading the first screen, so a hanging
+    // fetch can leave the window blank forever — and upstream's OTA
+    // bundle channel is disabled for Linerave in any case (SA-1). This
+    // build therefore skips that gate: it logs what the bundle system
+    // would have served, then loads the built-in screen (or our own
+    // signed channel's staged frontend, resolved below) directly.
     slog(
       `bundle would serve: ${bundleManager.getEffectiveIndexPath()} (userData: ${app.getPath("userData")})`,
     );
@@ -2149,7 +2153,9 @@ if (!gotTheLock) {
 
       // re-check for installer updates while the app stays open, so a
       // release published during a long session is still picked up —
-      // every 20 minutes (user ruling, 2026-11-03)
+      // re-check every 6 hours (user ruling, 2026-11-03 — the
+      // 20-minute cadence and its notice were tried and reversed
+      // the same day)
       setInterval(() => {
         autoUpdater.checkForUpdates().catch(() => {});
       }, RELEASE_UPDATE_CHECK_INTERVAL_MS);

@@ -1284,7 +1284,6 @@
     "downloaded_title": "Update downloaded",
     "downloaded_desc": "Restart Linerave to install version {version}.",
     "install_button": "Install",
-    "restart_button": "Restart to update",
     "error_title": "Update failed"
   },
   "track_search": {

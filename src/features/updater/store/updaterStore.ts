@@ -1,22 +1,6 @@
 import { create } from "zustand";
 import type { UpdateInfo, UpdateDownloadProgress } from "@/../electron/preload";
 
-export const UPDATE_NOTICED_VERSION_KEY = "linerave_update_noticed_v1";
-
-export function readNoticedUpdateVersion(): string | null {
-  try {
-    return localStorage.getItem(UPDATE_NOTICED_VERSION_KEY);
-  } catch {
-    return null;
-  }
-}
-
-export function persistNoticedUpdateVersion(version: string): void {
-  try {
-    localStorage.setItem(UPDATE_NOTICED_VERSION_KEY, version);
-  } catch {}
-}
-
 export type UpdaterStatus =
   "idle" | "checking" | "available" | "downloading" | "downloaded" | "error";
 
@@ -28,8 +12,6 @@ export interface UpdaterState {
   error: string | null;
   dismissedVersion: string | null;
   isTestMode: boolean;
-  noticedVersion: string | null;
-  noticeVersion: string | null;
 
   // actions
   checkForUpdates: () => Promise<void>;
@@ -37,7 +19,6 @@ export interface UpdaterState {
   openDialog: () => void;
   startDownload: () => Promise<void>;
   installUpdate: () => Promise<void>;
-  dismissNotice: () => void;
   triggerTestUpdate: () => void;
   reset: () => void;
   initUpdaterListeners: () => () => void;
@@ -53,8 +34,6 @@ export const useUpdaterStore = create<UpdaterState>((set, get) => ({
   error: null,
   dismissedVersion: null,
   isTestMode: false,
-  noticedVersion: readNoticedUpdateVersion(),
-  noticeVersion: null,
 
   checkForUpdates: async () => {
     const electron = window.linerElectron;
@@ -157,12 +136,7 @@ export const useUpdaterStore = create<UpdaterState>((set, get) => ({
     }
   },
 
-  dismissNotice: () => {
-    set({ noticeVersion: null });
-  },
-
   installUpdate: async () => {
-    set({ noticeVersion: null });
     const electron = window.linerElectron;
     if (!electron?.quitAndInstall) {
       if (get().isTestMode) {
@@ -190,7 +164,6 @@ export const useUpdaterStore = create<UpdaterState>((set, get) => ({
       isDialogOpen: false,
       downloadProgress: null,
       error: null,
-      noticeVersion: null,
     });
   },
 
@@ -223,10 +196,6 @@ export const useUpdaterStore = create<UpdaterState>((set, get) => ({
           ...get().updateInfo,
         },
       });
-      if (info.version && info.version !== get().noticedVersion) {
-        persistNoticedUpdateVersion(info.version);
-        set({ noticedVersion: info.version, noticeVersion: info.version });
-      }
     });
 
     const unsubError = electron.onUpdateError?.((err) => {
