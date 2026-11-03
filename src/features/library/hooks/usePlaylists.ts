@@ -8,6 +8,7 @@ import {
   type ApiUserPlaylistItem,
 } from "@/shared/api";
 import { queryCache } from "@/shared/cache/queryCache";
+import { recordPlaylistTracks } from "@/features/genres/trackGenres";
 import type { Track } from "@/shared/types";
 
 export interface LibraryPlaylistSummary {
@@ -314,6 +315,13 @@ export function usePlaylist(id: string | null) {
           response.durationMs,
           response.partial,
         );
+        // Playlist Genre membership warms from every fetched page: a
+        // partial page only adds, a complete one replaces (S5-0).
+        recordPlaylistTracks(
+          detail.id,
+          detail.tracks.map((track) => track.id),
+          !response.partial,
+        );
         setData(detail);
         setIsLoading(false);
       } catch {}
@@ -336,6 +344,12 @@ export function usePlaylist(id: string | null) {
           response.trackCount,
           response.durationMs,
           false,
+        );
+        // The full detail fetch is a complete membership record (S5-0).
+        recordPlaylistTracks(
+          detail.id,
+          detail.tracks.map((track) => track.id),
+          true,
         );
         rememberCovers(id, detail, response.playlist.updatedAt);
         queryCache.set(cacheKey, detail);

@@ -49,6 +49,8 @@ import DropdownMenu from "@/shared/ui/DropdownMenu";
 import SongCardWithMenu from "@/features/player/ui/SongCardWithMenu";
 import CoverImage from "@/features/covers/ui/CoverImage";
 import { useModalStore } from "../store/modalStore";
+import PlaylistGenreEditor from "./PlaylistGenreEditor";
+import { LIKED_PLAYLIST_ID } from "@/features/genres/playlistGenreStore";
 import {
   usePlaylist,
   usePlaylistsList,
@@ -893,6 +895,14 @@ function LibraryPlaylistContent() {
                     </>
                   }
                 />
+                {isLikesMode || decodedId ? (
+                  <PlaylistGenreEditor
+                    playlistId={
+                      isLikesMode ? LIKED_PLAYLIST_ID : (decodedId as string)
+                    }
+                    trackIds={currentTracks.map((track) => track.id)}
+                  />
+                ) : null}
               </div>
 
               <ListPanel>

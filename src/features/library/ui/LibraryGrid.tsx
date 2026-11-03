@@ -170,6 +170,7 @@ function LibraryItemCard({ item }: { item: LibraryItemViewModel }) {
       onPointerDown={link.prefetch}
       badge={<SourceBadge source={item.source} />}
       menuItems={menuItems}
+      playlistId={item.kind === "playlist" ? item.id : undefined}
     />
   );
 }

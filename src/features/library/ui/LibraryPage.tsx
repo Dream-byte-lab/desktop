@@ -28,6 +28,13 @@ import {
   FAILED_PLAYLIST_TITLE,
   failedPlaylist,
 } from "../services/import/failures/failedPlaylist";
+import {
+  LIKED_PLAYLIST_ID,
+  LOCAL_PLAYLIST_ID,
+  labelsForPlaylist,
+  normalizeGenreLabel,
+  useAllInUseGenreLabels,
+} from "@/features/genres/playlistGenreStore";
 import { PlaylistFill, WifiOffLine } from "@mingcute/react";
 import { useOfflineModeStore } from "@/features/connectivity";
 import { goOnline } from "@/features/connectivity/engine/offlineController";
@@ -247,6 +254,13 @@ function OnlineLibraryPage() {
     localStorage.setItem("liner_library_view_mode", newMode);
   }, []);
 
+  // Playlist Genre label filter (S5-0): the labels in use across the
+  // library, and the owner's current selection. Playlists only — a
+  // label is a playlist property.
+  const availableGenreLabels = useAllInUseGenreLabels();
+  const [selectedGenreLabels, setSelectedGenreLabels] = useState<string[]>([]);
+  const genreFilterActive = selectedGenreLabels.length > 0;
+
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const timeoutRef = useRef<number | null>(null);
   const observerRef = useRef<IntersectionObserver | null>(null);
@@ -349,7 +363,17 @@ function OnlineLibraryPage() {
             return haystack.includes(debouncedQuery);
           });
 
-    return sortByRecent(filtered);
+    if (!genreFilterActive) return sortByRecent(filtered);
+    const selected = new Set(selectedGenreLabels.map(normalizeGenreLabel));
+    return sortByRecent(
+      filtered.filter(
+        (item) =>
+          item.kind === "playlist" &&
+          labelsForPlaylist(item.id).some((label) =>
+            selected.has(normalizeGenreLabel(label)),
+          ),
+      ),
+    );
   }, [
     activeTab,
     debouncedQuery,
@@ -359,6 +383,9 @@ function OnlineLibraryPage() {
     albumItems,
     youtubeAlbumItems,
     artistItems,
+    genreFilterActive,
+    selectedGenreLabels,
+    availableGenreLabels,
   ]);
 
   const visibleItems = useMemo(
@@ -465,6 +492,70 @@ function OnlineLibraryPage() {
       importJob?.status === "finalizing" ||
       importJob?.status === "awaiting_decision");
 
+  // The cards pinned ahead of the playlist grid. While a Playlist
+  // Genre filter is active, only the labellable collections whose
+  // sentinel carries a selected label stay pinned (Liked Songs, local
+  // files); the rest are not labelled playlists and step aside.
+  const genrePrependMatches = (playlistId: string) =>
+    labelsForPlaylist(playlistId).some((label) =>
+      selectedGenreLabels.some(
+        (selected) =>
+          normalizeGenreLabel(selected) === normalizeGenreLabel(label),
+      ),
+    );
+  const libraryPrependNodes: React.ReactNode[] | undefined = !showsPlaylists
+    ? undefined
+    : genreFilterActive
+      ? [
+          ...(genrePrependMatches(LIKED_PLAYLIST_ID)
+            ? [
+                <LikesPlaylistCard
+                  key="likes-playlist-card"
+                  count={likedCount}
+                  isLoading={likedCountLoading}
+                  viewMode={viewMode}
+                  onClick={() => navigate("/library/playlist?id=likes")}
+                />,
+              ]
+            : []),
+          ...(genrePrependMatches(LOCAL_PLAYLIST_ID)
+            ? [<LocalFilesCard key="local-files-card" viewMode={viewMode} />]
+            : []),
+        ]
+      : hasSearchQuery
+        ? undefined
+        : [
+            <LikesPlaylistCard
+              key="likes-playlist-card"
+              count={likedCount}
+              isLoading={likedCountLoading}
+              viewMode={viewMode}
+              onClick={() => navigate("/library/playlist?id=likes")}
+            />,
+            ...(showCachedSongs
+              ? [
+                  <CachedSongsCard
+                    key="cached-songs-card"
+                    viewMode={viewMode}
+                  />,
+                ]
+              : []),
+            <LocalFilesCard key="local-files-card" viewMode={viewMode} />,
+            <FailedPlaylistCard
+              key="failed-playlist-card"
+              viewMode={viewMode}
+            />,
+            ...(isImporting && importJob
+              ? [
+                  <ImportingPlaylistCard
+                    key={`importing-playlist-${importJob.id}`}
+                    job={importJob}
+                    viewMode={viewMode}
+                  />,
+                ]
+              : []),
+          ];
+
   return (
     <div className="relative h-full w-full overflow-hidden">
       <div
@@ -495,6 +586,15 @@ function OnlineLibraryPage() {
               onCreatePlaylist={
                 showsPlaylists ? () => openCreatePlaylist() : undefined
               }
+              genreFilter={
+                showsPlaylists
+                  ? {
+                      labels: availableGenreLabels,
+                      selected: selectedGenreLabels,
+                      onChange: setSelectedGenreLabels,
+                    }
+                  : undefined
+              }
             />
           </div>
         </div>
@@ -520,50 +620,11 @@ function OnlineLibraryPage() {
                   items={visibleItems}
                   loadingMore={activeState.loadingMore}
                   hasMore={hasMore}
-                  hasSearchQuery={hasSearchQuery}
+                  hasSearchQuery={hasSearchQuery || genreFilterActive}
                   activeTab={activeTab}
                   viewMode={viewMode}
                   sentinelRef={sentinelRef}
-                  prependNodes={
-                    showsPlaylists && !hasSearchQuery
-                      ? [
-                          <LikesPlaylistCard
-                            key="likes-playlist-card"
-                            count={likedCount}
-                            isLoading={likedCountLoading}
-                            viewMode={viewMode}
-                            onClick={() =>
-                              navigate("/library/playlist?id=likes")
-                            }
-                          />,
-                          ...(showCachedSongs
-                            ? [
-                                <CachedSongsCard
-                                  key="cached-songs-card"
-                                  viewMode={viewMode}
-                                />,
-                              ]
-                            : []),
-                          <LocalFilesCard
-                            key="local-files-card"
-                            viewMode={viewMode}
-                          />,
-                          <FailedPlaylistCard
-                            key="failed-playlist-card"
-                            viewMode={viewMode}
-                          />,
-                          ...(isImporting && importJob
-                            ? [
-                                <ImportingPlaylistCard
-                                  key={`importing-playlist-${importJob.id}`}
-                                  job={importJob}
-                                  viewMode={viewMode}
-                                />,
-                              ]
-                            : []),
-                        ]
-                      : undefined
-                  }
+                  prependNodes={libraryPrependNodes}
                 />
               </motion.div>
             </AnimatePresence>

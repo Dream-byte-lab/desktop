@@ -286,6 +286,19 @@
       "empty_subtitle": "Liked songs are downloaded in the background while you're online."
     }
   },
+  "genres": {
+    "playlist_genre": "Playlist Genre",
+    "genre": "Genre",
+    "edit_labels": "Edit labels",
+    "add_labels": "Add labels",
+    "add_label_placeholder": "New label…",
+    "add": "Add",
+    "done": "Done",
+    "your_labels": "Your labels",
+    "remove_label": "Remove {label}",
+    "filter_by_label": "Filter by playlist genre",
+    "labels_local_note": "Labels live on this device only — they are not synced."
+  },
   "login": {
     "welcome_back": "Welcome back",
     "sign_in_to_account": "Sign in to your account",

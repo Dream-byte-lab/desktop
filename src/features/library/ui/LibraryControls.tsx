@@ -16,6 +16,13 @@ import {
 import type { LibraryTab, LibraryViewMode } from "../types";
 import { useTranslation } from "@/languages";
 
+export interface GenreFilterControl {
+  /** Every Playlist Genre label in use in the library. */
+  labels: string[];
+  selected: string[];
+  onChange: (selected: string[]) => void;
+}
+
 interface LibraryControlsProps {
   activeTab: LibraryTab;
   query: string;
@@ -24,6 +31,8 @@ interface LibraryControlsProps {
   onViewModeChange: (mode: LibraryViewMode) => void;
   /** shown only when provided (playlist tabs) */
   onCreatePlaylist?: () => void;
+  /** Playlist Genre label filter; shown when provided and labels exist */
+  genreFilter?: GenreFilterControl;
 }
 
 export default function LibraryControls({
@@ -33,6 +42,7 @@ export default function LibraryControls({
   viewMode,
   onViewModeChange,
   onCreatePlaylist,
+  genreFilter,
 }: LibraryControlsProps) {
   const { t } = useTranslation();
 
@@ -125,6 +135,40 @@ export default function LibraryControls({
           <span>{t("library.create_playlist")}</span>
         </Button>
       )}
+      {genreFilter && genreFilter.labels.length > 0 ? (
+        <div
+          role="group"
+          aria-label={t("genres.filter_by_label")}
+          className="flex basis-full flex-wrap items-center gap-[6px]"
+        >
+          {genreFilter.labels.map((label) => {
+            const active = genreFilter.selected.includes(label);
+            return (
+              <button
+                key={label}
+                type="button"
+                aria-pressed={active}
+                onClick={() =>
+                  genreFilter.onChange(
+                    active
+                      ? genreFilter.selected.filter(
+                          (selected) => selected !== label,
+                        )
+                      : [...genreFilter.selected, label],
+                  )
+                }
+                className={`inline-flex h-[26px] cursor-pointer items-center rounded-[9px] px-[11px] text-caption font-[400] select-none transition-colors ${
+                  active
+                    ? "border-0 bg-btn-primary-bg text-btn-primary-text"
+                    : `border-0 text-text-primary ${HERO_GLASS_CLASS} hover:bg-black/[0.09] dark:hover:bg-white/[0.16]`
+                }`}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
     </div>
   );
 }

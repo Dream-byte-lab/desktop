@@ -1,4 +1,5 @@
 import type { Track } from "../../../shared/types/track";
+import { labelsForTrack } from "../../genres/trackGenres";
 import { applyEvent, emptyProfile, type TasteProfile } from "./tasteProfile";
 
 // The taste tracker: the living profile for this listener. The DJ
@@ -48,9 +49,18 @@ export function recordListen(report: {
   const { track, playedRatio, completed } = report;
   const repeated = heardTracks.has(track.id) && playedRatio >= 0.5;
   heardTracks.add(track.id);
+  // The track's labels, resolved at listen time (Step 5, S5-0): the
+  // Playlist Genres it inherits from its playlists plus any basic
+  // Genres source enrichment knows. This is the first real feed into
+  // the profile's tags map — the slot existed, unfed, since the
+  // profile was written. An unlabelled track passes no tags, exactly
+  // as before.
+  const labels = labelsForTrack(track.id);
+  const tags = [...labels.playlistGenres, ...labels.genres];
   profile = applyEvent(profile, {
     artist: track.artists,
     trackId: track.id,
+    ...(tags.length > 0 ? { tags } : {}),
     playedRatio,
     completed,
     repeated,

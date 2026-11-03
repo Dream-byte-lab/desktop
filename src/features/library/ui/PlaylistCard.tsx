@@ -5,6 +5,7 @@ import DropdownMenu from "@/shared/ui/DropdownMenu";
 import type { DropdownMenuItem } from "@/shared/ui/DropdownMenu";
 import type { PlaylistVariant } from "../types";
 import CoverImage from "@/features/covers/ui/CoverImage";
+import { PlaylistGenreChips } from "./PlaylistGenreEditor";
 
 export interface PlaylistCardProps {
   title: string;
@@ -19,6 +20,8 @@ export interface PlaylistCardProps {
   badge?: ReactNode;
   className?: string;
   menuItems?: DropdownMenuItem[];
+  /** When set, the playlist's Playlist Genre chips show under the title. */
+  playlistId?: string;
 }
 
 function CoverCollage({ urls, title }: { urls: string[]; title: string }) {
@@ -78,6 +81,7 @@ function PlaylistCard({
   badge,
   className = "",
   menuItems,
+  playlistId,
 }: PlaylistCardProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuPosition, setMenuPosition] = useState<{
@@ -148,6 +152,9 @@ function PlaylistCard({
           {badge}
           <span className="truncate">{author}</span>
         </span>
+        {playlistId ? (
+          <PlaylistGenreChips playlistId={playlistId} limit={2} />
+        ) : null}
       </div>
     </>
   );

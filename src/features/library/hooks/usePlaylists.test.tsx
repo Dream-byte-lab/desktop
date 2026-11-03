@@ -203,6 +203,46 @@ describe("usePlaylist", () => {
   });
 });
 
+describe("usePlaylist warms the Playlist Genre membership index (S5-0)", () => {
+  it("tracks inherit the playlist's labels only after the playlist is loaded", async () => {
+    const { playlistGenreStore } =
+      await import("@/features/genres/playlistGenreStore");
+    const { labelsForTrack, playlistMembership } =
+      await import("@/features/genres/trackGenres");
+    playlistGenreStore.clear();
+    playlistMembership.clear();
+    playlistGenreStore.addLabel("pl1", "Warmup Label");
+    // the label exists but no contents have been loaded: unknown, not none
+    expect(labelsForTrack("t0").playlistGenres).toEqual([]);
+
+    (api.readUserPlaylist as any).mockResolvedValue({
+      notModified: false,
+      etag: '"pl-pl1-3"',
+      partial: false,
+      trackCount: 3,
+      durationMs: 3000,
+      playlist,
+      items: items(3),
+    });
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    function Probe() {
+      usePlaylist("pl1");
+      return null;
+    }
+    act(() => root.render(<Probe />));
+    await flush();
+
+    expect(labelsForTrack("t0").playlistGenres).toEqual(["Warmup Label"]);
+    expect(labelsForTrack("t2").playlistGenres).toEqual(["Warmup Label"]);
+    act(() => root.unmount());
+    document.body.removeChild(container);
+    playlistGenreStore.clear();
+    playlistMembership.clear();
+  });
+});
+
 describe("usePlaylistsList", () => {
   it("takes track counts and covers from the list without fetching each playlist", async () => {
     (api.listPlaylists as any).mockResolvedValue({
