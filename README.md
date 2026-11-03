@@ -1,50 +1,42 @@
 <div align="center">
 
-# Liner
+# Linerave
 
-**Modern desktop music streaming player with syllable-synced lyrics and reactive dynamic visuals.**
+**A fork of [Liner](https://github.com/tryliner/desktop) with liveRave — an autonomous DJ engine that performs your playlists: beatmatched, phrase-aligned blends, jog moves, scratches and effects, on a virtual DDJ-REV7 stage.**
 
-[![CI](https://img.shields.io/github/actions/workflow/status/tryliner/desktop/ci.yml?branch=main&style=flat-square&label=CI&labelColor=0d0d10&logo=githubactions&logoColor=white)](https://github.com/tryliner/desktop/actions/workflows/ci.yml) [![Release](https://img.shields.io/github/v/release/tryliner/desktop?style=flat-square&label=release&labelColor=0d0d10&color=7a4dff)](https://github.com/tryliner/desktop/releases/latest) [![Downloads](https://img.shields.io/github/downloads/tryliner/desktop/total?style=flat-square&label=downloads&labelColor=0d0d10&color=4d71ff)](https://github.com/tryliner/desktop/releases) [![Platforms](https://img.shields.io/badge/platforms-Windows%20·%20macOS%20·%20Linux-2ec4b6?style=flat-square&labelColor=0d0d10)](https://github.com/tryliner/desktop/releases/latest) [![Discussions](https://img.shields.io/github/discussions/tryliner/desktop?style=flat-square&label=discussions&labelColor=0d0d10&color=3ddc97)](https://github.com/tryliner/desktop/discussions) [![License](https://img.shields.io/badge/license-source--available-534dff?style=flat-square&labelColor=0d0d10)](./LICENSE)
+[![CI](https://img.shields.io/github/actions/workflow/status/Dream-byte-lab/desktop/ci.yml?branch=main&style=flat-square&label=CI&labelColor=0d0d10&logo=githubactions&logoColor=white)](https://github.com/Dream-byte-lab/desktop/actions/workflows/ci.yml) [![Platforms](https://img.shields.io/badge/platforms-Windows%20·%20Linux-2ec4b6?style=flat-square&labelColor=0d0d10)](#building) [![License](https://img.shields.io/badge/license-source--available-534dff?style=flat-square&labelColor=0d0d10)](./LICENSE)
 
-[Preview](#preview) • [Architecture](#architecture) • [Getting Started](#getting-started) • [Building](#building) • [Docs](#docs) • [Contributing](#contributing) • [License](#license)
+[What this fork adds](#what-this-fork-adds) • [Preview](#preview) • [Architecture](#architecture) • [Getting Started](#getting-started) • [Building](#building) • [Docs](#docs) • [License](#license)
 
-<br/>
-
-<img src="./.github/assets/album.png" alt="Liner Album Page" width="100%" />
-
-</div>
-
----
-
-## Preview
-
-<div align="center">
-  <table>
-    <tr>
-      <td align="center" width="50%">
-        <img src="./.github/assets/library.png" alt="Liner Library" />
-        <br/>
-        <sub><b>Library</b></sub>
-      </td>
-      <td align="center" width="50%">
-        <img src="./.github/assets/lyrics.png" alt="Liner Fullscreen Lyrics" />
-        <br/>
-        <sub><b>Fullscreen lyrics</b></sub>
-      </td>
-    </tr>
-  </table>
 </div>
 
 ---
 
 > [!NOTE]
-> Liner client connects to the official Liner API backend for music catalog, streaming playback, and synchronized lyrics.
+> Linerave is a client of the official Liner API backend for music catalog, streaming playback, and synchronized lyrics — the same service the upstream app uses. This fork changes the client, not the service.
+
+---
+
+## What this fork adds
+
+Everything below is additive. With the DJ switched off, playback is the upstream player, untouched.
+
+- **liveRave, the DJ engine.** Turn the DJ on and press play: liveRave analyses each track itself (tempo, phrase structure, key, energy contour, vocals), chooses the order inside *your* playlist, and performs the joins — beatmatched, phrase-aligned blends with EQ and bass swaps, loops, jog moves (nudges, brakes, vinyl stops, spinbacks), scratches (baby, chirp, transformer, flare) and effects (reverb, delay, spiral, flanger, phaser, saturation, gating, slip rolls). Each join is a recipe chosen for that pair of songs from the measurements, never a timed crossfade.
+- **DJ personalities and sliders.** Seven personalities — Club, Battle, House, Open Format, Experimental, Radio — plus a personality-free autonomous mode, bend how the engine decides; eight sliders (intensity, creativity, scratching, effects, transition complexity, genre flexibility, energy progression, track-selection freedom) bend them further. At the default settings the engine behaves exactly as the un-personalised build.
+- **The DJ stage.** A performance surface modelled on the real DDJ-REV7's layout: two decks, jog wheels that turn at a truthful 33 rpm, channel strips, crossfader, hot-cue pads and a live activity strip that narrates what the DJ just did and why. Its manual controls are alive alongside the autonomous DJ; a light Simple view sits on top of the same decks for smaller screens.
+- **Parties.** Host a session and guests join by QR code to request songs — from the whole catalogue, not just the night's playlist — and react live. The decks stay the host's.
+- **A personal Home and For You.** Home is assembled only from your own listening — no global charts. Daily Mixes are generated on your device from your taste profile, and **Playlist Genre** — your own labels for your playlists, stored locally — is respected by the DJ's choices, the feed and the library alike.
+- **Player comforts.** Volume boost up to 500% behind a limiter, playback that keeps going when the screen turns off, and an updater that checks every 20 minutes and tells you once, quietly, when a restart will apply a new version.
+
+## Preview
+
+*Screenshots are being refreshed. The interface has been redesigned since the upstream captures were taken — a deep-indigo design system from the app's own icon, a frosted inset sidebar that collapses to a rail, a capsule player, the DJ stage and the For You feed — and this section will show the current build rather than pictures of a different app.*
 
 ---
 
 ## Architecture
 
-The renderer follows [Feature-Sliced Design](https://feature-sliced.design): imports only point down the layers (`app` → `widgets` → `features` → `entities` → `shared`).
+The renderer follows [Feature-Sliced Design](https://feature-sliced.design): imports only point down the layers (`app` → `widgets` → `features` → `entities` → `shared`). The fork's additions live mainly in `src/features/mixer/` (the two-deck engine, the DJ brain, the stage) and `electron/liverave/` (the party server).
 
 ```
 liner/desktop/
@@ -85,7 +77,7 @@ liner/desktop/
 ### Setup
 
 ```bash
-git clone https://github.com/tryliner/desktop.git
+git clone https://github.com/Dream-byte-lab/desktop.git
 cd desktop
 pnpm install
 ```
@@ -128,6 +120,8 @@ pnpm electron:build:mac
 
 The macOS build produces `x64` (Intel) and `arm64` (Apple Silicon) packages. To build only one, add `--arm64` or `--x64`. Packages are placed in the `release/` directory.
 
+Release installers for this fork are currently built for Windows (ARM64 + x64) and Linux (AppImage) and published to a private channel for the author's own devices; macOS is not in the release channel at the moment.
+
 ---
 
 ## Docs
@@ -142,7 +136,7 @@ The macOS build produces `x64` (Intel) and `arm64` (Apple Silicon) packages. To 
 
 ## Contributing
 
-Bug fixes, small features, translations and docs fixes are welcome. Read [CONTRIBUTING.md](./CONTRIBUTING.md) and [AGENTS.md](./AGENTS.md) before you open a pull request, and report bugs with the [issue forms](https://github.com/tryliner/desktop/issues/new/choose). Questions and ideas go to [Discussions](https://github.com/tryliner/desktop/discussions), security issues to [SECURITY.md](./SECURITY.md). The [license](./LICENSE) limits what a fork is allowed to do.
+This is a personal fork, maintained for its author's own use, and it is not accepting contributions. The upstream project — where bug reports, discussions and contributions belong — is [tryliner/desktop](https://github.com/tryliner/desktop). The [license](./LICENSE) limits what a fork is allowed to do, and this fork stays inside it: personal use and local builds, no commercial distribution, no public competing fork.
 
 ---
 
