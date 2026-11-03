@@ -13,6 +13,11 @@ import {
   type VocalActivityCurve,
   type VocalRange,
 } from "./detectVocals";
+import {
+  resolveProfile,
+  STANDARD_PROFILE,
+  type DecisionProfile,
+} from "./decisionProfile";
 import { keyCompatibility, type KeyCompatibility } from "./keyCompatibility";
 import {
   flatCurve,
@@ -288,42 +293,25 @@ export function planTransitionWithReferee(
 //    recipe carries a LOOP block that extends the outgoing instead
 //    of shrinking the join.
 //
-// The bounds below are the author's interim constants. S5-3's
-// decisionProfile will own them; they live here, named and exported,
-// so nothing about today's judgement is hidden in arithmetic.
+// The author's bounds are owned by the decision profile
+// (decisionProfile.ts, Step 5 slice S5-3): every judgement constant
+// below is read from the profile threaded through the request, and
+// the standard profile carries exactly the values this author
+// shipped with in S5-2 — the move changed their home, not their
+// values. Authoring under a different profile is how candidates.ts
+// asks the same pair for honestly different recipes.
 // =====================================================================
-
-export const AUTHOR_BOUNDS = {
-  /** Largest |rate − 1| the author will beatmatch across. */
-  maxBeatmatchStretch: 0.06,
-  /** Below this tempo-confidence, a tempo is a guess: no beatmatch. */
-  minTempoConfidence: 0.2,
-  /** Below this whole-grid confidence, grid anchors are not trusted. */
-  minGridConfidence: 0.15,
-  /** Graded vocal-overlap integral above which two voices are clashing. */
-  vocalClashIntegral: 0.4,
-  /** Mean confidence below which vocal evidence is "uncertain". */
-  vocalTrustConfidence: 0.35,
-  /** A distant key caps blends at this many beats. */
-  distantKeyMaxBlendBeats: 8,
-  /** Minimum incoming drop strength for a drop-cut to be offered. */
-  minDropCutStrength: 1.5,
-  /** The blend may not start sooner than this many beats from now. */
-  minLeadBeats: 8,
-  standardBlendBeats: 16,
-  longBlendBeats: 24,
-  minBlendBeats: MIN_BLEND_BEATS,
-  /** Rate-return runway clamps, in incoming beats. */
-  minRateReturnBeats: 4,
-  maxRateReturnBeats: 32,
-  defaultRateReturnBeats: 8,
-} as const;
 
 export interface RecipeRequest {
   outgoing: TrackAnalysis;
   /** Where the outgoing track is playing right now, in track seconds. */
   outgoingPositionSec: number;
   incoming: TrackAnalysis;
+  /**
+   * The judgement profile to author under. Absent = the standard
+   * profile (the pre-S5-3 behaviour, byte for byte).
+   */
+  profile?: DecisionProfile;
 }
 
 // ---------- vocal evidence: graded activity, confidence, corroboration
@@ -696,10 +684,11 @@ function rebuildAutomation(
  * and only keeps the shortening if it fully clears the clash — it
  * does not chase a possibly-phantom voice down the ladder.
  */
-export function applyVocalReferee(
+function refereeWithProfile(
   recipe: TransitionRecipe,
   outgoing: TrackAnalysis,
   incoming: TrackAnalysis,
+  profile: DecisionProfile,
 ): TransitionRecipe {
   if (recipe.preset !== "beatmatched-fade") return recipe;
   const { startAMs, startBMs, durationMs, rateB } = recipe.overlap;
@@ -719,7 +708,7 @@ export function applyVocalReferee(
 
   const initial = read(recipe);
   const trusted =
-    initial.graded && initial.trust >= AUTHOR_BOUNDS.vocalTrustConfidence;
+    initial.graded && initial.trust >= profile.vocalTrustConfidence;
   const withEvidence = (
     candidate: TransitionRecipe,
     reading: VocalWindowReading,
@@ -734,7 +723,7 @@ export function applyVocalReferee(
     },
   });
 
-  if (initial.integral <= AUTHOR_BOUNDS.vocalClashIntegral) {
+  if (initial.integral <= profile.vocalClashIntegral) {
     return withEvidence(recipe, initial, false);
   }
 
@@ -766,7 +755,7 @@ export function applyVocalReferee(
       automation: rebuildAutomation(recipe, newDurationMs),
     };
     const reading = read(candidate);
-    if (reading.integral <= AUTHOR_BOUNDS.vocalClashIntegral) {
+    if (reading.integral <= profile.vocalClashIntegral) {
       return withEvidence(candidate, reading, true);
     }
     shortest = candidate;
@@ -784,9 +773,27 @@ export function applyVocalReferee(
   return withEvidence(recipe, initial, false);
 }
 
+/**
+ * The referee under the standard profile — the public seam the
+ * executor re-runs at the decks. Performance-time discipline is
+ * deliberately NOT profile-relative: whatever temperament authored
+ * a recipe, the decks re-check it against the standard bounds, so a
+ * join can only ever be made safer than written, never bolder.
+ */
+export function applyVocalReferee(
+  recipe: TransitionRecipe,
+  outgoing: TrackAnalysis,
+  incoming: TrackAnalysis,
+): TransitionRecipe {
+  return refereeWithProfile(recipe, outgoing, incoming, STANDARD_PROFILE);
+}
+
 // ---------- entry / exit choice
 
-function chooseEntry(incoming: TrackAnalysis): {
+export function chooseEntry(
+  incoming: TrackAnalysis,
+  profile: DecisionProfile = STANDARD_PROFILE,
+): {
   beat: number;
   reason: string;
 } {
@@ -798,7 +805,7 @@ function chooseEntry(incoming: TrackAnalysis): {
   // leaves a usable intro before it and a runway after it wins.
   for (const drop of incoming.drops) {
     if (
-      drop.beat >= AUTHOR_BOUNDS.minLeadBeats &&
+      drop.beat >= profile.minLeadBeats &&
       timeAtBeat(map, drop.beat) <=
         map.durationSec - 4 * secondsPerBeat(map.bpm)
     ) {
@@ -892,15 +899,19 @@ function dottedEighthSec(bpm: number): number {
   return Math.min(1.2, Math.max(0.08, 0.75 * (60 / bpm)));
 }
 
-function rateReturnMs(incoming: TrackAnalysis, entryBeat: number): number {
+function rateReturnMs(
+  incoming: TrackAnalysis,
+  entryBeat: number,
+  profile: DecisionProfile,
+): number {
   const map = incoming.beatMap;
   const next = (incoming.sections ?? []).find((s) => s.startBeat > entryBeat);
   let beats = next
     ? next.startBeat - entryBeat
-    : AUTHOR_BOUNDS.defaultRateReturnBeats;
+    : profile.defaultRateReturnBeats;
   beats = Math.min(
-    AUTHOR_BOUNDS.maxRateReturnBeats,
-    Math.max(AUTHOR_BOUNDS.minRateReturnBeats, beats),
+    profile.maxRateReturnBeats,
+    Math.max(profile.minRateReturnBeats, beats),
   );
   return Math.max(
     0,
@@ -908,7 +919,7 @@ function rateReturnMs(incoming: TrackAnalysis, entryBeat: number): number {
   );
 }
 
-function fingerprintsOf(
+export function fingerprintsOf(
   outgoing: TrackAnalysis,
   incoming: TrackAnalysis,
 ): TransitionRecipe["fingerprints"] {
@@ -928,23 +939,31 @@ function fallbackNote(): TransitionRecipe["fallback"] {
 }
 
 /**
- * Authors the recipe the evidence best supports for this pair, from
- * this position. One recipe — the S5-3 seam is that candidates.ts
- * will ask this machinery for several (see the report); today the
- * author returns its single best-supported answer, or null when no
- * honest join exists from here (the session's own fallbacks then
- * apply, exactly as when the v1 planner returned null).
+ * Everything the two authors need that depends only on the pair, the
+ * position and the profile — computed once, shared by authorRecipe
+ * and by the candidate-facing variant wrappers below.
  */
-export function authorRecipe(request: RecipeRequest): TransitionRecipe | null {
+export interface AuthorContext {
+  profile: DecisionProfile;
+  entry: { beat: number; reason: string };
+  rateB: number;
+  stretch: number;
+  keyFit: KeyCompatibility | null;
+  nowBeat: number;
+  totalBeatsA: number;
+  tempoTrusted: boolean;
+  beatmatchViable: boolean;
+}
+
+export function authorContext(request: RecipeRequest): AuthorContext {
   const { outgoing, incoming } = request;
   const outMap = outgoing.beatMap;
   const inMap = incoming.beatMap;
-  const position = request.outgoingPositionSec;
-  const nowBeat = beatsAtTime(outMap, position);
-  const minLead = AUTHOR_BOUNDS.minLeadBeats;
+  const profile = resolveProfile(request.profile);
+  const nowBeat = beatsAtTime(outMap, request.outgoingPositionSec);
   const totalBeatsA = beatsAtTime(outMap, outMap.durationSec);
 
-  const entry = chooseEntry(incoming);
+  const entry = chooseEntry(incoming, profile);
   const rateB = outMap.bpm / inMap.bpm;
   const stretch = Math.abs(rateB - 1);
   const keyFit = keyCompatibility(outgoing.key, incoming.key);
@@ -953,54 +972,99 @@ export function authorRecipe(request: RecipeRequest): TransitionRecipe | null {
   // charter's third requirement — never beatmatch on a guess.
   const tempoTrusted =
     (outgoing.tempoConfidence === undefined ||
-      outgoing.tempoConfidence >= AUTHOR_BOUNDS.minTempoConfidence) &&
+      outgoing.tempoConfidence >= profile.minTempoConfidence) &&
     (incoming.tempoConfidence === undefined ||
-      incoming.tempoConfidence >= AUTHOR_BOUNDS.minTempoConfidence) &&
+      incoming.tempoConfidence >= profile.minTempoConfidence) &&
     (outMap.grid === undefined ||
-      outMap.grid.confidence >= AUTHOR_BOUNDS.minGridConfidence) &&
+      outMap.grid.confidence >= profile.minGridConfidence) &&
     (inMap.grid === undefined ||
-      inMap.grid.confidence >= AUTHOR_BOUNDS.minGridConfidence);
+      inMap.grid.confidence >= profile.minGridConfidence);
   const beatmatchViable =
-    stretch <= AUTHOR_BOUNDS.maxBeatmatchStretch && tempoTrusted;
+    stretch <= profile.maxBeatmatchStretch && tempoTrusted;
 
-  if (beatmatchViable) {
-    const recipe = authorBlend(
-      request,
-      entry,
-      rateB,
-      stretch,
-      keyFit,
-      nowBeat,
-      totalBeatsA,
-      minLead,
-    );
-    if (recipe) return recipe;
-  }
-
-  return authorRateOneJoin(
-    request,
+  return {
+    profile,
     entry,
-    keyFit,
+    rateB,
     stretch,
+    keyFit,
     nowBeat,
     totalBeatsA,
-    minLead,
+    tempoTrusted,
     beatmatchViable,
-  );
+  };
+}
+
+/**
+ * Authors the recipe the evidence best supports for this pair, from
+ * this position, under the request's profile. One recipe — the
+ * author's single best-supported answer, or null when no honest
+ * join exists from here (the session's own fallbacks then apply,
+ * exactly as when the v1 planner returned null). candidates.ts asks
+ * this machinery for several recipes instead (the variant wrappers
+ * below); the scoring of those rivals is scoring.ts's job, never
+ * the author's.
+ */
+export function authorRecipe(request: RecipeRequest): TransitionRecipe | null {
+  const ctx = authorContext(request);
+  if (ctx.beatmatchViable) {
+    const recipe = authorBlend(request, ctx);
+    if (recipe) return recipe;
+  }
+  return authorRateOneJoin(request, ctx);
+}
+
+/** A blend rival the candidate enumerator may ask for. */
+export interface BlendVariant {
+  /**
+   * Ask for this blend length instead of the evidence-derived one.
+   * The distant-key cap still clamps it — a cap is a cap.
+   */
+  desiredBeats?: number;
+  /** Only the loop-extended geometry is acceptable (null when none). */
+  loopOnly?: boolean;
+}
+
+/**
+ * The blend author, exposed for candidate enumeration: the same
+ * authoring as authorRecipe's blend path (same profile gates, same
+ * referee under the authoring profile), with an optional variant.
+ * Returns null when beatmatching is not viable under the profile or
+ * no honest blend exists.
+ */
+export function authorBlendVariant(
+  request: RecipeRequest,
+  variant: BlendVariant = {},
+): TransitionRecipe | null {
+  const ctx = authorContext(request);
+  if (!ctx.beatmatchViable) return null;
+  return authorBlend(request, ctx, variant);
+}
+
+/**
+ * The rate-1 author, exposed for candidate enumeration: the drop-cut
+ * and/or the filter fade, as authorRecipe's fallback path authors
+ * them. `only` restricts the answer to one family (null when that
+ * family is not honestly available); absent, the author's own
+ * preference decides, exactly as in authorRecipe.
+ */
+export function authorRateOneVariant(
+  request: RecipeRequest,
+  only?: "drop-cut" | "filter-fade",
+): TransitionRecipe | null {
+  const ctx = authorContext(request);
+  return authorRateOneJoin(request, ctx, only);
 }
 
 function authorBlend(
   request: RecipeRequest,
-  entry: { beat: number; reason: string },
-  rateB: number,
-  stretch: number,
-  keyFit: KeyCompatibility | null,
-  nowBeat: number,
-  totalBeatsA: number,
-  minLead: number,
+  ctx: AuthorContext,
+  variant: BlendVariant = {},
 ): TransitionRecipe | null {
   const { outgoing, incoming } = request;
   const outMap = outgoing.beatMap;
+  const { profile, entry, rateB, stretch, keyFit, nowBeat, totalBeatsA } = ctx;
+  const minLead = profile.minLeadBeats;
 
   // Desired length: a long blend is earned by a quiet pair (low vocal
   // density on both sides, small stretch, friendly keys); the distant
@@ -1026,7 +1090,7 @@ function authorBlend(
   };
   const outDensity = density(outgoing);
   const inDensity = density(incoming);
-  let desired: number = AUTHOR_BOUNDS.standardBlendBeats;
+  let desired: number = profile.standardBlendBeats;
   if (
     stretch <= 0.03 &&
     keyFit?.compatible &&
@@ -1035,57 +1099,60 @@ function authorBlend(
     outDensity < 0.3 &&
     inDensity < 0.3
   ) {
-    desired = AUTHOR_BOUNDS.longBlendBeats;
+    desired = profile.longBlendBeats;
   }
+  if (variant.desiredBeats !== undefined) desired = variant.desiredBeats;
   if (keyFit && keyFit.relation === "distant") {
-    desired = Math.min(desired, AUTHOR_BOUNDS.distantKeyMaxBlendBeats);
+    desired = Math.min(desired, profile.distantKeyMaxBlendBeats);
   }
-
-  // Exit candidates, in the author's order of preference.
-  const exits: { beat: number; reason: string }[] = [];
-  if (outgoing.outro && outgoing.outro.startBeat >= nowBeat + minLead) {
-    exits.push({
-      beat: outgoing.outro.startBeat,
-      reason: "the outro's first beat",
-    });
-  }
-  const sectionStarts = (outgoing.sections ?? [])
-    .filter(
-      (s) =>
-        s.kind !== "intro" &&
-        s.startBeat >= nowBeat + minLead &&
-        s.startBeat + MIN_BLEND_BEATS <= totalBeatsA,
-    )
-    .map((s) => s.startBeat);
-  if (sectionStarts.length > 0) {
-    const last = Math.max(...sectionStarts);
-    exits.push({
-      beat: last,
-      reason: "the last section the blend can occupy",
-    });
-  }
-  const phrase = phraseBeats(outMap, 4);
-  let phraseExit = Math.ceil((nowBeat + minLead - EPSILON) / phrase) * phrase;
-  while (
-    phraseExit > nowBeat &&
-    timeAtBeat(outMap, phraseExit + desired) > outMap.durationSec + EPSILON
-  ) {
-    phraseExit -= phrase;
-  }
-  exits.push({ beat: phraseExit, reason: "a phrase boundary" });
 
   let geometry: BlendGeometry | null = null;
-  for (const exit of exits) {
-    geometry = blendGeometry(
-      outgoing,
-      exit.beat,
-      desired,
-      incoming,
-      entry.beat,
-      exit.reason,
-      request.outgoingPositionSec,
-    );
-    if (geometry) break;
+  if (!variant.loopOnly) {
+    // Exit candidates, in the author's order of preference.
+    const exits: { beat: number; reason: string }[] = [];
+    if (outgoing.outro && outgoing.outro.startBeat >= nowBeat + minLead) {
+      exits.push({
+        beat: outgoing.outro.startBeat,
+        reason: "the outro's first beat",
+      });
+    }
+    const sectionStarts = (outgoing.sections ?? [])
+      .filter(
+        (s) =>
+          s.kind !== "intro" &&
+          s.startBeat >= nowBeat + minLead &&
+          s.startBeat + MIN_BLEND_BEATS <= totalBeatsA,
+      )
+      .map((s) => s.startBeat);
+    if (sectionStarts.length > 0) {
+      const last = Math.max(...sectionStarts);
+      exits.push({
+        beat: last,
+        reason: "the last section the blend can occupy",
+      });
+    }
+    const phrase = phraseBeats(outMap, 4);
+    let phraseExit = Math.ceil((nowBeat + minLead - EPSILON) / phrase) * phrase;
+    while (
+      phraseExit > nowBeat &&
+      timeAtBeat(outMap, phraseExit + desired) > outMap.durationSec + EPSILON
+    ) {
+      phraseExit -= phrase;
+    }
+    exits.push({ beat: phraseExit, reason: "a phrase boundary" });
+
+    for (const exit of exits) {
+      geometry = blendGeometry(
+        outgoing,
+        exit.beat,
+        desired,
+        incoming,
+        entry.beat,
+        exit.reason,
+        request.outgoingPositionSec,
+      );
+      if (geometry) break;
+    }
   }
 
   // Loop extension: the desired blend could not fit because the
@@ -1094,16 +1161,9 @@ function authorBlend(
   if (
     !geometry ||
     (geometry.blendBeats < desired &&
-      geometry.blendBeats < AUTHOR_BOUNDS.standardBlendBeats)
+      geometry.blendBeats < profile.standardBlendBeats)
   ) {
-    const looped = loopExtendedGeometry(
-      outgoing,
-      incoming,
-      entry.beat,
-      desired,
-      nowBeat,
-      minLead,
-    );
+    const looped = loopExtendedGeometry(outgoing, incoming, ctx, desired);
     if (looped && (!geometry || looped.blendBeats > geometry.blendBeats)) {
       geometry = looped;
     }
@@ -1114,7 +1174,7 @@ function authorBlend(
     (timeAtBeat(outMap, geometry.exitBeat + geometry.blendBeats) -
       geometry.startASec) *
     1000;
-  const returnMs = rateReturnMs(incoming, entry.beat);
+  const returnMs = rateReturnMs(incoming, entry.beat, profile);
   const draft: TransitionRecipe = {
     version: 1,
     preset: "beatmatched-fade",
@@ -1166,11 +1226,11 @@ function authorBlend(
     },
   };
 
-  const refereed = applyVocalReferee(draft, outgoing, incoming);
+  const refereed = refereeWithProfile(draft, outgoing, incoming, profile);
   // A trusted, still-clashing blend is not an honest blend: the
   // author changes family instead of shipping the clash.
   if (
-    refereed.evidence.vocalOverlap > AUTHOR_BOUNDS.vocalClashIntegral &&
+    refereed.evidence.vocalOverlap > profile.vocalClashIntegral &&
     refereed.evidence.vocalEvidence === "trusted"
   ) {
     return null;
@@ -1181,21 +1241,19 @@ function authorBlend(
 function loopExtendedGeometry(
   outgoing: TrackAnalysis,
   incoming: TrackAnalysis,
-  entryBeat: number,
+  ctx: AuthorContext,
   desired: number,
-  nowBeat: number,
-  minLead: number,
 ): BlendGeometry | null {
   const outMap = outgoing.beatMap;
+  const entryBeat = ctx.entry.beat;
+  const nowBeat = ctx.nowBeat;
+  const minLead = ctx.profile.minLeadBeats;
   const phrase = phraseBeats(outMap, 4);
   for (const section of outgoing.sections ?? []) {
     if (section.kind !== "breakdown" && section.kind !== "outro") continue;
     const lengthBeats = section.endBeat - section.startBeat;
     if (lengthBeats < MIN_BLEND_BEATS) continue;
-    if (
-      outMap.grid &&
-      outMap.grid.confidence < AUTHOR_BOUNDS.minGridConfidence
-    ) {
+    if (outMap.grid && outMap.grid.confidence < ctx.profile.minGridConfidence) {
       continue;
     }
     // The exit must sit inside the loopable section, with the
@@ -1238,17 +1296,15 @@ function loopExtendedGeometry(
  */
 function authorRateOneJoin(
   request: RecipeRequest,
-  entry: { beat: number; reason: string },
-  keyFit: KeyCompatibility | null,
-  stretch: number,
-  nowBeat: number,
-  totalBeatsA: number,
-  minLead: number,
-  beatmatchViable: boolean,
+  ctx: AuthorContext,
+  only?: "drop-cut" | "filter-fade",
 ): TransitionRecipe | null {
   const { outgoing, incoming } = request;
   const outMap = outgoing.beatMap;
   const inMap = incoming.beatMap;
+  const { profile, entry, keyFit, stretch, nowBeat, totalBeatsA } = ctx;
+  const minLead = profile.minLeadBeats;
+  const beatmatchViable = ctx.beatmatchViable;
   const phrase = phraseBeats(outMap, 4);
 
   // A landing point for A: the first phrase boundary with enough
@@ -1265,12 +1321,12 @@ function authorRateOneJoin(
 
   const strongDrop = incoming.drops.find(
     (drop) =>
-      drop.beat >= AUTHOR_BOUNDS.minLeadBeats &&
-      drop.strength >= AUTHOR_BOUNDS.minDropCutStrength &&
+      drop.beat >= profile.minLeadBeats &&
+      drop.strength >= profile.minDropCutStrength &&
       drop.timeSec <= inMap.durationSec - 2,
   );
 
-  if (strongDrop && endBeat - nowBeat >= 1) {
+  if (only !== "filter-fade" && strongDrop && endBeat - nowBeat >= 1) {
     const dropSec = timeAtBeat(inMap, strongDrop.beat);
     if (beatmatchViable) {
       // Beatmatched cut: two beats of matched overlap, the drop
@@ -1304,7 +1360,7 @@ function authorRateOneJoin(
           openMidHigh: false,
           filterSweep: false,
           rateB,
-          rateReturnMs: rateReturnMs(incoming, strongDrop.beat),
+          rateReturnMs: rateReturnMs(incoming, strongDrop.beat, profile),
           echoTailMs: null,
         }),
         loops: [],
@@ -1362,6 +1418,9 @@ function authorRateOneJoin(
       },
     };
   }
+
+  // Asked for a drop-cut only, and none was honestly available.
+  if (only === "drop-cut") return null;
 
   // Filter fade over the outgoing's last full section (or its last
   // eight beats), the incoming entering at its chosen entry.

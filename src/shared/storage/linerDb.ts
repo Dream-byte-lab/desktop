@@ -76,8 +76,22 @@ export interface CachedAnalysisRecord {
   savedAt: number;
 }
 
+/**
+ * The persisted join history (Step 5 slice S5-3): ONE record holding
+ * the session memory's whole log — the joins actually performed,
+ * oldest first — so anti-repetition survives restarts. The payload
+ * stays `unknown` here, as with analyses: the shape and its
+ * validation live in the engine's joinHistory module, this store's
+ * only reader/writer.
+ */
+export interface CachedJoinLogRecord {
+  id: string;
+  joins: unknown;
+  savedAt: number;
+}
+
 const DB_NAME = "liner_db_v1";
-const DB_VERSION = 5;
+const DB_VERSION = 6;
 
 const MEM_AUDIO_LIMIT = 3;
 // the memory maps only sit in front of indexeddb: cap them so a long session doesn't keep every record it saw
@@ -111,6 +125,7 @@ class LinerDb {
   private memLyrics = new Map<string, CachedLyricsRecord>();
   private memArtists = new Map<string, CachedArtistRecord>();
   private memAnalyses = new Map<string, CachedAnalysisRecord>();
+  private memJoins = new Map<string, CachedJoinLogRecord>();
 
   private handleDbError() {
     this.dbPromise = null;
@@ -189,6 +204,11 @@ class LinerDb {
           });
           analysisStore.createIndex("savedAt", "savedAt", { unique: false });
         }
+
+        if (!db.objectStoreNames.contains("joins")) {
+          const joinStore = db.createObjectStore("joins", { keyPath: "id" });
+          joinStore.createIndex("savedAt", "savedAt", { unique: false });
+        }
       };
 
       request.onsuccess = () => {
@@ -223,7 +243,7 @@ class LinerDb {
 
   // executes indexeddb transaction with one auto-reconnect retry and zero unhandled rejections
   private async runTransaction<T>(
-    storeName: "tracks" | "audio" | "lyrics" | "artists" | "analyses",
+    storeName: "tracks" | "audio" | "lyrics" | "artists" | "analyses" | "joins",
     mode: IDBTransactionMode,
     operation: (store: IDBObjectStore) => Promise<T>,
   ): Promise<T | null> {
@@ -750,6 +770,37 @@ class LinerDb {
     });
   }
 
+  async getJoinLog(id: string): Promise<CachedJoinLogRecord | null> {
+    const mem = this.memJoins.get(id);
+    if (mem) return mem;
+
+    const result = await this.runTransaction("joins", "readonly", (store) => {
+      return new Promise<CachedJoinLogRecord | null>((resolve) => {
+        const req = store.get(id);
+        req.onsuccess = () => resolve(req.result || null);
+        req.onerror = () => resolve(null);
+      });
+    });
+
+    if (result) {
+      this.memJoins.set(id, result);
+      return result;
+    }
+    return this.memJoins.get(id) || null;
+  }
+
+  async putJoinLog(record: CachedJoinLogRecord): Promise<void> {
+    this.memJoins.set(record.id, record);
+
+    await this.runTransaction("joins", "readwrite", (store) => {
+      return new Promise<void>((resolve, reject) => {
+        const req = store.put(record);
+        req.onsuccess = () => resolve();
+        req.onerror = () => reject(req.error);
+      });
+    });
+  }
+
   async getTotalArtistBytes(): Promise<number> {
     const result = await this.runTransaction("artists", "readonly", (store) => {
       return new Promise<number>((resolve) => {
@@ -781,13 +832,14 @@ class LinerDb {
   }
 
   async clearStore(
-    storeName: "tracks" | "audio" | "lyrics" | "artists" | "analyses",
+    storeName: "tracks" | "audio" | "lyrics" | "artists" | "analyses" | "joins",
   ): Promise<void> {
     if (storeName === "tracks") this.memTracks.clear();
     if (storeName === "audio") this.memAudio.clear();
     if (storeName === "lyrics") this.memLyrics.clear();
     if (storeName === "artists") this.memArtists.clear();
     if (storeName === "analyses") this.memAnalyses.clear();
+    if (storeName === "joins") this.memJoins.clear();
 
     await this.runTransaction(storeName, "readwrite", (store) => {
       return new Promise<void>((resolve) => {
@@ -814,11 +866,13 @@ class LinerDb {
     this.memLyrics.clear();
     this.memArtists.clear();
     this.memAnalyses.clear();
+    this.memJoins.clear();
     await this.clearStore("audio");
     await this.clearStore("tracks");
     await this.clearStore("lyrics");
     await this.clearStore("artists");
     await this.clearStore("analyses");
+    await this.clearStore("joins");
   }
 }
 
