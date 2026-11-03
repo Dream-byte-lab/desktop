@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { TrackAnalysis, TrackSection } from "./analyseTrack";
 import { candidatesForPair, type Candidate } from "./candidates";
-import { ADVENTUROUS_PROFILE, STANDARD_PROFILE } from "./decisionProfile";
+import {
+  ADVENTUROUS_PROFILE,
+  CONSERVATIVE_PROFILE,
+  STANDARD_PROFILE,
+} from "./decisionProfile";
 import type { KeyEstimate } from "./detectKey";
 import type { VocalActivityCurve } from "./detectVocals";
 import type { JoinRecord } from "./joinHistory";
@@ -170,6 +174,39 @@ describe("scoring — vetoes: never crown a guess", () => {
     expect(scored.vetoReasons.join(" ")).toContain("stretch");
     expect(result.pick).not.toBeNull();
     expect(result.pick!.candidate.evidence.beatmatched).toBe(false);
+  });
+
+  it("a rendition candidate answers to its direction's ceiling, not the rate cap", () => {
+    const request = richRequest();
+    request.incoming = analysis({
+      ...request.incoming,
+      beatMap: {
+        bpm: 120 / 1.1,
+        firstBeatSec: 0,
+        beatsPerBar: 4,
+        durationSec: 240,
+      },
+    });
+    const candidates = candidatesForPair(request, {
+      profiles: [STANDARD_PROFILE],
+    });
+    const stretch = candidates.find((c) => c.evidence.stretchMode);
+    expect(stretch).toBeDefined();
+
+    // +10% is past standard's 6% RATE cap but inside its +12%
+    // rendition ceiling: under its own profile it stands.
+    const own = scoreCandidates([stretch!], {}, STANDARD_PROFILE).ranked[0];
+    expect(own.vetoed).toBe(false);
+    const fit = own.components.find((c) => c.name === "stretchFit")!;
+    expect(fit.note).toContain("rendition ceiling");
+    expect(fit.value).toBeCloseTo(1 - 0.1 / 0.12, 6);
+
+    // Under conservative (+8% ceiling) the same candidate is
+    // refused — by the rendition veto, in its own words.
+    const stricter = scoreCandidates([stretch!], {}, CONSERVATIVE_PROFILE)
+      .ranked[0];
+    expect(stricter.vetoed).toBe(true);
+    expect(stricter.vetoReasons.join(" ")).toContain("rendition stretch");
   });
 
   it("scoring refuses to crown a candidate whose tempo evidence is a guess", () => {

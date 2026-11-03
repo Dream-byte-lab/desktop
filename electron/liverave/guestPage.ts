@@ -3,10 +3,11 @@
 // the local Wi-Fi; a guest opens it from the host's join link (the
 // QR code carries tonight's join secret in its `#join=` fragment),
 // trades that secret for an anonymous token kept in their own
-// browser, searches tonight's catalogue, requests songs, watches
-// honest statuses come back, and taps reactions. No account, no
-// app, no sign-in, and no powers beyond asking: guests cannot
-// skip, stop, reorder or touch the volume.
+// browser, searches tonight's catalogue AND — since Step 6, per
+// Note 5's ruling — the programme's whole search, requests songs,
+// watches honest statuses come back, and taps reactions. No
+// account, no app, no sign-in, and no powers beyond asking:
+// guests cannot skip, stop, reorder or touch the volume.
 //
 // The page is built with plain DOM calls and textContent throughout,
 // so titles from the host's library can never inject markup.
@@ -87,6 +88,14 @@ export function guestPageHtml(): string {
       <div id="catalogue"></div>
     </div>
 
+    <div class="card">
+      <div class="label">Search the whole programme</div>
+      <input type="search" id="prog-search" placeholder="Any song, any artist…" />
+      <div id="prog-results">
+        <div class="artist">Can't find it in tonight's songs? Search everything — if the programme can find it, you can ask for it.</div>
+      </div>
+    </div>
+
     <p class="note">Requests aren't a queue-jump: the DJ fits each one where it
     belongs in the night. “Coming soon” means it fits. “Waiting for its moment”
     means it belongs later — a big song asked for early gets held for its moment,
@@ -100,6 +109,9 @@ export function guestPageHtml(): string {
   var joinKey = "liverave-join-secret";
   var token = localStorage.getItem(tokenKey);
   var catalogue = [];
+  var searchResults = [];
+  var searchTimer = null;
+  var searchSeq = 0;
   var myRequests = [];
   var acceptingRequests = true;
 
@@ -207,6 +219,9 @@ export function guestPageHtml(): string {
       left.appendChild(el("div", track.title));
       left.appendChild(el("div", track.artist, "artist"));
       row.appendChild(left);
+      if (track.requested) {
+        row.appendChild(el("span", "Guest request", "chip soon"));
+      }
       upNext.appendChild(row);
     });
     if (!state.upNext || state.upNext.length === 0) {
@@ -223,11 +238,15 @@ export function guestPageHtml(): string {
       var left = el("div");
       left.appendChild(el("div", req.title || req.trackId));
       left.appendChild(el("div", req.artist || "", "artist"));
+      left.appendChild(el("div",
+        req.source === "search" ? "via programme search" : "from tonight's songs",
+        "artist"));
       row.appendChild(left);
       row.appendChild(chipFor(req.status));
       mine.appendChild(row);
     });
     renderCatalogue();
+    renderSearchResults();
   }
   function renderCatalogue() {
     var query = document.getElementById("search").value.trim().toLowerCase();
@@ -274,6 +293,63 @@ export function guestPageHtml(): string {
       button.disabled = false;
     });
   }
+  function openRequestIds() {
+    var openIds = {};
+    myRequests.forEach(function (req) {
+      if (req.status !== "not tonight" && req.status !== "played") openIds[req.trackId] = true;
+    });
+    return openIds;
+  }
+  function renderSearchResults() {
+    var list = document.getElementById("prog-results");
+    if (!list) return;
+    var query = document.getElementById("prog-search").value.trim();
+    list.textContent = "";
+    if (query.length < 2) {
+      list.appendChild(el("div", "Can't find it in tonight's songs? Search everything — if the programme can find it, you can ask for it.", "artist"));
+      return;
+    }
+    var openIds = openRequestIds();
+    searchResults.forEach(function (track) {
+      var row = el("div", null, "row");
+      var left = el("div");
+      left.appendChild(el("div", track.title));
+      left.appendChild(el("div", track.artist, "artist"));
+      row.appendChild(left);
+      row.appendChild(el("span", "Programme", "chip"));
+      var button = el("button", openIds[track.id] ? "Requested" : "Request");
+      button.disabled = Boolean(openIds[track.id]) || !acceptingRequests;
+      button.addEventListener("click", function () { requestTrack(track, button); });
+      row.appendChild(button);
+      list.appendChild(row);
+    });
+    if (list.childElementCount === 0) {
+      list.appendChild(el("div", "The programme couldn't find that — try another spelling.", "artist"));
+    }
+  }
+  function runProgrammeSearch() {
+    var query = document.getElementById("prog-search").value.trim();
+    if (query.length < 2) {
+      searchResults = [];
+      renderSearchResults();
+      return;
+    }
+    var seq = ++searchSeq;
+    callWithToken("/api/search", { query: query }).then(function (res) {
+      if (seq !== searchSeq) return;
+      if (res.ok) {
+        searchResults = res.body.tracks || [];
+      } else {
+        searchResults = [];
+        toast(res.body.error || "Search didn't go through");
+      }
+      renderSearchResults();
+    }).catch(function () {
+      if (seq !== searchSeq) return;
+      searchResults = [];
+      renderSearchResults();
+    });
+  }
   function refresh() {
     // The token goes in a header, never in the polled URL.
     var options = token ? { headers: { "x-party-token": token } } : undefined;
@@ -286,6 +362,10 @@ export function guestPageHtml(): string {
     }).catch(function () {});
   }
   document.getElementById("search").addEventListener("input", renderCatalogue);
+  document.getElementById("prog-search").addEventListener("input", function () {
+    if (searchTimer) clearTimeout(searchTimer);
+    searchTimer = setTimeout(runProgrammeSearch, 400);
+  });
   document.querySelectorAll("[data-react]").forEach(function (button) {
     button.addEventListener("click", function () {
       callWithToken("/api/react", { kind: button.getAttribute("data-react") })

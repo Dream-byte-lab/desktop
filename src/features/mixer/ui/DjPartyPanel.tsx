@@ -130,6 +130,13 @@ export function DjPartyPanel() {
                 <span className="min-w-0 truncate text-text-primary">
                   {item.title}
                   <span className="text-text-secondary"> · {item.artist}</span>
+                  <span className="text-text-secondary">
+                    {" "}
+                    · guest request ·{" "}
+                    {item.source === "search"
+                      ? "programme search"
+                      : "tonight's songs"}
+                  </span>
                 </span>
                 <span
                   className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold ${statusChipClass(item.status)}`}

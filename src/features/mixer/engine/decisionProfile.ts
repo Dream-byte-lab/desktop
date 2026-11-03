@@ -19,12 +19,22 @@
 // values — decisionProfile.test.ts pins the numbers). CONSERVATIVE
 // tightens every trust gate and prefers the plain, safe join.
 // ADVENTUROUS widens the near-equal band, pays more for structure and
-// loops, penalises repetition harder, and dislikes doing nothing —
-// but its stretch cap stays inside the §3.7 policy floor (a few
-// percent, until the time-stretch spike rules otherwise): adventurous
-// is a temperament, not a licence to daycore.
+// loops, penalises repetition harder, and dislikes doing nothing.
+//
+// Two tempo reaches per profile. The RATE cap (maxBeatmatchStretch)
+// is the §3.7 policy floor: what the deck itself may do by playback
+// rate — a few percent, pitch moving with tempo. Beyond it sits the
+// RENDITION reach (maxStretchUp / maxStretchDown): the S5-5 spike
+// ruled pitch-preserving rendering good at these widths, so a pair
+// past the rate cap may still beatmatch against a pre-rendered
+// rendition of the incoming track — at conservative widths set from
+// the spike's meters (the user's ruling, 2026-11-02: the caps are
+// evidence-set, no longer ear-gated). The ceilings are asymmetric
+// because the meters were: slowing down degrades first (transient
+// pre-echo grows as the factor falls), so every profile's down
+// ceiling sits below its up ceiling.
 
-export const DECISION_PROFILE_VERSION = 1;
+export const DECISION_PROFILE_VERSION = 2;
 
 /**
  * The join families — the blueprint §3.3 vocabulary. Two of them are
@@ -73,8 +83,16 @@ export interface DecisionProfile {
 
   // ---- author bounds (the retired AUTHOR_BOUNDS, field for field) ----
 
-  /** Largest |rate − 1| the author will beatmatch across. */
+  /** Largest |rate − 1| the author will beatmatch across BY RATE. */
   maxBeatmatchStretch: number;
+  /**
+   * Rendition ceilings: the furthest the author will beatmatch
+   * against a pitch-preserved rendition of the incoming track —
+   * `maxStretchUp` when B must speed up (rateB > 1), `maxStretchDown`
+   * when it must slow down (rateB < 1), both as |rateB − 1|.
+   */
+  maxStretchUp: number;
+  maxStretchDown: number;
   /** Below this tempo-confidence, a tempo is a guess: no beatmatch. */
   minTempoConfidence: number;
   /** Below this whole-grid confidence, grid anchors are not trusted. */
@@ -159,6 +177,8 @@ export const STANDARD_PROFILE: DecisionProfile = {
   label: "Standard",
   version: DECISION_PROFILE_VERSION,
   maxBeatmatchStretch: 0.06,
+  maxStretchUp: 0.12,
+  maxStretchDown: 0.06,
   minTempoConfidence: 0.2,
   minGridConfidence: 0.15,
   vocalClashIntegral: 0.4,
@@ -217,6 +237,8 @@ export const CONSERVATIVE_PROFILE: DecisionProfile = {
   label: "Conservative",
   version: DECISION_PROFILE_VERSION,
   maxBeatmatchStretch: 0.04,
+  maxStretchUp: 0.08,
+  maxStretchDown: 0.06,
   minTempoConfidence: 0.35,
   minGridConfidence: 0.3,
   vocalClashIntegral: 0.3,
@@ -267,15 +289,18 @@ export const CONSERVATIVE_PROFILE: DecisionProfile = {
 /**
  * The adventurous profile: wider band, more weight on structure,
  * loops and the arc, repetition priced hardest, doing nothing priced
- * up. Its stretch cap (0.09) stays inside the §3.7 policy floor — the
- * scoring weights, not the cap, are what let a wider stretch win: it
- * must be carried by everything else being right.
+ * up. Its RATE cap (0.09) stays inside the §3.7 policy floor, and its
+ * rendition ceilings are the widest shipped (+15% / −9%) — the
+ * scoring weights, not the reach, are what let a wide stretch win:
+ * it must be carried by everything else being right.
  */
 export const ADVENTUROUS_PROFILE: DecisionProfile = {
   id: "adventurous",
   label: "Adventurous",
   version: DECISION_PROFILE_VERSION,
   maxBeatmatchStretch: 0.09,
+  maxStretchUp: 0.15,
+  maxStretchDown: 0.09,
   minTempoConfidence: 0.15,
   minGridConfidence: 0.1,
   vocalClashIntegral: 0.45,
@@ -335,4 +360,30 @@ export function resolveProfile(
   profile: DecisionProfile | undefined | null,
 ): DecisionProfile {
   return profile ?? STANDARD_PROFILE;
+}
+
+/**
+ * The rendition ceiling that applies to a rate: the up ceiling when
+ * B must speed up to meet A (rateB ≥ 1), the down ceiling when it
+ * must slow down. Direction matters — the ceilings are asymmetric.
+ */
+export function stretchCeilingFor(
+  profile: DecisionProfile,
+  rateB: number,
+): number {
+  return rateB >= 1 ? profile.maxStretchUp : profile.maxStretchDown;
+}
+
+/**
+ * Whether a rate sits inside the profile's rendition ceilings,
+ * boundary included — with planTransition's epsilon discipline:
+ * a rate that IS the ceiling mathematically (1.12 against +12%)
+ * must not fall outside it by float dust (1.12 − 1 reads
+ * 0.1200000000000001 in IEEE754).
+ */
+export function withinStretchCeilings(
+  profile: DecisionProfile,
+  rateB: number,
+): boolean {
+  return Math.abs(rateB - 1) <= stretchCeilingFor(profile, rateB) + 1e-9;
 }

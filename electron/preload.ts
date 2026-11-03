@@ -12,6 +12,8 @@ import type {
   PartyReaction,
   PartyRequestRecord,
   PartyRequestStatusUpdate,
+  PartySearchReply,
+  PartySearchRequest,
 } from "./liverave/types";
 import type { MainNetResult } from "./netdiag";
 import type { NetProbeResult } from "./netprobe/types";
@@ -214,6 +216,8 @@ export interface LinerElectronApi {
   partySetRequestStatus: (update: PartyRequestStatusUpdate) => void;
   onPartyRequest: (cb: (record: PartyRequestRecord) => void) => () => void;
   onPartyReaction: (cb: (reaction: PartyReaction) => void) => () => void;
+  onPartySearch: (cb: (request: PartySearchRequest) => void) => () => void;
+  partySearchReply: (reply: PartySearchReply) => void;
   mintPoToken: (identifier: string) => Promise<string>;
   youtubeTvSession: () => Promise<YoutubeTvSession>;
   youtubeSolveN: (
@@ -506,6 +510,17 @@ const api: LinerElectronApi = {
     return () => {
       ipcRenderer.removeListener("liverave:reaction-received", listener);
     };
+  },
+  onPartySearch: (cb) => {
+    const listener = (_event: unknown, request: PartySearchRequest) =>
+      cb(request);
+    ipcRenderer.on("liverave:search", listener);
+    return () => {
+      ipcRenderer.removeListener("liverave:search", listener);
+    };
+  },
+  partySearchReply: (reply) => {
+    ipcRenderer.send("liverave:search-reply", reply);
   },
   mintPoToken: (identifier) => ipcRenderer.invoke("potoken:mint", identifier),
   youtubeTvSession: () => ipcRenderer.invoke("youtube:tv-session"),

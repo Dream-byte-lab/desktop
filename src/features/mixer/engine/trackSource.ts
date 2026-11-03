@@ -8,6 +8,7 @@ import {
 } from "./analyseTrack";
 import { analyseSamplesOffThread } from "./analyseTrackRunner";
 import { getCachedAnalysis, putCachedAnalysis } from "./analysisCache";
+import { stretchChannelsOffThread } from "./stretchTrackRunner";
 
 // Where the DJ session gets its music. The mixer cannot work with a
 // stream that is still arriving — it needs the whole track, decoded,
@@ -179,4 +180,123 @@ export function preparedTrack(trackId: string): PreparedTrack | undefined {
   const entry = prepared.get(trackId);
   if (entry) rememberPrepared(entry);
   return entry;
+}
+
+// ---------------------------------------------------------------------
+// Pitch-preserved renditions (the stretch integration)
+//
+// A recipe whose overlap carries stretchB is performed against a
+// RENDITION of the incoming track: the whole track rendered at the
+// recipe's tempo factor, pitch preserved (timeStretch.ts's
+// SoundTouch renderer, run off-thread by stretchTrackRunner.ts).
+// The rendition is a second decoded buffer for the same track, so
+// it gets its own bounded cache under the same LRU discipline as
+// the prepared cache — deliberately smaller: a session only ever
+// needs the live pair's rendition (the incoming of the join being
+// planned), plus the one just played out. Two slots cover both;
+// a third render evicts the eldest. Eviction drops only this
+// module's reference — a deck already playing a rendition keeps it.
+//
+// Rendering is requested by the SESSION when a decision first calls
+// for it (the decision window opens up to 150 s before the anchor),
+// never speculatively at preparation: most pairs never stretch, and
+// an unneeded full-track render is exactly the ARM cost this design
+// exists to avoid.
+// ---------------------------------------------------------------------
+
+/** Renditions kept at once: the live pair's, plus the one just played. */
+const MAX_RENDITIONS = 2;
+
+const renditions = new Map<string, AudioBuffer>();
+const renditionInFlight = new Map<string, Promise<AudioBuffer | null>>();
+
+function renditionKey(trackId: string, factor: number): string {
+  return `${trackId}@${factor.toFixed(4)}`;
+}
+
+function rememberRendition(key: string, buffer: AudioBuffer): void {
+  renditions.delete(key);
+  renditions.set(key, buffer);
+  while (renditions.size > MAX_RENDITIONS) {
+    const oldest = renditions.keys().next().value;
+    if (oldest === undefined) break;
+    renditions.delete(oldest);
+  }
+}
+
+/** The cached rendition for a track at a factor, when one is ready. */
+export function stretchRendition(
+  trackId: string,
+  factor: number,
+): AudioBuffer | undefined {
+  const key = renditionKey(trackId, factor);
+  const buffer = renditions.get(key);
+  if (buffer) rememberRendition(key, buffer);
+  return buffer;
+}
+
+async function renderRendition(
+  prepared: PreparedTrack,
+  factor: number,
+): Promise<AudioBuffer | null> {
+  try {
+    const source = prepared.buffer;
+    // The channel views are read-only for everyone downstream: the
+    // runner posts a structured clone to the worker, and its inline
+    // fallback only reads. The decoded buffer is never mutated.
+    const channels: Float32Array[] = [];
+    for (let i = 0; i < source.numberOfChannels; i += 1) {
+      channels.push(source.getChannelData(i));
+    }
+    const rendered = await stretchChannelsOffThread(
+      channels,
+      source.sampleRate,
+      factor,
+    );
+    if (!rendered || rendered.length === 0 || rendered[0].length === 0) {
+      return null;
+    }
+    const buffer = decoder().createBuffer(
+      rendered.length,
+      rendered[0].length,
+      source.sampleRate,
+    );
+    for (let i = 0; i < rendered.length; i += 1) {
+      buffer.copyToChannel(new Float32Array(rendered[i]), i);
+    }
+    rememberRendition(renditionKey(prepared.track.id, factor), buffer);
+    return buffer;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The rendition of a prepared track at a tempo factor, rendered on
+ * first ask and cached after. Concurrent asks share one render.
+ * Returns null when the factor is not a rendition factor (1, or
+ * outside the performable rate range) or the render failed — the
+ * caller treats a null as "no rendition", never as a stall: the
+ * session's fallback floor covers a join whose rendition is missing.
+ */
+export function loadStretchRendition(
+  prepared: PreparedTrack,
+  factor: number,
+): Promise<AudioBuffer | null> {
+  if (!Number.isFinite(factor) || factor === 1 || factor < 0.5 || factor > 2) {
+    return Promise.resolve(null);
+  }
+  const key = renditionKey(prepared.track.id, factor);
+  const done = renditions.get(key);
+  if (done) {
+    rememberRendition(key, done);
+    return Promise.resolve(done);
+  }
+  const pending = renditionInFlight.get(key);
+  if (pending) return pending;
+  const promise = renderRendition(prepared, factor).finally(() => {
+    renditionInFlight.delete(key);
+  });
+  renditionInFlight.set(key, promise);
+  return promise;
 }

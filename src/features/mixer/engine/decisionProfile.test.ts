@@ -6,6 +6,8 @@ import {
   JOIN_FAMILIES,
   STANDARD_PROFILE,
   resolveProfile,
+  stretchCeilingFor,
+  withinStretchCeilings,
   type DecisionProfile,
 } from "./decisionProfile";
 
@@ -89,6 +91,36 @@ describe("decisionProfile — every profile is complete and coherent", () => {
   });
 });
 
+describe("decisionProfile — the rendition ceilings are the evidence-set caps", () => {
+  it("carries the caps the S5-5 meters set, per profile, as landed", () => {
+    expect(CONSERVATIVE_PROFILE.maxStretchUp).toBe(0.08);
+    expect(CONSERVATIVE_PROFILE.maxStretchDown).toBe(0.06);
+    expect(STANDARD_PROFILE.maxStretchUp).toBe(0.12);
+    expect(STANDARD_PROFILE.maxStretchDown).toBe(0.06);
+    expect(ADVENTUROUS_PROFILE.maxStretchUp).toBe(0.15);
+    expect(ADVENTUROUS_PROFILE.maxStretchDown).toBe(0.09);
+  });
+
+  it("stretchCeilingFor reads the rate's direction", () => {
+    expect(stretchCeilingFor(STANDARD_PROFILE, 1.1)).toBe(0.12);
+    expect(stretchCeilingFor(STANDARD_PROFILE, 0.95)).toBe(0.06);
+    expect(stretchCeilingFor(ADVENTUROUS_PROFILE, 0.92)).toBe(0.09);
+    expect(stretchCeilingFor(CONSERVATIVE_PROFILE, 1.05)).toBe(0.08);
+  });
+
+  it("withinStretchCeilings honours each direction's ceiling, boundary included", () => {
+    expect(withinStretchCeilings(STANDARD_PROFILE, 1.12)).toBe(true);
+    expect(withinStretchCeilings(STANDARD_PROFILE, 1.13)).toBe(false);
+    expect(withinStretchCeilings(STANDARD_PROFILE, 0.94)).toBe(true);
+    expect(withinStretchCeilings(STANDARD_PROFILE, 0.93)).toBe(false);
+    expect(withinStretchCeilings(CONSERVATIVE_PROFILE, 1.08)).toBe(true);
+    expect(withinStretchCeilings(CONSERVATIVE_PROFILE, 1.09)).toBe(false);
+    expect(withinStretchCeilings(ADVENTUROUS_PROFILE, 1.15)).toBe(true);
+    expect(withinStretchCeilings(ADVENTUROUS_PROFILE, 0.91)).toBe(true);
+    expect(withinStretchCeilings(ADVENTUROUS_PROFILE, 0.9)).toBe(false);
+  });
+});
+
 describe("decisionProfile — the temperaments differ as named", () => {
   it("trust gates tighten conservative → standard → adventurous loosens", () => {
     expect(CONSERVATIVE_PROFILE.maxBeatmatchStretch).toBeLessThan(
@@ -133,6 +165,36 @@ describe("decisionProfile — the temperaments differ as named", () => {
     expect(STANDARD_PROFILE.antiRepetition.familyRepeatCost).toBeGreaterThan(
       CONSERVATIVE_PROFILE.antiRepetition.familyRepeatCost,
     );
+  });
+
+  it("rendition ceilings widen conservative → standard → adventurous, up side first", () => {
+    expect(CONSERVATIVE_PROFILE.maxStretchUp).toBeLessThan(
+      STANDARD_PROFILE.maxStretchUp,
+    );
+    expect(ADVENTUROUS_PROFILE.maxStretchUp).toBeGreaterThan(
+      STANDARD_PROFILE.maxStretchUp,
+    );
+    expect(CONSERVATIVE_PROFILE.maxStretchDown).toBeLessThanOrEqual(
+      STANDARD_PROFILE.maxStretchDown,
+    );
+    expect(ADVENTUROUS_PROFILE.maxStretchDown).toBeGreaterThan(
+      STANDARD_PROFILE.maxStretchDown,
+    );
+    // The meters' asymmetry, in every temperament: slowing down
+    // degrades first, so the down ceiling never exceeds the up one,
+    // and every ceiling reaches past its own rate cap (a ceiling at
+    // or below the cap would be dead data).
+    for (const profile of [
+      STANDARD_PROFILE,
+      CONSERVATIVE_PROFILE,
+      ADVENTUROUS_PROFILE,
+    ]) {
+      expect(profile.maxStretchDown).toBeLessThanOrEqual(profile.maxStretchUp);
+      expect(profile.maxStretchUp).toBeGreaterThan(profile.maxBeatmatchStretch);
+      expect(profile.maxStretchDown).toBeGreaterThanOrEqual(
+        profile.maxBeatmatchStretch,
+      );
+    }
   });
 
   it("conservative prices restraint lowest and theatre highest", () => {

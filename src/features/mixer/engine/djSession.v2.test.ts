@@ -48,6 +48,8 @@ vi.mock("./trackSource", () => ({
       return prepared;
     }),
   preparedTrack: (trackId: string) => sourceCache.map.get(trackId),
+  loadStretchRendition: async () => null,
+  stretchRendition: () => undefined,
 }));
 
 vi.mock("./twoDeckMixer", () => ({

@@ -8,6 +8,8 @@ import type {
   PartyPublicState,
   PartyReaction,
   PartyRequestRecord,
+  PartyTrackListing,
+  PartyTrackSource,
 } from "./types.js";
 
 // liveRave's party server: a small HTTP server in the main process
@@ -26,11 +28,21 @@ import type {
 // rate-limited per guest for the same reason.
 //
 // It makes NO musical decisions. The renderer publishes tonight's
-// public state (what's playing, what's searchable) and owns every
+// public state (what's playing, what's queued) and owns every
 // request's status; this server stores and relays, and passes each
 // accepted request to the renderer through its events. When the
 // party stops, the server closes and every token dies with it —
 // and so does the join secret: tomorrow's party has a new one.
+//
+// Step 6 (Note 5's ruling): guests are no longer limited to
+// tonight's catalogue. The guest page can ask the programme's own
+// search — the renderer answers through the onSearch event — and
+// every listing in an answer is registered here as OFFERED: a
+// request is accepted for tonight's catalogue or for an offered
+// listing, and refused only for a track that was never offered.
+// The server vouches for nothing itself; it remembers what the
+// renderer surfaced, stamps each request with the pool it came
+// from, and forgets every offer when the party stops.
 
 export const PARTY_PORT = 8471;
 const MAX_BODY_BYTES = 16_384;
@@ -42,6 +54,15 @@ const TOKEN_MINT_WINDOW_MS = 15 * 60_000;
 /** Reactions allowed per guest per window. */
 const REACTION_LIMIT = 30;
 const REACTION_WINDOW_MS = 60_000;
+/** Programme searches allowed per guest per window. */
+const SEARCH_LIMIT = 30;
+const SEARCH_WINDOW_MS = 60_000;
+/** Longest the server waits on the renderer's search answer. */
+const SEARCH_TIMEOUT_MS = 10_000;
+/** Longest search text a guest may send. */
+const MAX_SEARCH_QUERY_CHARS = 80;
+/** Search-offered listings remembered at once (oldest evicted). */
+const MAX_SEARCH_OFFERS = 500;
 /** Hard cap on simultaneous guests for one party. */
 const MAX_GUESTS = 500;
 const REACTION_KINDS = new Set(["fire", "heart", "clap"]);
@@ -50,6 +71,12 @@ const CLOSED_STATUSES = new Set(["played", "not tonight"]);
 export interface PartyServerEvents {
   onRequest?: (record: PartyRequestRecord) => void;
   onReaction?: (reaction: PartyReaction) => void;
+  /**
+   * Answers a guest's programme search. The renderer owns the
+   * programme's search; the server relays the question and vouches
+   * for the answer by remembering its listings as requestable.
+   */
+  onSearch?: (query: string) => Promise<PartyTrackListing[]>;
 }
 
 interface GuestRequestView {
@@ -57,6 +84,7 @@ interface GuestRequestView {
   trackId: string;
   title: string;
   artist: string;
+  source: PartyTrackSource;
   status: string;
 }
 
@@ -102,6 +130,16 @@ export class PartyServer {
     REACTION_LIMIT,
     REACTION_WINDOW_MS,
   );
+  private searchLimiter = new SlidingWindowLimiter(
+    SEARCH_LIMIT,
+    SEARCH_WINDOW_MS,
+  );
+  /**
+   * Listings the renderer surfaced through programme search
+   * answers, keyed by exact track id: tonight's requestable pool
+   * beyond the published catalogue. Dies with the party.
+   */
+  private searchOffers = new Map<string, PartyTrackListing>();
   /** Tonight's join secret; empty unless a party is running. */
   private joinSecret = "";
   private partyStartedAtMs = 0;
@@ -127,7 +165,42 @@ export class PartyServer {
 
   /** Publishes tonight's public state, as owned by the renderer. */
   setState(state: PartyPublicState): void {
-    this.state = state;
+    // Catalogue listings are stamped with their provenance here, so
+    // every read path (guest browse, request door, a guest's own
+    // request list) agrees on where a listing came from.
+    this.state = {
+      ...state,
+      catalogue: state.catalogue.map((track) => ({
+        ...track,
+        source: "tonight" as const,
+      })),
+    };
+  }
+
+  /**
+   * The listing a track id refers to tonight, with its provenance:
+   * tonight's catalogue first, then the search-offered pool.
+   * Undefined means the track was never offered to guests.
+   */
+  private offeredListing(trackId: string): PartyTrackListing | undefined {
+    return (
+      this.state.catalogue.find((track) => track.id === trackId) ??
+      this.searchOffers.get(trackId)
+    );
+  }
+
+  /** Remembers a search answer's listings as requestable offers. */
+  private registerSearchOffers(listings: PartyTrackListing[]): void {
+    for (const listing of listings) {
+      // The server stamps the provenance itself: an offered listing
+      // came from the programme search, whatever the answer claimed.
+      this.searchOffers.set(listing.id, { ...listing, source: "search" });
+    }
+    while (this.searchOffers.size > MAX_SEARCH_OFFERS) {
+      const oldest = this.searchOffers.keys().next().value;
+      if (oldest === undefined) break;
+      this.searchOffers.delete(oldest);
+    }
   }
 
   /** Records the DJ brain's verdict on a request, for its guest. */
@@ -165,9 +238,11 @@ export class PartyServer {
     this.boundPort = 0;
     this.guests.clear();
     this.records.clear();
+    this.searchOffers.clear();
     this.limiter.reset();
     this.mintLimiter.reset();
     this.reactionLimiter.reset();
+    this.searchLimiter.reset();
     this.joinSecret = "";
     // The published state dies with the party too: a restarted
     // server must never serve the previous party's now-playing,
@@ -287,14 +362,16 @@ export class PartyServer {
       const myRequests: GuestRequestView[] = [];
       for (const record of this.records.values()) {
         if (record.guestToken !== token) continue;
-        const listing = this.state.catalogue.find(
-          (track) => track.id === record.trackId,
-        );
+        // Title and artist resolve from whichever pool offered the
+        // track — tonight's catalogue or a search answer — so a
+        // programme request shows its real name, not a bare id.
+        const listing = this.offeredListing(record.trackId);
         myRequests.push({
           requestId: record.requestId,
           trackId: record.trackId,
           title: listing?.title ?? record.trackId,
           artist: listing?.artist ?? "",
+          source: record.source,
           status: record.status,
         });
       }
@@ -306,6 +383,67 @@ export class PartyServer {
         upNext: this.state.upNext,
         myRequests,
       });
+      return;
+    }
+
+    if (req.method === "POST" && path === "/api/search") {
+      const body = await this.readBody(req);
+      const token = typeof body?.token === "string" ? body.token : "";
+      const query = typeof body?.query === "string" ? body.query.trim() : "";
+      if (!this.guests.has(token)) {
+        this.json(res, 401, { error: "Unknown guest — reload the page" });
+        return;
+      }
+      if (!this.state.open) {
+        this.json(res, 403, { error: "The party isn't open yet" });
+        return;
+      }
+      if (query.length < 2 || query.length > MAX_SEARCH_QUERY_CHARS) {
+        this.json(res, 400, {
+          error: "Type at least two letters to search",
+        });
+        return;
+      }
+      const verdict = this.searchLimiter.hit(token, Date.now());
+      if (!verdict.allowed) {
+        this.json(res, 429, {
+          error: "Easy — too many searches",
+          retryAfterSec: Math.ceil(verdict.retryAfterMs / 1000),
+        });
+        return;
+      }
+      if (!this.events.onSearch) {
+        this.json(res, 503, {
+          error: "Programme search isn't available tonight",
+        });
+        return;
+      }
+      // The renderer answers from the programme's own search. The
+      // wait is bounded: a wedged renderer must never hang a guest.
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const listings = await Promise.race([
+          this.events.onSearch(query),
+          new Promise<never>((_resolve, reject) => {
+            timer = setTimeout(
+              () => reject(new Error("search timed out")),
+              SEARCH_TIMEOUT_MS,
+            );
+          }),
+        ]);
+        const offered = listings.map((listing) => ({
+          ...listing,
+          source: "search" as const,
+        }));
+        this.registerSearchOffers(offered);
+        this.json(res, 200, { tracks: offered });
+      } catch {
+        this.json(res, 504, {
+          error: "Search didn't answer — try again",
+        });
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
       return;
     }
 
@@ -325,12 +463,13 @@ export class PartyServer {
         this.json(res, 403, { error: "Requests are paused by the host" });
         return;
       }
-      const listing = this.state.catalogue.find(
-        (track) => track.id === trackId,
-      );
+      // Step 6's door: tonight's catalogue OR anything a programme
+      // search surfaced for a guest tonight. A track id that was
+      // never offered is the only refusal left at this layer.
+      const listing = this.offeredListing(trackId);
       if (!listing) {
         this.json(res, 404, {
-          error: "That song isn't in tonight's library",
+          error: "That song hasn't been offered tonight — try searching for it",
         });
         return;
       }
@@ -361,6 +500,7 @@ export class PartyServer {
         requestId: randomUUID(),
         guestToken: token,
         trackId,
+        source: listing.source ?? "tonight",
         requestedAtSec: Math.max(
           0,
           Math.floor((Date.now() - this.partyStartedAtMs) / 1000),

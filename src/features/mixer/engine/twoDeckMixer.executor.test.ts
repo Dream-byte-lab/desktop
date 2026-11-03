@@ -373,6 +373,100 @@ describe("performRecipe", () => {
   });
 });
 
+describe("performRecipe — a stretched blend against a rendition", () => {
+  /**
+   * A 120 → 120/1.1 pair: a 10% tempo gap — past the standard
+   * profile's 6% rate cap, inside its +12% rendition ceiling. The
+   * authored recipe must call for a rendition, and performing it
+   * against the rendition buffer (240/1.1 s long) must start B at
+   * the anchor's RENDITION position, at rate 1, with no rate curve
+   * at all — the hold-and-return of the rate era is abolished here.
+   */
+  function stretchFixture(): {
+    outgoing: TrackAnalysis;
+    incoming: TrackAnalysis;
+    recipe: TransitionRecipe;
+  } {
+    const outgoing = analysis();
+    const incoming = analysis({
+      audioHash: "hash-b",
+      beatMap: {
+        bpm: 120 / 1.1,
+        firstBeatSec: 0,
+        beatsPerBar: 4,
+        durationSec: 240,
+      },
+      drops: [{ timeSec: 17.6, beat: 32, strength: 2 }],
+    });
+    const recipe = authorRecipe({
+      outgoing,
+      outgoingPositionSec: 60,
+      incoming,
+    });
+    if (!recipe) throw new Error("fixture recipe should exist");
+    return { outgoing, incoming, recipe };
+  }
+
+  it("the author calls for a rendition with a flat rate curve", () => {
+    const { recipe } = stretchFixture();
+    expect(recipe.preset).toBe("beatmatched-fade");
+    expect(recipe.overlap.stretchB).toBeCloseTo(1.1, 6);
+    expect(recipe.overlap.rateB).toBeCloseTo(1.1, 6);
+    expect(recipe.automation.rateB.points).toEqual([{ atMs: 0, value: 1 }]);
+  });
+
+  it("performs the blend: B starts at startB ÷ stretchB, at rate 1, never returning", () => {
+    const { ctx, mixer } = newMixer();
+    const { outgoing, incoming, recipe } = stretchFixture();
+    mixer.playNow(buffer());
+    const inDeck = asDeck(mixer.nextDeck);
+
+    // The rendition of the 240 s track at 1.1×: 240/1.1 s long.
+    const times = mixer.performRecipe(buffer(240 / 1.1), recipe, {
+      levelGain: 0.8,
+      outgoing,
+      incoming,
+    });
+
+    // The wall-clock geometry is the recipe's own: exit at 64 s
+    // authored from position 60 → blend 1004 → 1012, as in rate mode.
+    expect(times).toEqual({ blendStartCtxTime: 1004, blendEndCtxTime: 1012 });
+    expect(mixer.currentDeckIndex).toBe(1);
+
+    // B's anchor is beat 16 in ORIGINAL time: 16 × 0.55 s = 8.8 s.
+    // In the rendition that moment sits at 8.8 / 1.1 = 8.0 s.
+    expect(recipe.overlap.startBMs).toBeCloseTo(8800, 6);
+    const source = ctx.sources[1];
+    expect(source.startedWith?.when).toBe(1004);
+    expect(source.startedWith?.offset).toBeCloseTo(8.0, 6);
+
+    // Rate 1, set once — no hold at 1.1, no glide back. Ever.
+    expect(rounded(source.playbackRate.events)).toEqual([
+      { type: "set", value: 1, time: 1004 },
+    ]);
+
+    // The rest of the blend is performed as written (volume curve,
+    // bass swap at the authored offset).
+    expect(inDeck.gain.gain.events).toHaveLength(1);
+    expect(inDeck.gain.gain.events[0].type).toBe("curve");
+    expect(inDeck.bass.gain.events.length).toBeGreaterThan(0);
+    expect(ctx.sources[0].stoppedAt).toBeCloseTo(1012.05, 6);
+  });
+
+  it("the fallback cut also converts: a mismatched rendition still starts at its anchor", () => {
+    const { ctx, mixer } = newMixer();
+    const { outgoing, incoming, recipe } = stretchFixture();
+    mixer.playNow(buffer());
+    const times = mixer.performRecipe(buffer(240 / 1.1), recipe, {
+      outgoing,
+      incoming: { ...incoming, audioHash: "a-different-file" },
+    });
+    expect(times.blendEndCtxTime).toBe(times.blendStartCtxTime);
+    expect(ctx.sources[1].startedWith?.offset).toBeCloseTo(8.0, 6);
+    expect(ctx.sources[1].playbackRate.events).toEqual([]);
+  });
+});
+
 describe("transitionTo (the legacy seam)", () => {
   it("schedules the same key events as performing the adapted recipe directly", () => {
     const plan = planTransition({

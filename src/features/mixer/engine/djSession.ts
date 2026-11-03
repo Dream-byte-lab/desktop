@@ -19,8 +19,10 @@ import {
 } from "./recipe";
 import { recordListen } from "./tasteTracker";
 import {
+  loadStretchRendition,
   loadTrackForMixing,
   preparedTrack,
+  stretchRendition,
   type PreparedTrack,
 } from "./trackSource";
 import type { TransitionPlan } from "./transitionPlanner";
@@ -52,6 +54,12 @@ import { TwoDeckMixer, type DeckIndex } from "./twoDeckMixer";
 //   commits; once performed, the join is locked (nothing re-plans
 //   it) and its completion is owned by exactly one callback
 //   (guarantee 6);
+// - a winning recipe that calls for a pitch-preserved rendition
+//   (overlap.stretchB) starts that render at decision time, in
+//   preparation's rendition cache; the commit performs the
+//   rendition buffer or not at all — a rendition that is not ready
+//   when the anchor passes leaves the join to the fallback floor,
+//   never to a mismatched buffer;
 // - the fallback floor still stands: a pair with no performable
 //   recipe, or a track end reached with nothing mix-ready, falls
 //   back to a plain cut instead of stalling the session — but the
@@ -188,6 +196,18 @@ export class DjSession {
   } | null = null;
   /** A join currently sounding on the decks (locked; completion-owned). */
   private activeJoin: ActiveJoin | null = null;
+  /**
+   * The rendition the standing decision calls for, when its recipe
+   * carries stretchB: requested the moment the decision is made
+   * (the decision window opens up to 150 s before the anchor, far
+   * beyond any render's cost), tracked here so the commit can tell
+   * ready from still-rendering without ever awaiting it.
+   */
+  private renditionRequest: {
+    trackId: string;
+    factor: number;
+    buffer: AudioBuffer | null;
+  } | null = null;
   private joinTokenCounter = 0;
   /** Which join family delivered each track (for signal attribution). */
   private readonly deliveredBy = new Map<string, string>();
@@ -647,6 +667,7 @@ export class DjSession {
     this.segments = [];
     this.decision = null;
     this.decisionInputs = null;
+    this.renditionRequest = null;
     this.failures.clear();
     this.deliveredBy.clear();
     this.plainCutFallbacks = 0;
@@ -726,6 +747,7 @@ export class DjSession {
     this.index = index;
     this.decision = null;
     this.decisionInputs = null;
+    this.renditionRequest = null;
     this.onBlendChange?.(false);
 
     const startAt = this.mixer.playNow(
@@ -967,7 +989,50 @@ export class DjSession {
       },
       arcPosition,
     );
+    this.noteStretchNeed();
     if (this.decision) this.maybeCommit(position);
+  }
+
+  /**
+   * Declares the standing decision's stretch need to preparation:
+   * a recipe carrying stretchB gets its rendition of the incoming
+   * track rendering NOW, in the background — the session never
+   * awaits it (the commit reads readiness, and the fallback floor
+   * covers a rendition that is not ready in time). A decision that
+   * needs no rendition, or none at all, clears the request; a
+   * re-decision for the same track at the same factor keeps the
+   * render already in flight.
+   */
+  private noteStretchNeed(): void {
+    const stretchB = this.decision?.recipe.overlap.stretchB ?? null;
+    if (stretchB === null || !this.next) {
+      this.renditionRequest = null;
+      return;
+    }
+    const incoming = this.next;
+    const existing = this.renditionRequest;
+    if (
+      existing &&
+      existing.trackId === incoming.track.id &&
+      existing.factor === stretchB
+    ) {
+      return;
+    }
+    const cached = stretchRendition(incoming.track.id, stretchB);
+    const request = {
+      trackId: incoming.track.id,
+      factor: stretchB,
+      buffer: cached ?? null,
+    };
+    this.renditionRequest = request;
+    if (cached) return;
+    void loadStretchRendition(incoming, stretchB).then((buffer) => {
+      // A superseded request's render still lands in the rendition
+      // cache (bounded, and the next pair may want it) — it just no
+      // longer speaks for this session's standing decision.
+      if (this.renditionRequest !== request) return;
+      request.buffer = buffer;
+    });
   }
 
   /** Commits the current decision when its anchor is upon us. */
@@ -1005,10 +1070,31 @@ export class DjSession {
       leadInSec === decision.recipe.leadInSec
         ? decision.recipe
         : { ...decision.recipe, leadInSec };
+    // A stretch recipe performs against the RENDITION, never the
+    // original buffer — the two are different timelines, and a
+    // mismatch would start B at the wrong musical point at the
+    // wrong tempo. If the rendition is not ready, the commit does
+    // not happen: the decision stands and the tick retries it
+    // until its anchor passes, where the end branch drops it and
+    // the fallback floor fires (a counted plain cut) — never a
+    // forced blend, the floor's standing rule.
+    let performBuffer = incoming.buffer;
+    const stretchB = recipe.overlap.stretchB;
+    if (stretchB !== null) {
+      const request = this.renditionRequest;
+      const ready =
+        request &&
+        request.trackId === incoming.track.id &&
+        request.factor === stretchB
+          ? request.buffer
+          : (stretchRendition(incoming.track.id, stretchB) ?? null);
+      if (!ready) return;
+      performBuffer = ready;
+    }
     this.decision = null;
     this.decisionInputs = null;
     const commitCtxTime = this.context.currentTime;
-    const times = this.mixer.performRecipe(incoming.buffer, recipe, {
+    const times = this.mixer.performRecipe(performBuffer, recipe, {
       levelGain: levelGainFor(incoming.analysis.loudness),
       outgoing: this.current.analysis,
       incoming: incoming.analysis,
@@ -1159,8 +1245,24 @@ export class DjSession {
     recipe: TransitionRecipe,
     times: { blendStartCtxTime: number; blendEndCtxTime: number },
   ): RateSegment[] {
-    const curve = recipe.automation.rateB;
     const startBSec = recipe.overlap.startBMs / 1000;
+    // Stretch mode: the deck plays the rendition at rate 1, so in
+    // the track's own (original) time — the timeline every position
+    // in this session is read in — the playhead advances at the
+    // stretch factor, for the whole track. There is no settling
+    // segment after the blend: the rendition IS at tempo, and no
+    // rate return exists to model.
+    const stretchB = recipe.overlap.stretchB;
+    if (stretchB !== null && stretchB > 0) {
+      return [
+        {
+          fromCtxTime: times.blendStartCtxTime,
+          trackTimeAtStart: startBSec,
+          rate: stretchB,
+        },
+      ];
+    }
+    const curve = recipe.automation.rateB;
     if (!curve || curve.points.length === 0) {
       return [
         {

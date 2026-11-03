@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { PartyServer } from "./partyServer";
-import type { PartyRequestRecord } from "./types";
+import type { PartyRequestRecord, PartyTrackListing } from "./types";
 
 let server: PartyServer | null = null;
 
@@ -9,10 +9,15 @@ afterEach(async () => {
   server = null;
 });
 
-async function startOpenServer() {
+async function startOpenServer(
+  events: {
+    onSearch?: (query: string) => Promise<PartyTrackListing[]>;
+  } = {},
+) {
   const received: PartyRequestRecord[] = [];
   server = new PartyServer({
     onRequest: (record) => received.push(record),
+    onSearch: events.onSearch,
   });
   const info = await server.start(0);
   server.setState({
@@ -71,7 +76,7 @@ describe("PartyServer", () => {
     expect(received[0].guestToken).toBe(token);
   });
 
-  it("refuses songs outside tonight's catalogue, politely", async () => {
+  it("refuses songs that were never offered, politely", async () => {
     const { base, token } = await startOpenServer();
     const res = await post(base, "/api/request", {
       token,
@@ -79,7 +84,7 @@ describe("PartyServer", () => {
     });
     expect(res.status).toBe(404);
     const body = (await res.json()) as { error: string };
-    expect(body.error).toContain("isn't in tonight's library");
+    expect(body.error).toContain("hasn't been offered tonight");
   });
 
   it("treats a repeat request as a vote, not a new request", async () => {
@@ -120,6 +125,7 @@ describe("PartyServer", () => {
         trackId: "t1",
         title: "Song 1",
         artist: "Artist 1",
+        source: "tonight",
         status: "coming soon",
       },
     ]);
@@ -273,5 +279,190 @@ describe("PartyServer", () => {
     expect(state.open).toBe(false);
     expect(state.nowPlaying).toBeNull();
     expect(state.upNext).toEqual([]);
+  });
+});
+
+describe("PartyServer open guest requests (Step 6)", () => {
+  const programmeResults: PartyTrackListing[] = [
+    { id: "prog-1", title: "Far Away Song", artist: "Distant Artist" },
+    { id: "prog-2", title: "Another Find", artist: "Someone Else" },
+  ];
+
+  it("serves a guest page that can search the whole programme", async () => {
+    server = new PartyServer();
+    const info = await server.start(0);
+    const res = await fetch(`http://127.0.0.1:${info.port}/`);
+    const html = await res.text();
+    expect(html).toContain("Search the whole programme");
+    expect(html).toContain("Tonight's songs");
+  });
+
+  it("relays a programme search and stamps its results as search offers", async () => {
+    const { base, token } = await startOpenServer({
+      onSearch: async (query) => {
+        expect(query).toBe("far away");
+        return programmeResults;
+      },
+    });
+    const res = await post(base, "/api/search", {
+      token,
+      query: "far away",
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { tracks: PartyTrackListing[] };
+    expect(body.tracks).toEqual([
+      { ...programmeResults[0], source: "search" },
+      { ...programmeResults[1], source: "search" },
+    ]);
+  });
+
+  it("accepts a request for a search-offered song, stamped as a search request", async () => {
+    const { base, token, received } = await startOpenServer({
+      onSearch: async () => programmeResults,
+    });
+    await post(base, "/api/search", { token, query: "far" });
+    const res = await post(base, "/api/request", {
+      token,
+      trackId: "prog-1",
+    });
+    expect(res.status).toBe(200);
+    expect(received).toHaveLength(1);
+    expect(received[0].trackId).toBe("prog-1");
+    expect(received[0].source).toBe("search");
+
+    // The guest's own list shows the song's real name and source,
+    // resolved from the search offers — it is not in the catalogue.
+    const state = (await (await getState(base, token)).json()) as {
+      myRequests: {
+        trackId: string;
+        title: string;
+        artist: string;
+        source: string;
+      }[];
+    };
+    expect(state.myRequests).toEqual([
+      expect.objectContaining({
+        trackId: "prog-1",
+        title: "Far Away Song",
+        artist: "Distant Artist",
+        source: "search",
+      }),
+    ]);
+  });
+
+  it("stamps a catalogue request as tonight's", async () => {
+    const { base, token, received } = await startOpenServer();
+    await post(base, "/api/request", { token, trackId: "t3" });
+    expect(received[0].source).toBe("tonight");
+    const state = (await (await getState(base, token)).json()) as {
+      myRequests: { source: string }[];
+    };
+    expect(state.myRequests[0].source).toBe("tonight");
+  });
+
+  it("keeps the request guardrails on programme requests", async () => {
+    const { base, token } = await startOpenServer({
+      onSearch: async () => programmeResults,
+    });
+    await post(base, "/api/search", { token, query: "far" });
+    // Per-guest new-request limit applies to search finds too.
+    for (const trackId of ["prog-1", "prog-2", "t1"]) {
+      const res = await post(base, "/api/request", { token, trackId });
+      expect(res.status).toBe(200);
+    }
+    const fourth = await post(base, "/api/request", {
+      token,
+      trackId: "t2",
+    });
+    expect(fourth.status).toBe(429);
+  });
+
+  it("guards the search door: guests only, real queries only", async () => {
+    const { base, token } = await startOpenServer({
+      onSearch: async () => programmeResults,
+    });
+    const forged = await post(base, "/api/search", {
+      token: "forged",
+      query: "far",
+    });
+    expect(forged.status).toBe(401);
+    const tooShort = await post(base, "/api/search", {
+      token,
+      query: "f",
+    });
+    expect(tooShort.status).toBe(400);
+  });
+
+  it("says so when no search answerer is wired", async () => {
+    const { base, token } = await startOpenServer();
+    const res = await post(base, "/api/search", { token, query: "far" });
+    expect(res.status).toBe(503);
+  });
+
+  it("rate-limits searches per guest", async () => {
+    const { base, token } = await startOpenServer({
+      onSearch: async () => programmeResults,
+    });
+    for (let i = 0; i < 30; i++) {
+      const res = await post(base, "/api/search", {
+        token,
+        query: "far",
+      });
+      expect(res.status).toBe(200);
+    }
+    const flooded = await post(base, "/api/search", {
+      token,
+      query: "far",
+    });
+    expect(flooded.status).toBe(429);
+  });
+
+  it("never hangs a guest on a search that never answers", async () => {
+    const { base, token } = await startOpenServer({
+      onSearch: () => new Promise<PartyTrackListing[]>(() => {}),
+    });
+    const res = await post(base, "/api/search", {
+      token,
+      query: "far",
+    });
+    expect(res.status).toBe(504);
+  }, 15_000);
+
+  it("forgets search offers when the party stops", async () => {
+    const { base, token } = await startOpenServer({
+      onSearch: async () => programmeResults,
+    });
+    await post(base, "/api/search", { token, query: "far" });
+    const ok = await post(base, "/api/request", {
+      token,
+      trackId: "prog-1",
+    });
+    expect(ok.status).toBe(200);
+
+    await server?.stop();
+
+    // A restarted party offers nothing until a fresh search does:
+    // last night's finds are not requestable tonight.
+    const info = await server!.start(0);
+    const restartedBase = `http://127.0.0.1:${info.port}`;
+    server!.setState({
+      open: true,
+      accepting: true,
+      partyName: "Test Party",
+      nowPlaying: null,
+      upNext: [],
+      catalogue: [],
+    });
+    const tokenRes = await post(restartedBase, "/api/token", {
+      join: info.joinSecret,
+    });
+    const { token: freshToken } = (await tokenRes.json()) as {
+      token: string;
+    };
+    const res = await post(restartedBase, "/api/request", {
+      token: freshToken,
+      trackId: "prog-1",
+    });
+    expect(res.status).toBe(404);
   });
 });

@@ -2,10 +2,14 @@ import type {
   PartyPublicState,
   PartyReaction,
   PartyRequestRecord,
+  PartySearchRequest,
+  PartyTrackSource,
 } from "../../../../electron/liverave/types";
+import type { Track } from "@/shared/types";
 import { usePlayerStore } from "../../player/store/playerStore";
 import { djSession } from "./djSession";
 import { guestStatus, type RaveDecision } from "./liveRave";
+import { searchListings, searchProgrammeTracks } from "./partyProgrammeSearch";
 import { useDjModeStore } from "../store/djModeStore";
 import { usePartyStore, type PartyFeedItem } from "../store/partyStore";
 
@@ -17,6 +21,15 @@ import { usePartyStore, type PartyFeedItem } from "../store/partyStore";
 // words back to the server for each guest. It also publishes
 // tonight's public state — what's playing, what's next, and the
 // catalogue guests may request from, which is tonight's queue.
+//
+// Step 6 widened the door (Note 5's ruling): guests may also search
+// the WHOLE PROGRAMME from their phones. The server relays each
+// search here; this controller answers it from the app's own search
+// and keeps the resolved tracks, so a request for a searched track
+// resolves to a real, preparable track exactly like a queue track
+// does — through the same session seam, under the same guardrails.
+// Every request carries its provenance (tonight's queue, or the
+// programme search) into the host's feed and the published up-next.
 //
 // One subtlety lives here: when several guests request the same
 // song, the DJ brain keeps ONE canonical request (the rest are
@@ -66,6 +79,14 @@ class PartyHost {
   private feed = new Map<string, PartyFeedItem>();
   private recordsByCanonical = new Map<string, Set<string>>();
   private canonicalTrack = new Map<string, string>();
+  private canonicalSource = new Map<string, PartyTrackSource>();
+  /**
+   * Full tracks resolved from programme searches this party has
+   * answered, by exact track id: how a request for a song outside
+   * tonight's queue still reaches the session as a playable track.
+   * Wiped with the party, like everything else here.
+   */
+  private programmeTracks = new Map<string, Track>();
   private canonicalRequestedAt = new Map<string, number>();
   private statusByCanonical = new Map<string, string>();
   private reactions = { fire: 0, heart: 0, clap: 0 };
@@ -101,6 +122,9 @@ class PartyHost {
         void this.handleRequest(record);
       }),
       bridge.onPartyReaction((reaction) => this.handleReaction(reaction)),
+      bridge.onPartySearch((request) => {
+        void this.answerSearch(request);
+      }),
     );
     this.publishState(true);
     this.poll = setInterval(() => this.tick(), POLL_MS);
@@ -119,6 +143,8 @@ class PartyHost {
     this.feed.clear();
     this.recordsByCanonical.clear();
     this.canonicalTrack.clear();
+    this.canonicalSource.clear();
+    this.programmeTracks.clear();
     this.canonicalRequestedAt.clear();
     this.statusByCanonical.clear();
     this.reactions = { fire: 0, heart: 0, clap: 0 };
@@ -153,17 +179,53 @@ class PartyHost {
     this.syncStore();
   }
 
+  /**
+   * Answers a guest's programme search from the app's own search.
+   * The resolved tracks are kept for the night, so a request that
+   * follows resolves here without a second search. A failed search
+   * answers honestly empty — the guest just sees no results.
+   */
+  private async answerSearch(request: PartySearchRequest): Promise<void> {
+    const bridge = window.linerElectron;
+    if (!bridge) return;
+    let tracks: Track[] = [];
+    try {
+      tracks = await searchProgrammeTracks(request.query);
+    } catch {
+      tracks = [];
+    }
+    if (!this.isOpen) return;
+    for (const track of tracks) {
+      if (!this.programmeTracks.has(track.id)) {
+        this.programmeTracks.set(track.id, track);
+      }
+    }
+    bridge.partySearchReply({
+      searchId: request.searchId,
+      tracks: searchListings(tracks),
+    });
+  }
+
   private async handleRequest(record: PartyRequestRecord): Promise<void> {
     const bridge = window.linerElectron;
     if (!bridge) return;
-    const track = usePlayerStore
-      .getState()
-      .queue.find((candidate) => candidate.id === record.trackId);
+    // Resolution, widest first refusal last: tonight's queue holds
+    // the host's own copy of the song; beyond it, the tracks this
+    // party's programme searches resolved. The server's stamp says
+    // which pool the guest picked from — that is the provenance
+    // the feed and the queue labelling carry.
+    const source: PartyTrackSource = record.source ?? "tonight";
+    const track =
+      usePlayerStore
+        .getState()
+        .queue.find((candidate) => candidate.id === record.trackId) ??
+      this.programmeTracks.get(record.trackId);
     this.feed.set(record.requestId, {
       recordId: record.requestId,
       trackId: record.trackId,
       title: track?.title ?? record.trackId,
       artist: track?.artists ?? "",
+      source,
       status: "received",
     });
     this.syncStore();
@@ -183,6 +245,9 @@ class PartyHost {
     }
     linkRecordId(this.recordsByCanonical, record.requestId, canonical.id);
     this.canonicalTrack.set(canonical.id, canonical.track.trackId);
+    if (!this.canonicalSource.has(canonical.id)) {
+      this.canonicalSource.set(canonical.id, source);
+    }
     if (!this.canonicalRequestedAt.has(canonical.id)) {
       this.canonicalRequestedAt.set(canonical.id, canonical.requestedAtSec);
     }
@@ -269,7 +334,15 @@ class PartyHost {
         id: track.id,
         title: track.title,
         artist: track.artists,
+        source: "tonight" as const,
       }));
+    // Queue labelling: an up-next entry that is a guest request is
+    // published AS one, with the pool that guest found it in.
+    const requestSourceByTrack = new Map<string, PartyTrackSource>();
+    for (const [canonicalId, trackId] of this.canonicalTrack) {
+      const requestSource = this.canonicalSource.get(canonicalId);
+      if (requestSource) requestSourceByTrack.set(trackId, requestSource);
+    }
     const state: PartyPublicState = {
       open: true,
       accepting: !this.paused,
@@ -281,16 +354,21 @@ class PartyHost {
             artist: currentTrack.artists,
           }
         : null,
-      upNext: queue.slice(currentIndex + 1, currentIndex + 4).map((track) => ({
-        id: track.id,
-        title: track.title,
-        artist: track.artists,
-      })),
+      upNext: queue.slice(currentIndex + 1, currentIndex + 4).map((track) => {
+        const requestSource = requestSourceByTrack.get(track.id);
+        return {
+          id: track.id,
+          title: track.title,
+          artist: track.artists,
+          ...(requestSource ? { requested: true, source: requestSource } : {}),
+        };
+      }),
       catalogue,
     };
     const key = JSON.stringify([
       state.nowPlaying?.id,
       state.upNext.map((track) => track.id),
+      state.upNext.map((track) => (track.requested ? track.source : null)),
       state.catalogue.length,
       state.accepting,
     ]);

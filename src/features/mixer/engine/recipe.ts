@@ -79,6 +79,20 @@ export interface RecipeOverlap {
   rateA: number;
   /** Playback rate of B during the overlap. */
   rateB: number;
+  /**
+   * The pitch-preserving rendition factor for B, when this join is
+   * performed against a pre-rendered time-stretched copy of B (the
+   * stretch integration): the rendition already plays at A's tempo,
+   * so the deck runs it at rate 1, the rateB automation is flat, and
+   * there is NO rate return — the old glide back is abolished in
+   * this mode. Null = ordinary performance against B's original
+   * buffer, where the rateB automation does the tempo work (or the
+   * join is rate-1). The value equals rateB when set. Every anchor
+   * in this recipe stays in B's ORIGINAL track time in both modes;
+   * the executor converts B-side buffer positions by this factor at
+   * the reads that touch the buffer.
+   */
+  stretchB: number | null;
   bpmA: number;
   bpmB: number;
 }
@@ -271,6 +285,12 @@ export function validateRecipe(recipe: TransitionRecipe): string[] {
       errors.push(`overlap.${name} ${rate} outside [0.5, 2]`);
     }
   }
+  if (
+    o.stretchB !== null &&
+    (!Number.isFinite(o.stretchB) || o.stretchB < 0.5 || o.stretchB > 2)
+  ) {
+    errors.push(`overlap.stretchB ${o.stretchB} outside [0.5, 2]`);
+  }
   if (!(o.bpmA > 0) || !(o.bpmB > 0)) {
     errors.push("overlap bpms must be positive");
   }
@@ -446,6 +466,7 @@ export function recipeFromPlan(
       beatmatched: true,
       rateA: 1,
       rateB: plan.incomingRate,
+      stretchB: null,
       bpmA,
       bpmB,
     },

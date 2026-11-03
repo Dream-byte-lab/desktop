@@ -33,7 +33,11 @@
 //    history, never from dice.
 
 import type { Candidate } from "./candidates";
-import { STANDARD_PROFILE, type DecisionProfile } from "./decisionProfile";
+import {
+  STANDARD_PROFILE,
+  stretchCeilingFor,
+  type DecisionProfile,
+} from "./decisionProfile";
 import { repetitionCost, type JoinRecord } from "./joinHistory";
 
 export interface ScoreContext {
@@ -113,10 +117,23 @@ function vetoesFor(candidate: Candidate, profile: DecisionProfile): string[] {
       `${candidate.family} is not performable by the decks yet — a candidate that cannot be performed cannot win`,
     );
   }
-  if (e.beatmatched && e.stretch > profile.maxBeatmatchStretch) {
-    reasons.push(
-      `beatmatched stretch ${(e.stretch * 100).toFixed(1)}% exceeds the ${profile.id} cap of ${(profile.maxBeatmatchStretch * 100).toFixed(1)}% — too-stretched pairs change family, they don't stretch further`,
-    );
+  if (e.beatmatched) {
+    // The reach a candidate is judged against is the one it was
+    // performed in: a rate beatmatch answers to the rate cap; a
+    // rendition beatmatch answers to the profile's ceiling for its
+    // direction (up and down are different ceilings). The epsilon
+    // is withinStretchCeilings' own: author and scorer must never
+    // disagree about a boundary by float dust.
+    const cap = e.stretchMode
+      ? stretchCeilingFor(profile, candidate.recipe.overlap.rateB)
+      : profile.maxBeatmatchStretch;
+    if (e.stretch > cap + 1e-9) {
+      reasons.push(
+        e.stretchMode
+          ? `rendition stretch ${(e.stretch * 100).toFixed(1)}% exceeds the ${profile.id} ceiling of ${(cap * 100).toFixed(1)}% for its direction — too-stretched pairs change family, they don't stretch further`
+          : `beatmatched stretch ${(e.stretch * 100).toFixed(1)}% exceeds the ${profile.id} cap of ${(cap * 100).toFixed(1)}% — too-stretched pairs change family, they don't stretch further`,
+      );
+    }
   }
   if (e.beatmatched && e.tempoConfidence < profile.minTempoConfidence) {
     reasons.push(
@@ -232,14 +249,15 @@ function scoreOne(
       : `vocal overlap ${e.vocalOverlap.toFixed(2)} on uncertain evidence — charged at half weight, never trusted into a veto`,
   );
 
+  const stretchCap = e.stretchMode
+    ? stretchCeilingFor(profile, candidate.recipe.overlap.rateB)
+    : profile.maxBeatmatchStretch;
   add(
     "stretchFit",
-    e.beatmatched
-      ? clamp01(1 - e.stretch / Math.max(0.01, profile.maxBeatmatchStretch))
-      : 1,
+    e.beatmatched ? clamp01(1 - e.stretch / Math.max(0.01, stretchCap)) : 1,
     w.stretchFit,
     e.beatmatched
-      ? `stretch ${(e.stretch * 100).toFixed(1)}% of the ${(profile.maxBeatmatchStretch * 100).toFixed(1)}% cap`
+      ? `stretch ${(e.stretch * 100).toFixed(1)}% of the ${(stretchCap * 100).toFixed(1)}% ${e.stretchMode ? "rendition ceiling" : "cap"}`
       : "rate 1 — no stretch spent",
   );
 

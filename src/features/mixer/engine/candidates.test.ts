@@ -106,7 +106,30 @@ const BLEND_FAMILIES = new Set([
 ]);
 
 describe("candidates — charter requirement 3: measurements have teeth", () => {
-  it("Req 3 — a 15%-stretch pair yields NO beatmatched candidate", () => {
+  it("Req 3 — a 20%-stretch pair yields NO beatmatched candidate", () => {
+    const request = richRequest();
+    request.incoming = analysis({
+      ...request.incoming,
+      beatMap: {
+        bpm: 120 / 1.2,
+        firstBeatSec: 0,
+        beatsPerBar: 4,
+        durationSec: 240,
+      },
+    });
+    const candidates = candidatesForPair(request);
+    expect(candidates.length).toBeGreaterThan(0);
+    // Beyond every shipped reach — the widest rate cap AND the
+    // widest rendition ceiling (+15%) alike: the pair changes
+    // family instead of stretching.
+    expect(candidates.every((c) => !c.evidence.beatmatched)).toBe(true);
+    expect(candidates.every((c) => c.recipe.overlap.rateB === 1)).toBe(true);
+    expect(candidates.every((c) => c.recipe.overlap.stretchB === null)).toBe(
+      true,
+    );
+  });
+
+  it("Req 3 — a 15%-stretch pair beatmatches ONLY as an adventurous rendition", () => {
     const request = richRequest();
     request.incoming = analysis({
       ...request.incoming,
@@ -118,11 +141,22 @@ describe("candidates — charter requirement 3: measurements have teeth", () => 
       },
     });
     const candidates = candidatesForPair(request);
-    expect(candidates.length).toBeGreaterThan(0);
-    // Not under the standard cap, not under ANY shipped temperament:
-    // the pair changes family instead of stretching.
-    expect(candidates.every((c) => !c.evidence.beatmatched)).toBe(true);
-    expect(candidates.every((c) => c.recipe.overlap.rateB === 1)).toBe(true);
+    const beatmatched = candidates.filter((c) => c.evidence.beatmatched);
+    // The widest ceiling in the building is adventurous's +15% —
+    // exactly this pair. Only its telling beatmatches, and it does
+    // so as a rendition: stretchB set, evidence flagged, and a flat
+    // rate curve (no hold, no return glide — the rendition IS at
+    // tempo).
+    expect(beatmatched.length).toBeGreaterThan(0);
+    for (const candidate of beatmatched) {
+      expect(candidate.profileId).toBe("adventurous");
+      expect(candidate.evidence.stretchMode).toBe(true);
+      expect(candidate.recipe.overlap.stretchB).toBeCloseTo(1.15, 6);
+      expect(candidate.recipe.automation.rateB.points).toEqual([
+        { atMs: 0, value: 1 },
+      ]);
+      expect(validateRecipe(candidate.recipe)).toEqual([]);
+    }
   });
 
   it("Req 3 — a low-tempo-confidence pair yields NO beatmatched candidate", () => {

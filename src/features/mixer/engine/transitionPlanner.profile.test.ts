@@ -93,7 +93,7 @@ describe("authorRecipe — profile threading", () => {
     expect(standard).toEqual(unprofiled);
   });
 
-  it("the conservative stretch cap refuses a 5% beatmatch the standard authors", () => {
+  it("a 5% pair: standard and adventurous beatmatch by rate; conservative reaches it only as a rendition", () => {
     const request: RecipeRequest = {
       outgoing: analysis(),
       outgoingPositionSec: 60,
@@ -110,13 +110,23 @@ describe("authorRecipe — profile threading", () => {
     const standard = authorRecipe({ ...request, profile: STANDARD_PROFILE });
     expect(standard).not.toBeNull();
     expect(standard!.overlap.beatmatched).toBe(true);
+    // Inside standard's 6% rate cap: an ordinary rate beatmatch —
+    // no rendition is spent where the deck's own rate suffices.
+    expect(standard!.overlap.stretchB).toBeNull();
 
     const conservative = authorRecipe({
       ...request,
       profile: CONSERVATIVE_PROFILE,
     });
-    // Refused the beatmatch: whatever it answers with is rate-1.
-    expect(conservative?.overlap.beatmatched ?? false).toBe(false);
+    expect(conservative).not.toBeNull();
+    expect(conservative!.overlap.beatmatched).toBe(true);
+    // Past conservative's 4% rate cap but inside its +8% rendition
+    // ceiling: the beatmatch survives, as a rendition — flat rate
+    // curve, no hold, no return glide.
+    expect(conservative!.overlap.stretchB).toBeCloseTo(1.05, 6);
+    expect(conservative!.automation.rateB.points).toEqual([
+      { atMs: 0, value: 1 },
+    ]);
 
     const adventurous = authorRecipe({
       ...request,
@@ -124,6 +134,91 @@ describe("authorRecipe — profile threading", () => {
     });
     expect(adventurous).not.toBeNull();
     expect(adventurous!.overlap.beatmatched).toBe(true);
+    expect(adventurous!.overlap.stretchB).toBeNull();
+  });
+
+  it("a 10% pair: standard and adventurous stretch, conservative refuses the beatmatch entirely", () => {
+    const request: RecipeRequest = {
+      outgoing: analysis(),
+      outgoingPositionSec: 60,
+      incoming: analysis({
+        audioHash: "hash-b",
+        beatMap: {
+          bpm: 120 / 1.1,
+          firstBeatSec: 0,
+          beatsPerBar: 4,
+          durationSec: 240,
+        },
+      }),
+    };
+    const standard = authorRecipe({ ...request, profile: STANDARD_PROFILE });
+    expect(standard).not.toBeNull();
+    expect(standard!.overlap.beatmatched).toBe(true);
+    expect(standard!.overlap.stretchB).toBeCloseTo(1.1, 6);
+
+    const adventurous = authorRecipe({
+      ...request,
+      profile: ADVENTUROUS_PROFILE,
+    });
+    expect(adventurous).not.toBeNull();
+    expect(adventurous!.overlap.beatmatched).toBe(true);
+    // Past even adventurous's 9% rate cap — a rendition there too.
+    expect(adventurous!.overlap.stretchB).toBeCloseTo(1.1, 6);
+
+    const conservative = authorRecipe({
+      ...request,
+      profile: CONSERVATIVE_PROFILE,
+    });
+    // Past conservative's +8% ceiling: the pair changes family.
+    expect(conservative?.overlap.beatmatched ?? false).toBe(false);
+    expect(conservative?.overlap.stretchB ?? null).toBeNull();
+  });
+
+  it("the slow side is tighter: a −5% pair stretches only under conservative; −8% beatmatches only under adventurous, by rate", () => {
+    const atRate = (rateB: number): RecipeRequest => ({
+      outgoing: analysis(),
+      outgoingPositionSec: 60,
+      incoming: analysis({
+        audioHash: "hash-b",
+        beatMap: {
+          bpm: 120 / rateB,
+          firstBeatSec: 0,
+          beatsPerBar: 4,
+          durationSec: 240,
+        },
+      }),
+    });
+
+    // −5%: inside standard's rate cap (rate), past conservative's
+    // rate cap but inside its −6% ceiling (rendition).
+    const standard5 = authorRecipe({
+      ...atRate(0.95),
+      profile: STANDARD_PROFILE,
+    });
+    expect(standard5!.overlap.beatmatched).toBe(true);
+    expect(standard5!.overlap.stretchB).toBeNull();
+    const conservative5 = authorRecipe({
+      ...atRate(0.95),
+      profile: CONSERVATIVE_PROFILE,
+    });
+    expect(conservative5!.overlap.beatmatched).toBe(true);
+    expect(conservative5!.overlap.stretchB).toBeCloseTo(0.95, 6);
+
+    // −8%: past the −6% ceilings of standard and conservative both;
+    // adventurous's −9% ceiling coincides with its 9% rate cap, so
+    // it answers by rate — the down-side rendition reach adds
+    // nothing there, by the caps' own numbers.
+    const standard8 = authorRecipe({
+      ...atRate(0.92),
+      profile: STANDARD_PROFILE,
+    });
+    expect(standard8?.overlap.beatmatched ?? false).toBe(false);
+    const adventurous8 = authorRecipe({
+      ...atRate(0.92),
+      profile: ADVENTUROUS_PROFILE,
+    });
+    expect(adventurous8!.overlap.beatmatched).toBe(true);
+    expect(adventurous8!.overlap.stretchB).toBeNull();
   });
 
   it("blend lengths follow the profile: conservative shorter than standard on a quiet pair", () => {

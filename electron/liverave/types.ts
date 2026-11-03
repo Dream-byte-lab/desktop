@@ -4,10 +4,27 @@
 // lives in the renderer; the guest web server lives in the main
 // process; these types are the contract between them.
 
+/**
+ * Where a track listing reached the guest from (Step 6 provenance):
+ * "tonight" — tonight's published catalogue (the host's queue);
+ * "search" — the programme-wide search the guest ran from the party
+ * page. The label rides the listing, the request record, the host's
+ * feed and the published up-next, so a guest request is always
+ * visibly a guest request, with its source attached.
+ */
+export type PartyTrackSource = "tonight" | "search";
+
 export interface PartyTrackListing {
   id: string;
   title: string;
   artist: string;
+  /** Provenance: which pool this listing came from. */
+  source?: PartyTrackSource;
+  /**
+   * On up-next listings only: this queue entry is a guest request
+   * (its `source` says where that guest found it).
+   */
+  requested?: boolean;
 }
 
 /** Everything a guest is allowed to see about tonight. */
@@ -22,7 +39,12 @@ export interface PartyPublicState {
   partyName: string;
   nowPlaying: PartyTrackListing | null;
   upNext: PartyTrackListing[];
-  /** Tonight's searchable tracks — the pool guests request from. */
+  /**
+   * Tonight's tracks — the host's queue, still the first pool a
+   * guest browses. Since Step 6 it is no longer the ONLY pool: a
+   * guest may also request anything the programme search surfaces
+   * (those listings are vouched for per search, not published here).
+   */
   catalogue: PartyTrackListing[];
 }
 
@@ -31,6 +53,8 @@ export interface PartyRequestRecord {
   requestId: string;
   guestToken: string;
   trackId: string;
+  /** Provenance: the pool the guest picked this track from. */
+  source: PartyTrackSource;
   /** When the request arrived, in party-clock seconds. */
   requestedAtSec: number;
   /**
@@ -51,6 +75,22 @@ export interface PartyReaction {
 export interface PartyRequestStatusUpdate {
   requestId: string;
   status: string;
+}
+
+/**
+ * A programme search asked by a guest, relayed to the renderer —
+ * the programme's search lives there; the server only carries the
+ * question and the answer. `searchId` pairs a reply with its ask.
+ */
+export interface PartySearchRequest {
+  searchId: string;
+  query: string;
+}
+
+/** The renderer's answer to a PartySearchRequest. */
+export interface PartySearchReply {
+  searchId: string;
+  tracks: PartyTrackListing[];
 }
 
 /** What the host's screen shows about the running party server. */

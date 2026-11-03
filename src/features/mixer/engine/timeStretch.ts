@@ -1,15 +1,19 @@
 // ============================================================================
-// SPIKE — Step 5, slice S5-5: the time-stretch go/no-go spike.
+// The time-stretch renderer — born as the Step 5, slice S5-5 spike,
+// now the production renderer behind the preparation layer.
 //
-// THIS FILE IS NOT WIRED TO ANY PRODUCTION PATH. Nothing imports it
-// except its own test suite (timeStretch.test.ts), which is the spike
-// harness. It exists so requirement 4 of the Step 5 charter — "pitch-
-// independent tempo, or none" — is answered by measurement, not hope.
-// The verdict, the numbers, and the integration design (if GO) live in
-// investigation/step5-slice-s5-5.md. If the verdict is NO-GO this file
-// is the documented negative result the blueprint (§4.4) asks for; if
-// GO, this file loses the SPIKE fence and becomes the stretch renderer
-// behind the preparation layer — the deck itself never changes.
+// The spike existed so requirement 4 of the Step 5 charter — "pitch-
+// independent tempo, or none" — was answered by measurement, not
+// hope. The verdict was GO for SoundTouch (candidate 1 below): the
+// stretch integration wires stretchWithSoundTouch into production
+// through stretchTrackRunner.ts (a worker, quickSeek the production
+// default) and trackSource.ts's rendition cache — the deck itself
+// never changes. The rejected candidates (phase vocoder, naive OLA)
+// and the metrics stay in this file, exercised by the spike harness
+// (timeStretch.test.ts), as the standing evidence for the verdict
+// and the regression net for the renderer. The verdict and the
+// numbers live in investigation/step5-slice-s5-5.md and
+// investigation/step5-stretch-integration.md.
 //
 // THE QUESTION: can this app change a track's tempo WITHOUT changing
 // its pitch, at a quality a listener accepts inside a blend, within

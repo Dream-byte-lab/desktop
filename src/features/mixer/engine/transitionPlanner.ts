@@ -16,6 +16,7 @@ import {
 import {
   resolveProfile,
   STANDARD_PROFILE,
+  withinStretchCeilings,
   type DecisionProfile,
 } from "./decisionProfile";
 import { keyCompatibility, type KeyCompatibility } from "./keyCompatibility";
@@ -273,10 +274,15 @@ export function planTransitionWithReferee(
 //    else v1's phrase arithmetic (the geometry above, generalised to
 //    accept a chosen exit).
 // 3. TEMPO is a strategy, not a reflex: beatmatching happens only
-//    inside a stated stretch cap and only when the tempo evidence is
+//    inside a stated reach and only when the tempo evidence is
 //    trustworthy (tempo confidence and grid confidence — the v1
-//    orphans, spent at last). Beyond that, the recipe is a rate-1
-//    family: a drop-cut, or a filter fade — never silent pitch damage.
+//    orphans, spent at last). Inside the profile's rate cap the deck
+//    itself rate-shifts; past it, inside the profile's rendition
+//    ceilings, the blend is authored against a pitch-preserved
+//    rendition of the incoming (overlap.stretchB — preparation
+//    renders it; the deck just plays it at rate 1). Beyond both, the
+//    recipe is a rate-1 family: a drop-cut, or a filter fade — never
+//    silent pitch damage.
 // 4. KEY spends as a bounded veto: a distant relation caps blends at
 //    8 beats; an unknown key is neutral, never a veto.
 // 5. VOCALS are judged by the GRADED referee (applyVocalReferee):
@@ -477,6 +483,12 @@ interface AutomationSpec {
   /** Sweep the outgoing's lowpass down across the overlap. */
   filterSweep: boolean;
   rateB: number;
+  /**
+   * True when B will be performed from a pitch-preserved rendition
+   * (overlap.stretchB): the rendition is already at tempo, so the
+   * rate curve is flat 1 — no hold at rateB and NO rate return.
+   */
+  stretchRendition?: boolean;
   /** Rate-return length after the overlap, ms (0 when rateB is 1). */
   rateReturnMs: number;
   /** Ramp A's echo send over the overlap's final beat of this length; null = no echo. */
@@ -582,7 +594,7 @@ function buildAutomation(spec: AutomationSpec): TransitionRecipe["automation"] {
   const filterIn = flatCurve("filter-cutoff", "hertz", OPEN_FILTER_HZ);
 
   const ratePoints: AutomationPoint[] =
-    spec.rateB === 1
+    spec.rateB === 1 || spec.stretchRendition
       ? [{ atMs: 0, value: 1 }]
       : [
           { atMs: 0, value: spec.rateB },
@@ -657,6 +669,9 @@ function rebuildAutomation(
     filterSweep:
       a.filterOut.points[a.filterOut.points.length - 1].value < OPEN_FILTER_HZ,
     rateB: recipe.overlap.rateB,
+    // A shortened stretch recipe stays a stretch recipe: the rebuilt
+    // rate curve must stay flat, never re-acquire a hold-and-return.
+    stretchRendition: recipe.overlap.stretchB !== null,
     rateReturnMs: oldReturnMs,
     echoTailMs:
       recipe.fx.echo && newDurationMs > 0
@@ -952,7 +967,18 @@ export interface AuthorContext {
   nowBeat: number;
   totalBeatsA: number;
   tempoTrusted: boolean;
+  /** Beatmatching is viable in SOME mode (rate or rendition). */
   beatmatchViable: boolean;
+  /** Beatmatching is viable by deck rate alone (inside the rate cap). */
+  rateBeatmatchViable: boolean;
+  /**
+   * The viable beatmatch is a RENDITION beatmatch: the pair sits
+   * past the profile's rate cap but inside its stretch ceilings, so
+   * the blend is authored against a pitch-preserved rendition of B.
+   * Renditions are spent only when rate cannot honestly cover the
+   * gap — inside the rate cap, rate mode wins (no render cost).
+   */
+  stretchMode: boolean;
 }
 
 export function authorContext(request: RecipeRequest): AuthorContext {
@@ -979,8 +1005,15 @@ export function authorContext(request: RecipeRequest): AuthorContext {
       outMap.grid.confidence >= profile.minGridConfidence) &&
     (inMap.grid === undefined ||
       inMap.grid.confidence >= profile.minGridConfidence);
-  const beatmatchViable =
+  const rateBeatmatchViable =
     stretch <= profile.maxBeatmatchStretch && tempoTrusted;
+  // The rendition reach: past the rate cap, a pitch-preserved
+  // rendition still beatmatches honestly — up to the profile's
+  // asymmetric stretch ceilings, and only on trusted tempo evidence
+  // (a rendition of a guessed tempo is a rendered guess).
+  const stretchViable = tempoTrusted && withinStretchCeilings(profile, rateB);
+  const beatmatchViable = rateBeatmatchViable || stretchViable;
+  const stretchMode = beatmatchViable && !rateBeatmatchViable;
 
   return {
     profile,
@@ -992,6 +1025,8 @@ export function authorContext(request: RecipeRequest): AuthorContext {
     totalBeatsA,
     tempoTrusted,
     beatmatchViable,
+    rateBeatmatchViable,
+    stretchMode,
   };
 }
 
@@ -1064,6 +1099,7 @@ function authorBlend(
   const { outgoing, incoming } = request;
   const outMap = outgoing.beatMap;
   const { profile, entry, rateB, stretch, keyFit, nowBeat, totalBeatsA } = ctx;
+  const stretchMode = ctx.stretchMode;
   const minLead = profile.minLeadBeats;
 
   // Desired length: a long blend is earned by a quiet pair (low vocal
@@ -1186,6 +1222,7 @@ function authorBlend(
       beatmatched: true,
       rateA: 1,
       rateB,
+      stretchB: stretchMode ? rateB : null,
       bpmA: outMap.bpm,
       bpmB: incoming.beatMap.bpm,
     },
@@ -1197,7 +1234,10 @@ function authorBlend(
       openMidHigh: geometry.blendBeats >= 8,
       filterSweep: false,
       rateB,
-      rateReturnMs: returnMs,
+      // Stretch mode has no rate return to schedule: the rendition
+      // IS at tempo for the whole track, not just the overlap.
+      stretchRendition: stretchMode,
+      rateReturnMs: stretchMode ? 0 : returnMs,
       echoTailMs: null,
     }),
     loops: geometry.loop
@@ -1304,7 +1344,13 @@ function authorRateOneJoin(
   const inMap = incoming.beatMap;
   const { profile, entry, keyFit, stretch, nowBeat, totalBeatsA } = ctx;
   const minLead = profile.minLeadBeats;
-  const beatmatchViable = ctx.beatmatchViable;
+  // The beatmatched CUT below holds B at rate on the deck for its
+  // two beats — a rendition cannot serve it (the deck would keep
+  // playing the retimed copy for the whole track, far past the
+  // cut's promise), so this family gates on RATE viability alone.
+  // A stretch-only pair takes the plain cut here, as it did before
+  // renditions existed.
+  const beatmatchViable = ctx.rateBeatmatchViable;
   const phrase = phraseBeats(outMap, 4);
 
   // A landing point for A: the first phrase boundary with enough
@@ -1349,6 +1395,7 @@ function authorRateOneJoin(
           beatmatched: true,
           rateA: 1,
           rateB,
+          stretchB: null,
           bpmA: outMap.bpm,
           bpmB: inMap.bpm,
         },
@@ -1389,6 +1436,7 @@ function authorRateOneJoin(
         beatmatched: false,
         rateA: 1,
         rateB: 1,
+        stretchB: null,
         bpmA: outMap.bpm,
         bpmB: inMap.bpm,
       },
@@ -1465,6 +1513,7 @@ function authorRateOneJoin(
       beatmatched: false,
       rateA: 1,
       rateB: 1,
+      stretchB: null,
       bpmA: outMap.bpm,
       bpmB: inMap.bpm,
     },

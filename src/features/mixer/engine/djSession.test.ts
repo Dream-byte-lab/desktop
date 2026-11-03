@@ -28,6 +28,8 @@ vi.mock("@/shared/ui/Toast", () => ({
 vi.mock("./trackSource", () => ({
   loadTrackForMixing: loadMock.fn,
   preparedTrack: vi.fn(() => undefined),
+  loadStretchRendition: vi.fn(async () => null),
+  stretchRendition: vi.fn(() => undefined),
 }));
 
 vi.mock("./twoDeckMixer", () => ({

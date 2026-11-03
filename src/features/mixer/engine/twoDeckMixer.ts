@@ -34,6 +34,16 @@ import { applyVocalReferee, type TransitionPlan } from "./transitionPlanner";
 // performed against the deepened one). Any failure performs the
 // recipe's fallback instead — a plain cut — rather than forcing the
 // blend or throwing into the session.
+//
+// One conversion lives here, and only here: a stretch recipe's
+// anchors are written in B's ORIGINAL track time (the same timeline
+// the author, the referee and the session's position model all
+// read), while the rendition buffer it is performed against runs
+// on rendition time (original ÷ stretchB). The B-side positions
+// that touch the buffer — the deck start offset, B's loop regions,
+// the fallback cut's offset — are converted by the factor at
+// exactly those reads. With stretchB null, nothing converts and
+// performance is byte-identical to before.
 
 /** Samples used when a volume curve is rendered for setValueCurveAtTime. */
 const VOLUME_SAMPLES = 256;
@@ -317,6 +327,12 @@ export class TwoDeckMixer {
   ): { blendStartCtxTime: number; blendEndCtxTime: number } {
     let working = recipe;
 
+    // A B-side anchor (original track time) as a position in the
+    // buffer actually being performed: divided by the stretch
+    // factor when this recipe performs against a rendition.
+    const bufferSecB = (originalSec: number, stretchB: number | null) =>
+      stretchB !== null && stretchB > 0 ? originalSec / stretchB : originalSec;
+
     // Fingerprint check: a recipe is valid only for the audio it was
     // authored against (the REA beats-hash lesson). A mismatch — or a
     // structurally invalid recipe — performs the fallback plain cut.
@@ -338,7 +354,7 @@ export class TwoDeckMixer {
       if (mismatch) {
         return this.performFallbackCut(
           nextBuffer,
-          recipe.overlap.startBMs / 1000,
+          bufferSecB(recipe.overlap.startBMs / 1000, recipe.overlap.stretchB),
           options.levelGain ?? 1,
         );
       }
@@ -351,7 +367,7 @@ export class TwoDeckMixer {
       return this.performFallbackCut(
         nextBuffer,
         Number.isFinite(recipe.overlap.startBMs)
-          ? recipe.overlap.startBMs / 1000
+          ? bufferSecB(recipe.overlap.startBMs / 1000, recipe.overlap.stretchB)
           : 0,
         options.levelGain ?? 1,
       );
@@ -368,7 +384,10 @@ export class TwoDeckMixer {
       this.context.currentTime +
       Math.max(SCHEDULE_AHEAD_SEC, working.leadInSec);
     const blendEnd = blendStart + durationSec;
-    const startBSec = working.overlap.startBMs / 1000;
+    const startBSec = bufferSecB(
+      working.overlap.startBMs / 1000,
+      working.overlap.stretchB,
+    );
 
     // The echo network takes the recipe's tuning for this join.
     if (working.fx.echo) {
@@ -398,7 +417,10 @@ export class TwoDeckMixer {
     incoming.play(blendStart, startBSec, rateAtStart);
     for (const loop of working.loops) {
       if (loop.type === "loop" && loop.side === "B") {
-        incoming.setLoopRegion(loop.startMs / 1000, loop.endMs / 1000);
+        incoming.setLoopRegion(
+          bufferSecB(loop.startMs / 1000, working.overlap.stretchB),
+          bufferSecB(loop.endMs / 1000, working.overlap.stretchB),
+        );
       }
     }
     if (durationSec > 0) {

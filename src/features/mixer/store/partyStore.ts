@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import type { PartyTrackSource } from "../../../../electron/liverave/types";
 
 // The party panel's view of liveRave: whether the party is open,
 // where guests join, what has been requested, and the host's own
@@ -11,6 +12,8 @@ export interface PartyFeedItem {
   trackId: string;
   title: string;
   artist: string;
+  /** Provenance: the pool the guest picked this track from. */
+  source: PartyTrackSource;
   status: string;
 }
 

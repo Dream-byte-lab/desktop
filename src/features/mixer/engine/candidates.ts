@@ -86,6 +86,13 @@ export interface CandidateEvidence {
   vocalEvidence: "trusted" | "uncertain";
   /** |rateB − 1| of the recipe, 0 for rate-1 joins. */
   stretch: number;
+  /**
+   * True when the recipe performs against a pitch-preserved
+   * rendition of B (overlap.stretchB set): scoring judges its
+   * stretch against the profile's rendition ceiling for its
+   * direction, not the rate cap.
+   */
+  stretchMode: boolean;
   beatmatched: boolean;
   /** Overlap length in beats of the outgoing (0 for cuts). */
   blendBeats: number;
@@ -263,6 +270,7 @@ export function deriveCandidateEvidence(
     vocalOverlap: recipe.evidence.vocalOverlap,
     vocalEvidence: recipe.evidence.vocalEvidence,
     stretch: Math.abs(o.rateB - 1),
+    stretchMode: o.stretchB !== null,
     beatmatched: o.beatmatched,
     blendBeats: durationSec * (o.bpmA / 60),
     entryKind,
@@ -367,6 +375,7 @@ function ownJoin(request: RecipeRequest, spec: OwnJoinSpec): TransitionRecipe {
       beatmatched: false,
       rateA: 1,
       rateB: 1,
+      stretchB: null,
       bpmA: outMap.bpm,
       bpmB: inMap.bpm,
     },
@@ -550,6 +559,10 @@ function signatureOf(recipe: TransitionRecipe): string {
     Math.round(o.startBMs),
     Math.round(o.durationMs),
     o.rateB.toFixed(4),
+    // The same geometry performed by rate and by rendition are two
+    // different joins (different cost, different sound) — they must
+    // never collapse into one candidate.
+    o.stretchB === null ? "rate" : `stretch:${o.stretchB.toFixed(4)}`,
     loops,
     recipe.fx.echo ? "echo" : "",
   ].join("|");
