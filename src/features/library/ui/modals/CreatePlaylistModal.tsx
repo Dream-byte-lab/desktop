@@ -391,8 +391,9 @@ export default function CreatePlaylistModal() {
             }}
             className="mt-3 self-start text-[13px] font-medium text-text-secondary transition-colors hover:text-text-primary"
           >
-            Failed imports{failedCount > 0 ? ` (${failedCount})` : ""} — songs
-            that could not come across are kept here
+            The “Could not import” playlist
+            {failedCount > 0 ? ` (${failedCount})` : ""} — songs that could not
+            come across are saved there automatically
           </button>
         )}
       </div>

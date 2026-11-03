@@ -7,16 +7,17 @@ import {
   failedImports,
   type FailedImportEntry,
 } from "../../services/import/failures/failedImportsStore";
-import { retryFailedImports } from "../../services/import/failures/retryFailedImports";
-import { finalizeImportedPlaylist } from "../../services/import/manager/finalizeImport";
+import { FAILED_PLAYLIST_TITLE } from "../../services/import/failures/failedPlaylist";
+import { recoverFailedImports } from "../../services/import/failures/recoverFailedImports";
 import { useModalStore } from "../../store/modalStore";
 
-// The visible face of the failed-imports collection: every song
-// that could not come across in an import, kept here automatically
+// The visible face of the ONE failed-songs playlist ("Could not
+// import"): every song that could not come across in an import is
+// saved into it automatically, during the import, and listed here
 // with the reason in plain words. Nothing here is playable yet —
 // these are the songs still waiting for a match. Retry re-runs the
 // matching; songs that now match confidently are saved into a
-// "<playlist> — recovered" playlist and leave the list, and songs
+// "<playlist> — recovered" playlist and leave this one, and songs
 // that still cannot match stay, with their reason refreshed.
 
 export default function FailedImportsModal() {
@@ -48,12 +49,14 @@ export default function FailedImportsModal() {
   const removeEntry = (entry: FailedImportEntry) => {
     failedImports.remove([entry.key]);
     setEntries(failedImports.list());
+    notifyLibraryChanged();
   };
 
   const clearAll = () => {
     failedImports.clear();
     setEntries([]);
     setNotice("");
+    notifyLibraryChanged();
   };
 
   const retryAll = async () => {
@@ -61,72 +64,12 @@ export default function FailedImportsModal() {
     setBusy(true);
     setNotice("");
     try {
-      const outcome = await retryFailedImports(entries);
-      // Refresh the held entries for songs that still cannot match.
-      const failedAt = new Date().toISOString();
-      if (outcome.stillFailing.length > 0) {
-        failedImports.record(
-          outcome.stillFailing.map(({ entry, reason }) => ({
-            source: entry.source,
-            sourceTrack: entry.sourceTrack,
-            reason,
-            stage: entry.stage,
-            importTitle: entry.importTitle,
-            failedAt,
-          })),
-        );
-      }
-      // Save the recovered songs, grouped back under their import.
-      const recoveredByTitle = new Map<
-        string,
-        {
-          entry: FailedImportEntry;
-          track: (typeof outcome.matched)[number]["track"];
-        }[]
-      >();
-      for (const pair of outcome.matched) {
-        const list = recoveredByTitle.get(pair.entry.importTitle) ?? [];
-        list.push(pair);
-        recoveredByTitle.set(pair.entry.importTitle, list);
-      }
-      const recoveredKeys: string[] = [];
-      let recoveredCount = 0;
-      for (const [title, pairs] of recoveredByTitle) {
-        const savedResult = await finalizeImportedPlaylist(
-          `${title} — recovered`,
-          undefined,
-          pairs.map((pair) => pair.track),
-        );
-        const unsavedIds = new Set(
-          savedResult.failedTracks.map((track) => track.id),
-        );
-        for (const pair of pairs) {
-          if (unsavedIds.has(pair.track.id)) {
-            // Matched but could not be saved: it stays held.
-            failedImports.record([
-              {
-                source: pair.entry.source,
-                sourceTrack: pair.entry.sourceTrack,
-                reason: "save_failed",
-                stage: "saving",
-                importTitle: pair.entry.importTitle,
-                failedAt,
-              },
-            ]);
-          } else {
-            recoveredKeys.push(pair.entry.key);
-            recoveredCount += 1;
-          }
-        }
-      }
-      if (recoveredKeys.length > 0) {
-        failedImports.remove(recoveredKeys);
-        notifyLibraryChanged();
-      }
+      const outcome = await recoverFailedImports(entries);
+      if (outcome.recoveredCount > 0) notifyLibraryChanged();
       setEntries(failedImports.list());
       setNotice(
-        recoveredCount > 0
-          ? `Recovered ${recoveredCount} song${recoveredCount === 1 ? "" : "s"} into “recovered” playlists. ${outcome.stillFailing.length} still waiting for a match.`
+        outcome.recoveredCount > 0
+          ? `Recovered ${outcome.recoveredCount} song${outcome.recoveredCount === 1 ? "" : "s"} into “recovered” playlists. ${outcome.stillFailingCount} still waiting for a match.`
           : "No new matches yet — the songs stay here for the next try.",
       );
     } finally {
@@ -145,12 +88,13 @@ export default function FailedImportsModal() {
       <div className="flex max-h-[70vh] flex-col gap-3 p-5">
         <div>
           <div className="text-base font-semibold text-text-primary">
-            Failed imports
+            {FAILED_PLAYLIST_TITLE}
           </div>
           <p className="mt-1 text-[13px] text-text-secondary">
-            Songs that could not come across in an import are kept here
-            automatically — nothing is lost silently. When a song's match
-            appears later, retry brings it home.
+            Every song that could not come across in an import is saved into
+            this playlist automatically, while the import runs — nothing is lost
+            silently, and there is only ever this one playlist for all of them.
+            When a song's match appears later, retry brings it home.
           </p>
         </div>
 

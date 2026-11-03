@@ -24,7 +24,11 @@ import ImportingPlaylistCard from "./ImportingPlaylistCard";
 import OfflineMixCard from "./OfflineMixCard";
 import { LocalFilesCard } from "../local";
 import { CachedSongsCard, useCachedTracksStore } from "../cached";
-import { WifiOffLine } from "@mingcute/react";
+import {
+  FAILED_PLAYLIST_TITLE,
+  failedPlaylist,
+} from "../services/import/failures/failedPlaylist";
+import { PlaylistFill, WifiOffLine } from "@mingcute/react";
 import { useOfflineModeStore } from "@/features/connectivity";
 import { goOnline } from "@/features/connectivity/engine/offlineController";
 import { useSavedTracks } from "../saved/hooks/useSavedTracks";
@@ -142,6 +146,79 @@ function LikesPlaylistCard({
             {t("common.songs", { count })}
           </span>
         )}
+      </div>
+    </div>
+  );
+}
+
+// The library card for the ONE failed-songs playlist ("Could not
+// import"). It sits beside the other playlists whenever the
+// playlist holds songs; opening it shows the playlist's songs,
+// where they can be retried or removed. Imports fill it
+// automatically — this card never appears for an empty playlist.
+function FailedPlaylistCard({
+  viewMode = "grid",
+}: {
+  viewMode?: LibraryViewMode;
+}) {
+  const { t } = useTranslation();
+  const openFailedImports = useModalStore((state) => state.openFailedImports);
+  const [count, setCount] = useState(() => failedPlaylist.count());
+
+  useEffect(() => {
+    const refresh = () => setCount(failedPlaylist.count());
+    refresh();
+    window.addEventListener("library:changed", refresh);
+    return () => window.removeEventListener("library:changed", refresh);
+  }, []);
+
+  if (count === 0) return null;
+
+  if (viewMode === "list") {
+    return (
+      <div
+        onClick={openFailedImports}
+        className="w-full flex items-center justify-between rounded-control p-[8px] outline-none transition-colors duration-150 ease-out cursor-pointer hover:bg-border-alpha-14 select-none"
+      >
+        <div className="flex items-center gap-[16px] min-w-0">
+          <div className="relative h-[48px] w-[48px] shrink-0 overflow-hidden rounded-control bg-fill flex items-center justify-center text-text-tertiary">
+            <PlaylistFill size={20} />
+          </div>
+          <div className="min-w-0 flex flex-col gap-[2px]">
+            <h3
+              className="m-0 max-w-[min(52vw,560px)] overflow-hidden text-ellipsis whitespace-nowrap text-[16px] leading-[1.2] text-text-primary"
+              style={{ fontWeight: 400 }}
+            >
+              {FAILED_PLAYLIST_TITLE}
+            </h3>
+            <p
+              className="m-0 flex min-w-0 items-center text-title leading-[1.2] overflow-hidden text-text-secondary"
+              style={{ fontWeight: 350 }}
+            >
+              {t("common.songs", { count })}
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      onClick={openFailedImports}
+      className="group flex flex-col gap-[8px] cursor-pointer"
+      draggable={false}
+    >
+      <div className="relative aspect-square w-full overflow-hidden rounded-control bg-fill flex items-center justify-center text-text-tertiary select-none">
+        <PlaylistFill size={40} />
+      </div>
+      <div className="flex flex-col gap-[4px]">
+        <span className="truncate text-label font-[500] text-text-primary">
+          {FAILED_PLAYLIST_TITLE}
+        </span>
+        <span className="truncate text-body text-text-tertiary">
+          {t("common.songs", { count })}
+        </span>
       </div>
     </div>
   );
@@ -469,6 +546,10 @@ function OnlineLibraryPage() {
                             : []),
                           <LocalFilesCard
                             key="local-files-card"
+                            viewMode={viewMode}
+                          />,
+                          <FailedPlaylistCard
+                            key="failed-playlist-card"
                             viewMode={viewMode}
                           />,
                           ...(isImporting && importJob

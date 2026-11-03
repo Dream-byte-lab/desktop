@@ -8,7 +8,7 @@ import type {
   ImportSource,
   Track,
 } from "@/shared/contracts";
-import { recordFailedImports } from "../failures/failedImportsStore";
+import { saveFailedSongsToPlaylist } from "../failures/failedPlaylist";
 import type { FailedImportTrack } from "./clientImportManager";
 import { finalizeImportedPlaylist } from "./finalizeImport";
 
@@ -85,11 +85,24 @@ export async function finalizeLocalImport(
       description ?? record.job.description,
       tracks,
     );
-    // Every song that failed — at matching or at saving — is kept
-    // in the failed-imports collection, automatically. The import
-    // itself completes with whatever succeeded.
+    // Every song that failed — at matching, at saving, or left
+    // over at review — is saved into the ONE failed-songs playlist
+    // ("Could not import"), automatically, here inside the import
+    // itself: the job is only marked completed after this save, so
+    // a finished import always means the playlist is already
+    // populated. The import itself completes with whatever
+    // succeeded.
     const failedAt = new Date().toISOString();
-    recordFailedImports([
+    // Review leftovers: this job's review items whose proposed
+    // track is NOT among the tracks being finalized were turned
+    // down (or skipped wholesale) in the review modal — both the
+    // decide and the skip flows funnel into this finalize, and
+    // until now those songs were recorded nowhere.
+    const finalizedIds = new Set(tracks.map((track) => track.id));
+    const deniedReviewItems = record.reviewItems.filter(
+      (item) => item.proposedTrack && !finalizedIds.has(item.proposedTrack.id),
+    );
+    saveFailedSongsToPlaylist([
       ...matchingFailures.map((failure) => ({
         source: record.job.source,
         sourceTrack: failure.sourceTrack,
@@ -108,6 +121,14 @@ export async function finalizeLocalImport(
         },
         reason: "save_failed",
         stage: "saving" as const,
+        importTitle,
+        failedAt,
+      })),
+      ...deniedReviewItems.map((item) => ({
+        source: record.job.source,
+        sourceTrack: item.sourceTrack,
+        reason: "review_denied",
+        stage: "review" as const,
         importTitle,
         failedAt,
       })),

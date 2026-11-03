@@ -59,6 +59,7 @@ import {
   BUNDLE_UPDATES_DISABLED_FOR_LINERAVE,
   BundleManager,
 } from "./bundle-manager.js";
+import { LineraveBundleChannel } from "./linerave-bundle-channel.js";
 import { createBundleErrorStamp } from "./bundle-stamp.js";
 import { createSleepBlocker } from "./sleep-blocker.js";
 import { keepsOwnCors, needsOpenCors, withOpenCors } from "./cors.js";
@@ -149,6 +150,7 @@ let touchBarManager: TouchBarManager | null = null;
 let overlayManager: OverlayManager | null = null;
 let thumbar: ThumbarController | null = null;
 let bundleManager: BundleManager | null = null;
+let lineraveBundles: LineraveBundleChannel | null = null;
 let discordRpcManager: DiscordRpcManager | null = null;
 let poTokenService: PoTokenService | null = null;
 
@@ -471,10 +473,36 @@ function createWindow() {
       `bundle would serve: ${bundleManager.getEffectiveIndexPath()} (userData: ${app.getPath("userData")})`,
     );
     const embeddedIndex = path.join(RENDERER_DIST, "index.html");
-    slog(`loading embedded frontend instead: ${embeddedIndex}`);
-    mainWindow.webContents.on("did-finish-load", () =>
-      slog("renderer: did-finish-load"),
+    // LINERAVE STEP 3: our own signed bundle channel may have a verified
+    // frontend staged/active — serve it; upstream's channel above stays
+    // gated off. resolveIndexPath() also performs rollback of a bundle
+    // whose previous boot was never confirmed healthy.
+    lineraveBundles = new LineraveBundleChannel({
+      defaultRendererDist: RENDERER_DIST,
+    });
+    const lineraveIndex = lineraveBundles.resolveIndexPath();
+    slog(
+      lineraveIndex
+        ? `loading Linerave bundle frontend: ${lineraveIndex}`
+        : `loading embedded frontend instead: ${embeddedIndex}`,
     );
+    // LINERAVE STEP 3: a freshly applied bundle must prove a healthy
+    // boot — loaded and still alive after a grace period, or closed
+    // cleanly after loading — or the next launch rolls back to
+    // last-good automatically (see linerave-bundle-channel.ts).
+    let lineraveRendererLoaded = false;
+    mainWindow.webContents.on("did-finish-load", () => {
+      slog("renderer: did-finish-load");
+      lineraveRendererLoaded = true;
+      setTimeout(() => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          lineraveBundles?.confirmBootHealthy();
+        }
+      }, 5_000);
+    });
+    mainWindow.on("closed", () => {
+      if (lineraveRendererLoaded) lineraveBundles?.confirmBootHealthy();
+    });
     mainWindow.webContents.on("did-fail-load", (_event, code, description) =>
       slog(`renderer: did-fail-load ${code} ${description}`),
     );
@@ -484,7 +512,7 @@ function createWindow() {
       ),
     );
     void mainWindow
-      .loadFile(embeddedIndex)
+      .loadFile(lineraveIndex ?? embeddedIndex)
       .catch((error) => slog(`loadFile rejected: ${String(error)}`));
   }
 
@@ -609,6 +637,7 @@ if (!gotTheLock) {
     );
     overlayManager.setIndexPathResolver(
       () =>
+        lineraveBundles?.getActiveIndexPath() ??
         bundleManager?.getEffectiveIndexPath() ??
         path.join(RENDERER_DIST, "index.html"),
     );
@@ -2055,6 +2084,20 @@ if (!gotTheLock) {
       setInterval(
         () => {
           autoUpdater.checkForUpdates().catch(() => {});
+        },
+        6 * 60 * 60 * 1000,
+      );
+
+      // LINERAVE STEP 3: our own signed bundle channel checks quietly on
+      // the same cadence as the installer updater — shortly after launch,
+      // then every 6 hours. It only ever stages a verified bundle for the
+      // next launch; it never prompts and never swaps the running UI.
+      setTimeout(() => {
+        lineraveBundles?.checkInBackground().catch(() => {});
+      }, 30_000);
+      setInterval(
+        () => {
+          lineraveBundles?.checkInBackground().catch(() => {});
         },
         6 * 60 * 60 * 1000,
       );

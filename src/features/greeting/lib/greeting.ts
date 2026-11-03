@@ -54,6 +54,24 @@ function bandForHour(hour: number): Band {
   return current;
 }
 
+/** The five time-of-day bands, in the order BANDS defines them. */
+export type GreetingBandId =
+  "morning" | "midday" | "afternoon" | "evening" | "latenight";
+
+const BAND_IDS: GreetingBandId[] = [
+  "morning",
+  "midday",
+  "afternoon",
+  "evening",
+  "latenight",
+];
+
+/** Which band a moment falls in — the composer's view of greetingAt's bands. */
+export function greetingBandIdAt(date: Date): GreetingBandId {
+  const band = bandForHour(date.getHours());
+  return BAND_IDS[BANDS.indexOf(band)];
+}
+
 /** The greeting for a moment, addressed to a name when one is known. */
 export function greetingAt(date: Date, name?: string): Greeting {
   const band = bandForHour(date.getHours());

@@ -1,15 +1,19 @@
 import type { ClientImportedTrack } from "../importTypes";
 import type { ImportSource } from "@/shared/contracts";
 
-// The failed-imports collection: the holding playlist for songs
-// that could not come across. An import must never be all-or-
-// nothing, and a song that fails must never simply vanish into a
-// "skipped" count — every failure lands here automatically, with
-// the song's details, where it came from, and why it failed, kept
-// until the user clears it or a later retry succeeds. Entries are
-// the source songs (title, artists, album, source id): a failed
-// song has no playable track yet, which is exactly why it failed,
-// so this collection is a record to act on, not a playable list.
+// The failed-imports collection: the working tray of the ONE
+// failed-songs playlist ("Could not import", see
+// failedPlaylist.ts). The entries held here ARE that playlist's
+// contents — one set of records, one home; playlist saves and
+// removals go through this store, never around it. An import must
+// never be all-or-nothing, and a song that fails must never simply
+// vanish into a "skipped" count — every failure lands here
+// automatically, with the song's details, where it came from, and
+// why it failed, kept until the user clears it or a later retry
+// succeeds. Entries are the source songs (title, artists, album,
+// source id): a failed song has no playable track yet, which is
+// exactly why it failed, so this collection is a record to act on,
+// not a playable list.
 
 export type FailedImportStage = "matching" | "saving" | "review";
 

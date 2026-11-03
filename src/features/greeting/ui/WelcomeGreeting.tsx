@@ -2,13 +2,22 @@ import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { useEffect, useMemo, useState } from "react";
 import { userDisplayName } from "@/entities/user";
 import { useAuthStore } from "@/features/auth";
-import { greetingAt } from "../lib/greeting";
+import { composeFreshGreeting } from "../lib/compose";
+import {
+  deriveSessionContext,
+  loadGreetingMemory,
+  recordShowing,
+  saveGreetingMemory,
+} from "../lib/greetingMemory";
 
 // The welcome greeting: the first thing the app says when it opens.
 // It greets the account holder by name (when signed in), follows the
 // time of day, rises in with a gentle animation, and then gets out of
 // the way on its own. It never blocks anything — the container takes
-// no pointer events — and it appears once per launch.
+// no pointer events — and it appears once per launch. The words are
+// composed fresh for this exact moment (see lib/compose.ts) and
+// recorded in the no-repeat memory, so the listener never sees the
+// same greeting twice.
 
 const SHOW_DELAY_MS = 500;
 const VISIBLE_MS = 4600;
@@ -19,7 +28,21 @@ export function WelcomeGreeting() {
   const [visible, setVisible] = useState(false);
 
   const now = useMemo(() => new Date(), []);
-  const greeting = greetingAt(now, userDisplayName(user));
+  const [greeting] = useState(() => {
+    const memory = loadGreetingMemory();
+    const context = deriveSessionContext(memory, now);
+    const fresh = composeFreshGreeting(
+      {
+        date: now,
+        name: userDisplayName(user),
+        context,
+        rng: Math.random,
+      },
+      memory,
+    );
+    saveGreetingMemory(recordShowing(memory, fresh.hash, now));
+    return fresh.greeting;
+  });
   const dateLine = now.toLocaleDateString(undefined, {
     weekday: "long",
     day: "numeric",

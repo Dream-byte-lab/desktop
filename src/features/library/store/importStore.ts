@@ -3,7 +3,7 @@ import type { ImportJob, ImportReview } from "@/shared/api";
 import type { ImportSource, Track } from "@/shared/contracts";
 import { notifyLibraryChanged } from "../hooks/usePlaylists";
 import { detectImportSource } from "../services/import";
-import { recordFailedImports } from "../services/import/failures/failedImportsStore";
+import { saveFailedSongsToPlaylist } from "../services/import/failures/failedPlaylist";
 import { parseExportFile } from "../services/import/sources/spotify/spotifyExport";
 import {
   runClientImport,
@@ -124,10 +124,11 @@ export const useImportStore = create<ActiveImportState>((set, get) => ({
         if (outcome.reviewItems.length > 0) {
           if (outcome.failedTracks.length > 0) {
             // Matching failures are final the moment matching ends —
-            // keep them whatever the review below decides. (When
-            // there is no review, finalizeLocalImport keeps them.)
+            // save them into the one failed-songs playlist whatever
+            // the review below decides. (When there is no review,
+            // finalizeLocalImport saves them instead.)
             const failedAt = new Date().toISOString();
-            recordFailedImports(
+            saveFailedSongsToPlaylist(
               outcome.failedTracks.map((failure) => ({
                 source,
                 sourceTrack: failure.sourceTrack,
@@ -204,8 +205,8 @@ export const useImportStore = create<ActiveImportState>((set, get) => ({
         });
         // A file import runs unattended (a data download can hold
         // many playlists), so songs that would need a decision are
-        // not dropped: they are kept in Failed Imports, where a
-        // later retry can still bring them home.
+        // not dropped: they are saved into the one failed-songs
+        // playlist, where a later retry can still bring them home.
         const failedAt = new Date().toISOString();
         const needsDecision = outcome.reviewItems.map((item) => ({
           source: playlist.source,
@@ -215,7 +216,7 @@ export const useImportStore = create<ActiveImportState>((set, get) => ({
           importTitle: outcome.title,
           failedAt,
         }));
-        if (needsDecision.length > 0) recordFailedImports(needsDecision);
+        if (needsDecision.length > 0) saveFailedSongsToPlaylist(needsDecision);
         await finalizeLocalImport(
           job.id,
           outcome.approvedTracks,
