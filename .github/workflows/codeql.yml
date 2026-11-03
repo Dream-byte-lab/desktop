@@ -1,0 +1,58 @@
+name: CodeQL
+
+# Static analysis for the app's own code. Results land in the repo's
+# Security tab (Code scanning). This workflow is the "advanced setup":
+# do NOT also switch on CodeQL default setup in repo settings — the two
+# fight, and this file is the one we maintain.
+#
+# Runs when code lands on main, on every pull request, and once a week
+# so findings against unchanged code still surface as CodeQL's queries
+# improve.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Mondays, 05:27 UTC (off the hour, when GitHub's runners are quieter).
+    - cron: "27 5 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Required so CodeQL can publish its findings to the Security tab.
+      security-events: write
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: javascript-typescript
+            build-mode: none
+          - language: actions
+            build-mode: none
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@1fc58d04a4d4374f921bdac573c3811c240f9c26 # v4.39.2
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@1fc58d04a4d4374f921bdac573c3811c240f9c26 # v4.39.2
+        with:
+          category: "/language:${{ matrix.language }}"
