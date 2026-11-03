@@ -212,6 +212,13 @@
     "popularPlaylists": "Popular Playlists",
     "dailyMixes": "Your Mixes",
     "dailyMixesSubtitle": "Fresh playlists curated around your favorite artists and genres",
+    "heavyRotation": "Your heavy rotation",
+    "yourPlaylists": "Your playlists",
+    "yourLikedSongs": "Your liked songs",
+    "yourSavedAlbums": "Your saved albums",
+    "emptyTitle": "This space is yours",
+    "emptyDesc": "What you play, like and save will live here. Nothing on this page comes from anyone else's listening.",
+    "emptyLibraryAction": "Open your library",
     "load_failed": "Couldn't load your home feed"
   },
   "library": {

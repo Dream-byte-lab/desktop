@@ -33,10 +33,6 @@ export const popularTracksKeys = {
   onlyTracks: ["popularTracks"] as const,
 };
 
-export const popularTracksAllTimeKeys = {
-  allTime: ["popularTracksAllTime"] as const,
-};
-
 const EMPTY_ITEMS: PopularItem[] = [];
 const POPULAR_POLICY = { isFresh: freshFor(10 * 60_000) };
 
@@ -58,8 +54,4 @@ function usePopularTracks(range: "7d" | "all", limit: number) {
 
 export function usePopularTracksOnly(limit = 20) {
   return usePopularTracks("7d", limit);
-}
-
-export function usePopularTracksAllTime(limit = 20) {
-  return usePopularTracks("all", limit);
 }
