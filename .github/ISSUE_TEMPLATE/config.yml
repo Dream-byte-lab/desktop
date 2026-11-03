@@ -1,11 +1,11 @@
 blank_issues_enabled: false
 contact_links:
   - name: FAQ and known issues
-    url: https://github.com/tryliner/desktop/blob/main/docs/FAQ.md
-    about: Tracks not playing, imports, opening on macOS, accounts.
-  - name: Questions and ideas
-    url: https://github.com/tryliner/desktop/discussions
-    about: Ask a question or share an idea with the community.
+    url: https://github.com/Dream-byte-lab/desktop/blob/main/docs/FAQ.md
+    about: Tracks not playing, imports, accounts — the common problems are covered here.
+  - name: Questions and discussion
+    url: https://github.com/Dream-byte-lab/desktop/discussions
+    about: Ask a question or talk through an idea with other users.
   - name: Report a security issue
-    url: https://github.com/tryliner/desktop/security/advisories/new
-    about: Please report vulnerabilities privately, not as a public issue.
+    url: https://github.com/Dream-byte-lab/desktop/security/advisories/new
+    about: Please report vulnerabilities privately here, never as a public issue.
