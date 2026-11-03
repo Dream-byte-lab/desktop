@@ -257,8 +257,8 @@ export function planTransitionWithReferee(
 // =====================================================================
 // The recipe author (Step 5, slice S5-2).
 //
-// Everything above is v1 geometry — kept verbatim because the current
-// session still runs on it (through transitionStyle) until S5-4. What
+// Everything above is v1 geometry — kept verbatim because the recipe
+// adapter and the structure-less fallback still stand on it. What
 // follows is the new centre of this file: authoring a TransitionRecipe
 // for a pair, from the two tracks' analysis-v2 structures.
 //

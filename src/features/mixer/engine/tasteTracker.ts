@@ -1,6 +1,12 @@
 import type { Track } from "../../../shared/types/track";
 import { labelsForTrack } from "../../genres/trackGenres";
-import { applyEvent, emptyProfile, type TasteProfile } from "./tasteProfile";
+import type { JoinRecord } from "./joinHistory";
+import {
+  applyEvent,
+  applyJoinEvidence,
+  emptyProfile,
+  type TasteProfile,
+} from "./tasteProfile";
 
 // The taste tracker: the living profile for this listener. The DJ
 // session reports every track it finishes, blends out of, or is
@@ -56,11 +62,18 @@ export function recordListen(report: {
   // profile was written. An unlabelled track passes no tags, exactly
   // as before.
   const labels = labelsForTrack(track.id);
-  const tags = [...labels.playlistGenres, ...labels.genres];
   profile = applyEvent(profile, {
     artist: track.artists,
     trackId: track.id,
-    ...(tags.length > 0 ? { tags } : {}),
+    // The two label kinds are passed APART (v2): a Playlist Genre is
+    // the owner's own filing and lands at full rate; a basic Genre
+    // is source metadata and lands at the weakest. Merging them into
+    // one flat list — v1's way — priced the owner's signal at the
+    // mixed rate and hid the difference.
+    ...(labels.playlistGenres.length > 0
+      ? { playlistGenres: labels.playlistGenres }
+      : {}),
+    ...(labels.genres.length > 0 ? { genres: labels.genres } : {}),
     playedRatio,
     completed,
     repeated,
@@ -71,4 +84,17 @@ export function recordListen(report: {
 
 export function getTasteProfile(): TasteProfile {
   return profile;
+}
+
+/**
+ * The profile with the brain's DJ history folded in: performed joins
+ * are weak positive evidence for the tracks they joined. Read-only —
+ * the stored profile is untouched; the caller (the For You layer)
+ * ranks against the returned copy.
+ */
+export function getTasteProfileWithJoins(
+  joins: readonly JoinRecord[],
+  trackIdByAudioHash: ReadonlyMap<string, string>,
+): TasteProfile {
+  return applyJoinEvidence(profile, joins, trackIdByAudioHash, Date.now());
 }

@@ -1,12 +1,13 @@
 import type { KeyEstimate } from "./detectKey";
 import { keyCompatibility } from "./keyCompatibility";
 
-// liveRave's scheduler: the part of the party that used to be a human
-// DJ working a request list, done in code. A guest request is not an
-// order — it is data. This module weighs every open request against
-// tonight as it actually is: the energy the arc wants right now, the
-// tracks already lined up, what has already played, and the host's
-// do-not-play list. What comes out is a decision per request:
+// liveRave's request scheduler: the part of the party that used to
+// be a human DJ working a request list, done in code. A guest
+// request is not an order — it is data. This module weighs every
+// open request against tonight as it actually is: the energy the
+// arc wants right now, the tracks already lined up, what has
+// already played, and the host's do-not-play list. What comes out
+// is a decision per request:
 //
 //   - scheduled:  it fits the night, at the earliest slot where it
 //                 also joins musically with its neighbours;
@@ -19,8 +20,18 @@ import { keyCompatibility } from "./keyCompatibility";
 // ages a request upward — a patient guest's song eventually outranks
 // a fresh pile of votes. Scheduled requests are spaced: no two guest
 // tracks ever land back-to-back, so the set keeps its own flow.
-// Intake fairness (per-guest rate limits) belongs to the party
-// server layer when it lands; this is the musical brain it calls.
+//
+// v2 (Step 5): this scheduler is one organ of the brain (brain.ts),
+// not the brain itself. The session feeds it the night's context —
+// its phase energy comes from the brain's arc — and reads tonight's
+// track facts from CACHED analyses on the one-track horizon, never
+// by preparing the queue tail. The scheduler stays a pure function
+// of its inputs, and its thresholds live in one exported tuning
+// socket (the scheduler's half of the decision profile's home; the
+// values are the shipped judgement, unchanged). Signals never reach
+// in here: a do-not-play refusal and an already-played refusal hold
+// at any signal pressure, by construction — there is no signal
+// input to this function at all.
 
 export interface RaveTrackInfo {
   trackId: string;
@@ -67,14 +78,25 @@ export type RaveDecision =
       reason: string;
     };
 
-/** Energy further than this above the phase is a future-phase track. */
-const HELD_HIGH = 0.25;
-/** Energy further than this below the phase is a calmer-moment track. */
-const HELD_LOW = 0.35;
-/** Minimum join quality against a neighbour for a slot to be valid. */
-const MIN_JOIN = 0.35;
-/** Priority gained per minute spent waiting. */
-const AGE_PER_MIN = 0.2;
+/** The scheduler's judgement knobs, in one place. */
+export interface LiveRaveTuning {
+  /** Energy further than this above the phase is a future-phase track. */
+  heldHigh: number;
+  /** Energy further than this below the phase is a calmer-moment track. */
+  heldLow: number;
+  /** Minimum join quality against a neighbour for a slot to be valid. */
+  minJoin: number;
+  /** Priority gained per minute spent waiting. */
+  agePerMin: number;
+}
+
+/** The shipped scheduler judgement (v1's constants, socketed). */
+export const LIVERAVE_TUNING: LiveRaveTuning = {
+  heldHigh: 0.25,
+  heldLow: 0.35,
+  minJoin: 0.35,
+  agePerMin: 0.2,
+};
 
 function tempoScore(a: number, b: number): number {
   if (a <= 0 || b <= 0) return 0;
@@ -94,11 +116,12 @@ function fitsAt(
   track: RaveTrackInfo,
   upcoming: RaveTrackInfo[],
   slot: number,
+  tuning: LiveRaveTuning,
 ): boolean {
   const left = slot > 0 ? upcoming[slot - 1] : null;
   const right = slot < upcoming.length ? upcoming[slot] : null;
-  if (left && joinScore(left, track) < MIN_JOIN) return false;
-  if (right && joinScore(track, right) < MIN_JOIN) return false;
+  if (left && joinScore(left, track) < tuning.minJoin) return false;
+  if (right && joinScore(track, right) < tuning.minJoin) return false;
   return true;
 }
 
@@ -106,6 +129,7 @@ function fitsAt(
 export function scheduleRequests(
   requests: RaveRequest[],
   context: RaveContext,
+  tuning: LiveRaveTuning = LIVERAVE_TUNING,
 ): RaveDecision[] {
   const blocked = new Set(context.doNotPlay);
   const played = new Set(context.playedTrackIds);
@@ -126,14 +150,14 @@ export function scheduleRequests(
         status: "not-tonight",
         reason: "Already played tonight",
       });
-    } else if (track.energy > context.phaseEnergy + HELD_HIGH) {
+    } else if (track.energy > context.phaseEnergy + tuning.heldHigh) {
       decisions.set(request.id, {
         requestId: request.id,
         status: "waiting",
         reason:
           "Waiting for its moment — it belongs to a bigger part of the night",
       });
-    } else if (track.energy < context.phaseEnergy - HELD_LOW) {
+    } else if (track.energy < context.phaseEnergy - tuning.heldLow) {
       decisions.set(request.id, {
         requestId: request.id,
         status: "waiting",
@@ -146,7 +170,8 @@ export function scheduleRequests(
 
   const priority = (request: RaveRequest) =>
     request.votes +
-    Math.max(0, (context.nowSec - request.requestedAtSec) / 60) * AGE_PER_MIN;
+    Math.max(0, (context.nowSec - request.requestedAtSec) / 60) *
+      tuning.agePerMin;
   const ordered = [...contenders].sort(
     (a, b) => priority(b) - priority(a) || a.requestedAtSec - b.requestedAtSec,
   );
@@ -156,7 +181,7 @@ export function scheduleRequests(
     let placed: number | null = null;
     for (let slot = 0; slot <= context.upcoming.length; slot += 1) {
       if (usedSlots.some((used) => Math.abs(used - slot) < 2)) continue;
-      if (!fitsAt(request.track, context.upcoming, slot)) continue;
+      if (!fitsAt(request.track, context.upcoming, slot, tuning)) continue;
       placed = slot;
       break;
     }
