@@ -31,6 +31,17 @@ export class Deck {
    */
   readonly echoSend: GainNode;
   /**
+   * The scratch gate (the revamp's R2): a per-deck gain stage in
+   * series just before the volume fader, resting at exactly 1
+   * (transparent). Only scratch performance ever writes to it — the
+   * fader-gated techniques (chirp, transformer, flare) chop the
+   * deck's sound through here while the hand works the rate. It is
+   * deliberately NOT the volume fader: the recipe's blend curves own
+   * `gain`, and a gate fighting them for one parameter would corrupt
+   * both. No automation, blend, or manual control touches this node.
+   */
+  readonly scratchGate: GainNode;
+  /**
    * Per-track level matching: a static gain set when a track loads,
    * so quiet and loud masters play at comparable loudness. It sits
    * before everything else; no automation ever writes to it.
@@ -74,6 +85,9 @@ export class Deck {
     this.gain = context.createGain();
     this.gain.gain.value = 0;
 
+    this.scratchGate = context.createGain();
+    this.scratchGate.gain.value = 1;
+
     this.echoSend = context.createGain();
     this.echoSend.gain.value = 0;
 
@@ -85,7 +99,8 @@ export class Deck {
     this.mid.connect(this.high);
     this.high.connect(this.filter);
     this.filter.connect(this.bassTrim);
-    this.bassTrim.connect(this.gain);
+    this.bassTrim.connect(this.scratchGate);
+    this.scratchGate.connect(this.gain);
     this.gain.connect(destination);
     if (echoInput) {
       this.gain.connect(this.echoSend);

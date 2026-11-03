@@ -45,6 +45,19 @@ import { applyVocalReferee, type TransitionPlan } from "./transitionPlanner";
 // B's track time advances at rateB from startBMs, in rate mode and
 // rendition mode alike, so one formula places B's moves in both.
 //
+// Scratches (the revamp's R2) are performed here as well: a scratch
+// block drives its deck's rate as a hand motion (forward strokes
+// and their return strokes, alternating) while the deck's scratch
+// gate plays the technique's fader pattern — baby leaves the gate
+// open, chirp closes it on the push and opens it on the pull,
+// transformer clicks it at a stated rhythm over a slow hand, flare
+// opens it mid-stroke and clicks it shut at each extreme. The hand
+// is advance-exact: each stroke's excess over the written rate is
+// repaid by its return, so the deck's position at the window's end
+// is exactly where unperturbed playback would have put it, and the
+// rate and the gate are both home (written rate, gate open) at
+// that same instant.
+//
 // One conversion lives here, and only here: a stretch recipe's
 // anchors are written in B's ORIGINAL track time (the same timeline
 // the author, the referee and the session's position model all
@@ -73,6 +86,135 @@ function isStopMove(move: RecipeLoopBlock): boolean {
     move.type === "brake" ||
     move.type === "spinback"
   );
+}
+
+/** A scratch block (the revamp's R2): hand motion plus fader work. */
+function isScratchMove(move: RecipeLoopBlock): boolean {
+  return move.type === "scratch";
+}
+
+/** How fast a scratch gate closes, in seconds — a click, not a fade. */
+const GATE_CLICK_SEC = 0.003;
+/** How fast a scratch gate opens, in seconds. */
+const GATE_OPEN_SEC = 0.002;
+
+/**
+ * Schedules a scratch's HAND on a deck's rate control: `strokes`
+ * forward strokes, each followed by its return stroke, each stroke
+ * lasting half a cycle. The forward stroke runs at base + slope and
+ * the return at base − slope, where slope carries the record
+ * through `excursionBeats` of audio per stroke — so each stroke's
+ * excess over the written rate is repaid exactly by its return,
+ * and the deck's position at the window's end is the position
+ * unperturbed playback promised (the advance-exact invariant the
+ * recipe documents). The final event pins the rate home: a scratch
+ * is a visit, not a tempo.
+ */
+function scheduleScratchHand(
+  param: AudioParam,
+  move: RecipeLoopBlock,
+  startCtx: number,
+  durationSec: number,
+  baseRate: number,
+  bpm: number,
+): void {
+  const strokes = Math.max(1, move.strokes ?? 1);
+  const halfSec = durationSec / (strokes * 2);
+  const excursionSec = (move.excursionBeats ?? 0.5) * (60 / bpm);
+  const slope = halfSec > 0 ? excursionSec / halfSec : 0;
+  for (let k = 0; k < strokes * 2; k += 1) {
+    param.setValueAtTime(
+      k % 2 === 0 ? baseRate + slope : baseRate - slope,
+      startCtx + k * halfSec,
+    );
+  }
+  param.setValueAtTime(baseRate, startCtx + durationSec);
+}
+
+/**
+ * Schedules a scratch's FADER on the deck's scratch gate — the
+ * technique is the pattern:
+ *
+ * - baby: no events at all. The gate rests open; the hand alone is
+ *   the sound. (An empty event list is the assertion the tests make.)
+ * - chirp: the gate closes as the record pushes forward and opens
+ *   as it pulls back — one close and one open per stroke pair.
+ * - transformer: the gate clicks on a stated rhythm
+ *   (`clicksPerBeat`) while the hand drags slowly — the rhythm is
+ *   the fader's, not the hand's. Whatever the click count's parity,
+ *   the gate is OPEN at the window's end.
+ * - flare (1-click): the gate is shut AT each stroke extreme,
+ *   opens through the stroke's first fifth, holds open across its
+ *   middle, and clicks shut across its last fifth at the next
+ *   extreme; the final extreme is the release, so the gate is
+ *   open again exactly at the window's end.
+ *
+ * Every transition is ANCHORED — a setValueAtTime of the standing
+ * value at the moment the fader starts to move, then the short
+ * ramp. A bare ramp would interpolate from the PREVIOUS event's
+ * time, smearing the click across the whole span since it; the
+ * anchor is what makes a click a click.
+ */
+function scheduleScratchGate(
+  param: AudioParam,
+  move: RecipeLoopBlock,
+  startCtx: number,
+  durationSec: number,
+): void {
+  const endCtx = startCtx + durationSec;
+  if (move.technique === "chirp") {
+    const strokes = Math.max(1, move.strokes ?? 1);
+    const cycleSec = durationSec / strokes;
+    param.setValueAtTime(1, startCtx);
+    for (let k = 0; k < strokes; k += 1) {
+      const forwardStart = startCtx + k * cycleSec;
+      const backStart = forwardStart + cycleSec / 2;
+      if (k > 0) param.setValueAtTime(1, forwardStart);
+      param.linearRampToValueAtTime(0, forwardStart + GATE_CLICK_SEC);
+      param.setValueAtTime(0, backStart);
+      param.linearRampToValueAtTime(1, backStart + GATE_OPEN_SEC);
+    }
+    param.setValueAtTime(1, endCtx);
+  } else if (move.technique === "transformer") {
+    const clicksPerBeat = move.clicksPerBeat ?? 2;
+    const totalClicks = move.beats * clicksPerBeat;
+    param.setValueAtTime(1, startCtx);
+    let open = true;
+    for (let k = 1; k <= Math.floor(totalClicks + 1e-9); k += 1) {
+      const t = startCtx + (k * durationSec) / totalClicks;
+      if (t >= endCtx - GATE_CLICK_SEC) break;
+      param.setValueAtTime(open ? 1 : 0, t);
+      open = !open;
+      param.linearRampToValueAtTime(
+        open ? 1 : 0,
+        t + (open ? GATE_OPEN_SEC : GATE_CLICK_SEC),
+      );
+    }
+    if (!open) {
+      // An odd click count leaves the gate shut; the window must
+      // still end honest — open, on time.
+      param.setValueAtTime(0, endCtx - 0.004);
+      param.linearRampToValueAtTime(1, endCtx);
+    } else {
+      param.setValueAtTime(1, endCtx);
+    }
+  } else if (move.technique === "flare") {
+    const strokes = Math.max(1, move.strokes ?? 1);
+    const halfSec = durationSec / (strokes * 2);
+    const strokeCount = strokes * 2;
+    param.setValueAtTime(0, startCtx);
+    for (let s = 0; s < strokeCount; s += 1) {
+      const strokeStart = startCtx + s * halfSec;
+      param.linearRampToValueAtTime(1, strokeStart + halfSec * 0.2);
+      param.setValueAtTime(1, strokeStart + halfSec * 0.8);
+      if (s === strokeCount - 1) {
+        param.linearRampToValueAtTime(0, endCtx - 0.004);
+        param.linearRampToValueAtTime(1, endCtx);
+      } else {
+        param.linearRampToValueAtTime(0, strokeStart + halfSec);
+      }
+    }
+  }
 }
 
 /**
@@ -381,6 +523,7 @@ export class TwoDeckMixer {
     deck.high.gain.setValueAtTime(BASS_FLAT_DB, now);
     deck.filter.frequency.setValueAtTime(20_000, now);
     deck.echoSend.gain.setValueAtTime(0, now);
+    deck.scratchGate.gain.setValueAtTime(1, now);
     deck.clearLoop();
     const startAt = now + SCHEDULE_AHEAD_SEC;
     deck.play(startAt, offsetSec, 1);
@@ -601,6 +744,7 @@ export class TwoDeckMixer {
     if (rate) {
       const bMoves = movesOn("B");
       const bStops = bMoves.filter(isStopMove);
+      const bScratches = bMoves.filter(isScratchMove);
       const bNudges = bMoves.filter((m) => m.type === "nudge");
       if (bStops.length > 0) {
         // A stop move on the incoming deck takes the rate control
@@ -631,6 +775,77 @@ export class TwoDeckMixer {
           );
         }
         incoming.stop(lastEnd + 0.02);
+      } else if (bScratches.length > 0) {
+        // A scratch on the incoming deck takes the rate control
+        // for its window, as a stop move does — but where a stop
+        // ends the deck, a scratch RETURNS it: the written curve
+        // governs until the window, the hand governs inside it,
+        // and at the window's end the curve is rejoined at its own
+        // value there and re-scheduled for the remainder. The gate
+        // plays the technique's fader pattern on the deck's
+        // scratch gate — a parameter nothing else writes, so the
+        // gate and the blend can never fight over one control.
+        // Windows run in time order; a nudge outside every scratch
+        // window is still performed as written, and one inside a
+        // window is subsumed (the hand owns its window outright).
+        // Authoring never mixes these; a recipe carrying both gets
+        // both, each in its own time.
+        scheduleEvents(rate, a.rateB, blendStart);
+        const windows = [...bScratches]
+          .sort((x, y) => moveStartCtx(x) - moveStartCtx(y))
+          .map((move) => ({
+            move,
+            start: moveStartCtx(move),
+            end: moveStartCtx(move) + moveDurationSec(move),
+          }));
+        for (const w of windows) {
+          const startOffMs = (w.start - blendStart) * 1000;
+          const endOffMs = (w.end - blendStart) * 1000;
+          rate.cancelScheduledValues(w.start);
+          const base = automationValueAt(a.rateB, startOffMs);
+          rate.setValueAtTime(base, w.start);
+          scheduleScratchHand(
+            rate,
+            w.move,
+            w.start,
+            w.end - w.start,
+            base,
+            working.overlap.bpmB,
+          );
+          scheduleScratchGate(
+            incoming.scratchGate.gain,
+            w.move,
+            w.start,
+            w.end - w.start,
+          );
+          const endValue = automationValueAt(a.rateB, endOffMs);
+          rate.setValueAtTime(endValue, w.end);
+          const tail = a.rateB.points.filter((p) => p.atMs > endOffMs);
+          if (tail.length > 0) {
+            scheduleEvents(
+              rate,
+              {
+                ...a.rateB,
+                points: [{ atMs: endOffMs, value: endValue }, ...tail],
+              },
+              blendStart,
+            );
+          }
+        }
+        for (const move of bNudges) {
+          const start = moveStartCtx(move);
+          const durSec = moveDurationSec(move);
+          if (windows.some((w) => start < w.end && start + durSec > w.start)) {
+            continue;
+          }
+          scheduleNudge(
+            rate,
+            start,
+            durSec,
+            automationValueAt(a.rateB, (start - blendStart) * 1000),
+            move.bend ?? 1,
+          );
+        }
       } else if (bNudges.length > 0) {
         // Nudge bends fold INTO B's written rate curve: the curve
         // is rendered sampled, each sample multiplied by the bends
@@ -691,6 +906,28 @@ export class TwoDeckMixer {
             working.overlap.rateA,
           );
           outgoingStopCtx = Math.max(outgoingStopCtx, startCtx + durSec);
+        } else if (isScratchMove(move)) {
+          // A scratch on the outgoing deck — the scratch-out over
+          // its tail. A's rate is a written constant, so there is
+          // no curve to take over or rejoin: the hand performs from
+          // it and returns to it, the gate plays on A's own scratch
+          // gate, and the deck's stop waits for the window to
+          // finish sounding, as it does for a stop move.
+          scheduleScratchHand(
+            outRate,
+            move,
+            startCtx,
+            durSec,
+            working.overlap.rateA,
+            working.overlap.bpmA,
+          );
+          scheduleScratchGate(
+            outgoing.scratchGate.gain,
+            move,
+            startCtx,
+            durSec,
+          );
+          outgoingStopCtx = Math.max(outgoingStopCtx, startCtx + durSec);
         }
       }
     }
@@ -722,6 +959,7 @@ export class TwoDeckMixer {
     incoming.high.gain.setValueAtTime(BASS_FLAT_DB, start);
     incoming.filter.frequency.setValueAtTime(20_000, start);
     incoming.echoSend.gain.setValueAtTime(0, start);
+    incoming.scratchGate.gain.setValueAtTime(1, start);
     incoming.play(start, Math.max(0, startBSec), 1);
     outgoing.gain.gain.cancelScheduledValues(start);
     outgoing.gain.gain.setValueAtTime(0, start);

@@ -98,7 +98,16 @@ export interface RecipeOverlap {
 }
 
 export type RecipeLoopType =
-  "loop" | "spinback" | "vinyl-stop" | "brake" | "nudge";
+  "loop" | "spinback" | "vinyl-stop" | "brake" | "nudge" | "scratch";
+
+/**
+ * The scratch techniques (spec §2B), in the order a DJ learns them:
+ * the baby is the foundation hand motion with the fader open; the
+ * chirp, transformer and flare are FADER work layered over the hand
+ * — the gate chops what the hand moves. (Backspin, brake and vinyl
+ * stop are the same table's other rows; they are jog moves, above.)
+ */
+export type ScratchTechnique = "baby" | "chirp" | "transformer" | "flare";
 
 /**
  * A block of performed motion on one deck: a loop region, or — since
@@ -129,6 +138,23 @@ export type RecipeLoopType =
  *   multiplies by `bend` at the move's midpoint and is back to its
  *   written rate by the move's end. The beat-alignment primitive: a
  *   push (bend > 1) or a pull (bend < 1), never a new tempo.
+ * - `scratch` (the revamp's R2): POSITION manipulation. Over the
+ *   window [startMs, startMs + beats] of the side's track time the
+ *   deck's rate is driven as a HAND MOTION — `strokes` forward
+ *   strokes, each sweeping `excursionBeats` of audio, each followed
+ *   by a return stroke — while the deck's scratch gate plays the
+ *   technique's fader pattern (baby: gate open throughout; chirp:
+ *   gate closed on the forward stroke, open on the return;
+ *   transformer: gate clicking at `clicksPerBeat` over a slow hand;
+ *   flare: gate open mid-stroke, clicking shut at each extreme —
+ *   the 1-click flare). The hand is ADVANCE-EXACT by construction:
+ *   each forward stroke's excess over the written rate is repaid
+ *   by its return stroke, so over the window the deck's position
+ *   advances exactly as unperturbed playback would — at the
+ *   window's end the rate is the written rate again, the position
+ *   is the position the recipe's geometry promised, and nothing
+ *   downstream (later moves, the session's position model, the
+ *   track's end) needs to know a scratch happened.
  */
 export interface RecipeLoopBlock {
   type: RecipeLoopType;
@@ -142,6 +168,23 @@ export interface RecipeLoopBlock {
   peakRate?: number;
   /** Nudge only: the rate multiplier at the bend's midpoint (≠ 1). */
   bend?: number;
+  /** Scratch only: which technique the hand and gate perform. */
+  technique?: ScratchTechnique;
+  /**
+   * Scratch only: the number of forward strokes in the window (for
+   * a transformer, the number of slow hand cycles). Each forward
+   * stroke is followed by its return stroke.
+   */
+  strokes?: number;
+  /**
+   * Scratch only: how much audio each stroke sweeps, in beats of
+   * the side's tempo. This sets the hand's speed against the
+   * written rate — an excursion wider than the stroke's own length
+   * in beats drives the return stroke backwards through zero.
+   */
+  excursionBeats?: number;
+  /** Transformer only: the gate's click rhythm, in clicks per beat. */
+  clicksPerBeat?: number;
 }
 
 export interface RecipeEcho {
@@ -379,6 +422,65 @@ export function validateRecipe(recipe: TransitionRecipe): string[] {
         errors.push(
           `nudge on ${loop.side}: bend ${loop.bend} outside [0.9, 1.1] or equal to 1`,
         );
+      }
+    }
+    if (loop.type === "scratch") {
+      // A scratch is a named technique, a counted set of strokes,
+      // and a stated sweep. Without the technique there is no fader
+      // pattern to perform; without strokes there is no hand motion
+      // at all (a chirp with no direction change, a flare with no
+      // strokes, is not a quieter scratch — it is not the move); a
+      // sweep of zero is a hand resting on the record, and a sweep
+      // past two beats per stroke is a hand throwing it.
+      if (
+        loop.technique !== "baby" &&
+        loop.technique !== "chirp" &&
+        loop.technique !== "transformer" &&
+        loop.technique !== "flare"
+      ) {
+        errors.push(
+          `scratch on ${loop.side}: technique ${loop.technique} is not a scratch technique`,
+        );
+      }
+      if (
+        loop.strokes === undefined ||
+        !Number.isInteger(loop.strokes) ||
+        loop.strokes < 1
+      ) {
+        errors.push(
+          `scratch on ${loop.side}: strokes ${loop.strokes} is not a whole number ≥ 1`,
+        );
+      }
+      if (
+        loop.excursionBeats === undefined ||
+        !Number.isFinite(loop.excursionBeats) ||
+        loop.excursionBeats <= 0 ||
+        loop.excursionBeats > 2
+      ) {
+        errors.push(
+          `scratch on ${loop.side}: excursionBeats ${loop.excursionBeats} outside (0, 2]`,
+        );
+      }
+      if (!(loop.beats >= 1)) {
+        errors.push(
+          `scratch on ${loop.side}: a window of ${loop.beats} beats has no room for a stroke pair`,
+        );
+      }
+      if (loop.technique === "transformer") {
+        // The transformer's rhythm IS its fader pattern: a
+        // transformer without a stated click rhythm cannot be
+        // performed, and a rhythm past 8 clicks per beat is a
+        // tremolo, not a fader technique.
+        if (
+          loop.clicksPerBeat === undefined ||
+          !Number.isFinite(loop.clicksPerBeat) ||
+          loop.clicksPerBeat <= 0 ||
+          loop.clicksPerBeat > 8
+        ) {
+          errors.push(
+            `transformer on ${loop.side}: clicksPerBeat ${loop.clicksPerBeat} outside (0, 8]`,
+          );
+        }
       }
     }
   }

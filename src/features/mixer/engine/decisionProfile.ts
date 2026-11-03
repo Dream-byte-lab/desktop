@@ -44,6 +44,11 @@ export const DECISION_PROFILE_VERSION = 2;
  * perform them, and a candidate the decks cannot perform would be
  * a lie in the set); since the revamp's R1 the executor performs
  * them, and candidates.ts enumerates them as heavily-gated rivals.
+ * scratch joined with the revamp's R2 the same way — one family for
+ * the whole fader-gated family of techniques (baby / chirp /
+ * transformer / flare), priced per profile below: standard pays
+ * full theatre price but can reach it, adventurous pays less,
+ * conservative prices it out of its own authoring reach entirely.
  */
 export type JoinFamily =
   | "long-blend"
@@ -56,6 +61,7 @@ export type JoinFamily =
   | "filter-fade"
   | "spinback"
   | "vinyl-stop"
+  | "scratch"
   | "let-it-play"
   | "early-cut";
 
@@ -70,6 +76,7 @@ export const JOIN_FAMILIES: readonly JoinFamily[] = [
   "filter-fade",
   "spinback",
   "vinyl-stop",
+  "scratch",
   "let-it-play",
   "early-cut",
 ];
@@ -125,7 +132,8 @@ export interface DecisionProfile {
    * Base cost per family, subtracted from a candidate's weighted
    * evidence score: what this profile thinks a family must earn its
    * way past. Spinback and vinyl-stop are priced as habits to break,
-   * per the blueprint — rare by design.
+   * per the blueprint — rare by design. Scratch (R2) is priced the
+   * same way: the dearest family a profile will still author.
    */
   familyCosts: Record<JoinFamily, number>;
   /**
@@ -206,6 +214,7 @@ export const STANDARD_PROFILE: DecisionProfile = {
     "let-it-play": 0.03,
     spinback: 0.45,
     "vinyl-stop": 0.45,
+    scratch: 0.5,
   },
   weights: {
     keyFit: 0.22,
@@ -266,6 +275,7 @@ export const CONSERVATIVE_PROFILE: DecisionProfile = {
     "let-it-play": 0.01,
     spinback: 0.6,
     "vinyl-stop": 0.6,
+    scratch: 0.75,
   },
   weights: {
     keyFit: 0.25,
@@ -328,6 +338,7 @@ export const ADVENTUROUS_PROFILE: DecisionProfile = {
     "let-it-play": 0.08,
     spinback: 0.3,
     "vinyl-stop": 0.3,
+    scratch: 0.35,
   },
   weights: {
     keyFit: 0.16,

@@ -18,7 +18,9 @@
 //
 // (Spinback / vinyl-stop were omitted under the same rule until the
 // revamp's R1 taught the executor to perform them; they are now
-// enumerated as heavily-gated rivals — see authorStopExit.)
+// enumerated as heavily-gated rivals — see authorStopExit. The
+// scratch family joined under the same rule with R2 — see the
+// scratch authors below.)
 //
 // Deduplication: candidates are keyed on the plan itself (preset,
 // anchors, length, rate, loops, echo) — when two profiles author the
@@ -35,11 +37,14 @@ import {
 import { pairShapeOf } from "./joinHistory";
 import type { KeyRelation } from "./keyCompatibility";
 import { keyCompatibility } from "./keyCompatibility";
+import { meanVocalActivity } from "./detectVocals";
 import {
   flatCurve,
   OPEN_FILTER_HZ,
   validateRecipe,
   type AutomationCurve,
+  type RecipeLoopBlock,
+  type ScratchTechnique,
   type TransitionRecipe,
 } from "./recipe";
 import {
@@ -126,6 +131,9 @@ export interface Candidate {
 
 /** The family a recipe belongs to, read off the artefact itself. */
 export function familyOfRecipe(recipe: TransitionRecipe): JoinFamily {
+  // A scratch block makes the recipe a scratch join, whatever else
+  // it carries — the performance IS the join.
+  if (recipe.loops.some((l) => l.type === "scratch")) return "scratch";
   for (const loop of recipe.loops) {
     if (loop.type === "spinback") return "spinback";
     // The stop family: a brake is the gradual telling of the same
@@ -709,13 +717,482 @@ function authorStopExit(
 }
 
 // ---------------------------------------------------------------------
+// The scratch joins (the revamp's R2)
+// ---------------------------------------------------------------------
+
+/**
+ * The scratch authors: the fader-gated family — baby, chirp,
+ * transformer, flare — as heavily-gated rivals, in the stop exits'
+ * discipline and with a narrower door. A stop is performed AT a
+ * moment; a scratch is performed ON material, and material can
+ * refuse it. Every gate below must hold:
+ *
+ * - The authoring profile must price the scratch family within
+ *   reach (familyCosts.scratch ≤ SCRATCH_AUTHOR_MAX_FAMILY_COST).
+ *   STANDARD pays exactly the ceiling — reachable, but the dearest
+ *   thing it authors; ADVENTUROUS pays less; CONSERVATIVE prices
+ *   the family out of its own reach and never authors one.
+ * - The scratch window's audio must be WITNESSED: the graded vocal
+ *   curve, or the sections' own vocal means, must cover the window
+ *   with real confidence. An unwitnessed window is a closed door —
+ *   the author does not guess about material it cannot hear.
+ * - The window's vocal density must be LOW (mean activity ≤
+ *   SCRATCH_MAX_VOCAL_ACTIVITY). Scratching across a lead vocal is
+ *   the amateur tell; a scratch window is for stabs, drums and air.
+ * - The window must be TRANSIENT-RICH — a drop at its edge, or an
+ *   energy contour peaking well above its own mean inside it.
+ *   There must be something for the hand to chop.
+ *
+ * Two shapes. The SCRATCH-IN scratches the INCOMING in across the
+ * last beats before its entry — the classic: the entry (a drop, a
+ * section start, an intro's end, via chooseEntry) is the landing,
+ * and the mix hands over on it at an outgoing section boundary.
+ * The SCRATCH-OUT scratches the OUTGOING across its outro's first
+ * beats — inheriting the stop exits' falling-energy outro gate —
+ * and hands over to the incoming's entry as the window ends.
+ */
+const SCRATCH_AUTHOR_MAX_FAMILY_COST = 0.5;
+/** Mean graded vocal activity above which a window is a voice, not material. */
+const SCRATCH_MAX_VOCAL_ACTIVITY = 0.25;
+/** Energy-contour peak-to-mean ratio a window must show to count as stabby. */
+const SCRATCH_TRANSIENT_PEAK_RATIO = 1.6;
+
+interface WindowVocalReading {
+  witnessed: boolean;
+  /** Mean vocal activity over the window, 0..1. */
+  mean: number;
+}
+
+/**
+ * One window of one track's vocal evidence, for the scratch gates:
+ * the graded curve first (its own confidence must clear the
+ * profile's trust floor), the sections' vocal means as the coarser
+ * corroborating read, and silence — unwitnessed — when neither
+ * covers the window.
+ */
+function windowVocalReading(
+  analysis: TrackAnalysis,
+  startSec: number,
+  endSec: number,
+  profile: DecisionProfile,
+): WindowVocalReading {
+  const curve = analysis.vocalActivity;
+  if (curve && curve.points.length > 0) {
+    const points = curve.points.filter(
+      (p) => p.timeSec >= startSec && p.timeSec < endSec,
+    );
+    if (points.length > 0) {
+      const trust =
+        points.reduce((sum, p) => sum + p.confidence, 0) / points.length;
+      return {
+        witnessed: trust >= profile.vocalTrustConfidence,
+        mean: meanVocalActivity(curve, startSec, endSec),
+      };
+    }
+  }
+  const overlapping = (analysis.sections ?? []).filter(
+    (s) => s.endSec > startSec && s.startSec < endSec,
+  );
+  if (overlapping.length > 0) {
+    const span = Math.max(0, endSec - startSec);
+    let covered = 0;
+    let weighted = 0;
+    let confidence = 0;
+    for (const s of overlapping) {
+      const slice = Math.min(s.endSec, endSec) - Math.max(s.startSec, startSec);
+      covered += slice;
+      weighted += s.vocalActivity * slice;
+      confidence += s.confidence * slice;
+    }
+    return {
+      witnessed: span > 0 && covered >= span * 0.9 && confidence / span >= 0.5,
+      mean: covered > 0 ? weighted / covered : 0,
+    };
+  }
+  return { witnessed: false, mean: 0 };
+}
+
+/**
+ * Whether a window has something to chop: a drop at its edge, or
+ * an energy contour whose peak inside the window stands well
+ * clear of its own mean (stabs over a bed). A flat window — or a
+ * window no instrument measured — is not scratch material.
+ */
+function windowTransientRich(
+  analysis: TrackAnalysis,
+  startBeat: number,
+  endBeat: number,
+  startSec: number,
+  endSec: number,
+): boolean {
+  if (
+    analysis.drops.some(
+      (d) => d.beat >= startBeat - 0.5 && d.beat <= endBeat + 0.5,
+    )
+  ) {
+    return true;
+  }
+  const bins = (analysis.energyContour ?? []).filter(
+    (b) => b.timeSec >= startSec && b.timeSec < endSec,
+  );
+  if (bins.length < 4) return false;
+  const mean = bins.reduce((sum, b) => sum + b.rms, 0) / bins.length;
+  if (mean <= 0) return false;
+  return (
+    Math.max(...bins.map((b) => b.rms)) >= mean * SCRATCH_TRANSIENT_PEAK_RATIO
+  );
+}
+
+/** The incoming's normalised energy at a beat (deriveCandidateEvidence's read). */
+function entryEnergyOf(
+  incoming: TrackAnalysis,
+  entryBeat: number,
+): number | null {
+  const sections = incoming.sections ?? [];
+  if (sections.length === 0) return null;
+  const peak = Math.max(...sections.map((s) => s.meanRms));
+  const atEntry = sections.find(
+    (s) => entryBeat >= s.startBeat && entryBeat < s.endBeat,
+  );
+  return atEntry && peak > 0 ? atEntry.meanRms / peak : null;
+}
+
+/** Whether a chosen entry is a real landing: a drop, a section start, an intro's end. */
+function entryIsLanding(incoming: TrackAnalysis, entryBeat: number): boolean {
+  return (
+    incoming.drops.some((d) => Math.abs(d.beat - entryBeat) <= 0.5) ||
+    (incoming.sections ?? []).some(
+      (s) => Math.abs(s.startBeat - entryBeat) <= 0.5,
+    ) ||
+    (incoming.intro
+      ? Math.abs(incoming.intro.endBeat - entryBeat) <= 0.5
+      : false)
+  );
+}
+
+interface ScratchShape {
+  technique: ScratchTechnique;
+  beats: number;
+  strokes: number;
+  excursionBeats: number;
+  clicksPerBeat?: number;
+}
+
+/**
+ * The technique rules, stated as rules — the moment's energy and
+ * the profile's temperament pick the move:
+ *
+ * - No witnessed entry energy, or a quiet entry (< 0.45): the
+ *   BABY — the foundation move, smooth and unshowy.
+ * - A mid-energy entry (0.45–0.75): the CHIRP — rhythmic gating
+ *   earns its place as the energy rises.
+ * - A hot entry (≥ 0.75): the FLARE under a bold profile (one that
+ *   prices scratch cheap — adventurous among the shipped three),
+ *   the CHIRP otherwise. The flare's clicks are the boldest tell
+ *   in the family; only the bold temperament reaches for them.
+ * - The TRANSFORMER is a showcase with a room requirement — a bold
+ *   profile, an entry at ≥ 0.6 energy landing on a DROP, and four
+ *   full beats of window. It is attempted first when its
+ *   conditions hold and yields to the energy's own technique when
+ *   its window refuses (the caller tries shapes in order).
+ */
+function scratchShapesFor(
+  profile: DecisionProfile,
+  entryEnergy: number | null,
+  entryIsDrop: boolean,
+): ScratchShape[] {
+  const baby: ScratchShape = {
+    technique: "baby",
+    beats: 2,
+    strokes: 2,
+    excursionBeats: 0.75,
+  };
+  const chirp: ScratchShape = {
+    technique: "chirp",
+    beats: 2,
+    strokes: 2,
+    excursionBeats: 0.75,
+  };
+  const flare: ScratchShape = {
+    technique: "flare",
+    beats: 2,
+    strokes: 2,
+    excursionBeats: 0.75,
+  };
+  const transformer: ScratchShape = {
+    technique: "transformer",
+    beats: 4,
+    strokes: 1,
+    excursionBeats: 0.4,
+    clicksPerBeat: 2,
+  };
+  const bold = profile.familyCosts.scratch <= 0.4;
+  if (entryEnergy === null || entryEnergy < 0.45) return [baby];
+  if (entryEnergy < 0.75) {
+    return bold && entryEnergy >= 0.6 && entryIsDrop
+      ? [transformer, chirp]
+      : [chirp];
+  }
+  if (bold) return entryIsDrop ? [transformer, flare] : [flare];
+  return [chirp];
+}
+
+function scratchBlock(
+  shape: ScratchShape,
+  side: "A" | "B",
+  startSec: number,
+  durationSec: number,
+): RecipeLoopBlock {
+  return {
+    type: "scratch",
+    side,
+    startMs: startSec * 1000,
+    endMs: startSec * 1000 + durationSec * 1000,
+    beats: shape.beats,
+    technique: shape.technique,
+    strokes: shape.strokes,
+    excursionBeats: shape.excursionBeats,
+    ...(shape.clicksPerBeat !== undefined
+      ? { clicksPerBeat: shape.clicksPerBeat }
+      : {}),
+  };
+}
+
+/**
+ * The scratch-in: the incoming is performed across its last beats
+ * before its entry — heard through the hand and the gate over the
+ * outgoing's tail — and lands whole on the entry as the outgoing
+ * leaves at its own section boundary.
+ */
+function authorScratchIn(
+  request: RecipeRequest,
+  profile: DecisionProfile,
+): TransitionRecipe | null {
+  if (profile.familyCosts.scratch > SCRATCH_AUTHOR_MAX_FAMILY_COST) {
+    return null;
+  }
+  const { outgoing, incoming } = request;
+  const outMap = outgoing.beatMap;
+  const inMap = incoming.beatMap;
+  const spbA = secondsPerBeat(outMap.bpm);
+  const spbB = secondsPerBeat(inMap.bpm);
+
+  // The incoming must offer a real landing for the performance to
+  // hand over TO.
+  const entry = chooseEntry(incoming, profile);
+  if (!entryIsLanding(incoming, entry.beat)) return null;
+  const entryIsDrop = incoming.drops.some(
+    (d) => Math.abs(d.beat - entry.beat) <= 0.5,
+  );
+  const entryEnergy = entryEnergyOf(incoming, entry.beat);
+  const entrySec = timeAtBeat(inMap, entry.beat);
+
+  // The handover moments the outgoing offers: its section ends and
+  // its outro's start, strictly inside the track.
+  const nowBeatA = beatsAtTime(outMap, request.outgoingPositionSec);
+  const totalBeatsA = beatsAtTime(outMap, outMap.durationSec);
+  const anchorSecs = [
+    ...(outgoing.sections ?? []).map((s) => s.endBeat),
+    ...(outgoing.outro ? [outgoing.outro.startBeat] : []),
+  ]
+    .filter((b) => b > nowBeatA && b < totalBeatsA)
+    .map((b) => timeAtBeat(outMap, b))
+    .sort((x, y) => x - y);
+
+  for (const shape of scratchShapesFor(profile, entryEnergy, entryIsDrop)) {
+    const windowSec = shape.beats * spbB;
+    const startBSec = entrySec - windowSec;
+    if (startBSec < 0) continue;
+    // The window's material gates, on the incoming's own audio.
+    const vocal = windowVocalReading(incoming, startBSec, entrySec, profile);
+    if (!vocal.witnessed || vocal.mean > SCRATCH_MAX_VOCAL_ACTIVITY) continue;
+    if (
+      !windowTransientRich(
+        incoming,
+        entry.beat - shape.beats,
+        entry.beat,
+        startBSec,
+        entrySec,
+      )
+    ) {
+      continue;
+    }
+    // The earliest anchor that still leaves the profile's full
+    // lead before the performance begins.
+    const anchorSec = anchorSecs.find(
+      (sec) =>
+        sec - windowSec >=
+        request.outgoingPositionSec + profile.minLeadBeats * spbA,
+    );
+    if (anchorSec === undefined) continue;
+    const durationMs = windowSec * 1000;
+
+    return ownJoin(request, {
+      preset: "cut",
+      startASec: anchorSec - windowSec,
+      startBSec,
+      durationMs,
+      automation: {
+        // A plays on at full level under the performance; B rises
+        // quickly to its performance level, is heard through the
+        // hand and the gate for the whole window, and lands whole
+        // on its entry as A leaves.
+        volumeOut: curve("linear-gain", "linear", [
+          [0, 1],
+          [durationMs, 1],
+          [durationMs, 0],
+        ]),
+        volumeIn: curve("linear-gain", "linear", [
+          [0, 0],
+          [Math.min(40, durationMs / 4), 0.9],
+          [durationMs, 0.9],
+          [durationMs, 1],
+        ]),
+        eqOut: { low: flatEq(), mid: flatEq(), high: flatEq() },
+        eqIn: { low: flatEq(), mid: flatEq(), high: flatEq() },
+        filterOut: flatCurve("filter-cutoff", "hertz", OPEN_FILTER_HZ),
+        filterIn: flatCurve("filter-cutoff", "hertz", OPEN_FILTER_HZ),
+        rateB: flatCurve("rate", "ratio", 1),
+        echoSendOut: flatCurve("dry-wet", "percent", 0),
+        echoSendIn: flatCurve("dry-wet", "percent", 0),
+      },
+      loops: [scratchBlock(shape, "B", startBSec, windowSec)],
+      entryReason: entry.reason,
+      exitReason: `the incoming is scratched in — a ${shape.technique} across its last ${shape.beats} beats, over witnessed low-vocal material, landing on its entry`,
+    });
+  }
+  return null;
+}
+
+/**
+ * The scratch-out: the outgoing is performed across its outro's
+ * first beats and then leaves, handing over to the incoming's
+ * entry. On the way out the family stays close to the ground — a
+ * hot landing earns the chirp's rhythm; anything quieter gets the
+ * baby's smooth hand.
+ */
+function authorScratchOut(
+  request: RecipeRequest,
+  profile: DecisionProfile,
+): TransitionRecipe | null {
+  if (profile.familyCosts.scratch > SCRATCH_AUTHOR_MAX_FAMILY_COST) {
+    return null;
+  }
+  const { outgoing, incoming } = request;
+  const outMap = outgoing.beatMap;
+  const inMap = incoming.beatMap;
+  if (!outgoing.outro) return null;
+  const spbA = secondsPerBeat(outMap.bpm);
+
+  const exitBeat = outgoing.outro.startBeat;
+  const exitSec = timeAtBeat(outMap, exitBeat);
+  const windowBeats = 2;
+  const windowSec = windowBeats * spbA;
+  // The window sits at the outro's head: not already upon us, and
+  // the outro must have room for it.
+  if (exitSec < request.outgoingPositionSec + profile.minLeadBeats * spbA) {
+    return null;
+  }
+  const outroBeats = beatsAtTime(outMap, outMap.durationSec) - exitBeat;
+  if (outroBeats < windowBeats) return null;
+
+  // Energy must be falling into the outro — the stop exits' gate,
+  // inherited whole.
+  const sections = outgoing.sections ?? [];
+  const outroSection =
+    sections.find((s) => s.kind === "outro") ??
+    sections.find((s) => exitSec >= s.startSec && exitSec < s.endSec);
+  const before = sections
+    .filter((s) => s.kind !== "outro" && s.endSec <= exitSec + 1e-6)
+    .pop();
+  if (outroSection && before) {
+    if (outroSection.meanRms > before.meanRms) return null;
+  } else if (!outroSection) {
+    if (outroBeats > UNWITNESSED_OUTRO_MAX_BEATS) return null;
+  }
+
+  // The window's material gates, on the outgoing's own audio.
+  const vocal = windowVocalReading(
+    outgoing,
+    exitSec,
+    exitSec + windowSec,
+    profile,
+  );
+  if (!vocal.witnessed || vocal.mean > SCRATCH_MAX_VOCAL_ACTIVITY) return null;
+  if (
+    !windowTransientRich(
+      outgoing,
+      exitBeat,
+      exitBeat + windowBeats,
+      exitSec,
+      exitSec + windowSec,
+    )
+  ) {
+    return null;
+  }
+
+  // The incoming must offer a real landing for the handover.
+  const entry = chooseEntry(incoming, profile);
+  if (!entryIsLanding(incoming, entry.beat)) return null;
+  const entrySec = timeAtBeat(inMap, entry.beat);
+  // B starts early and silent (the stop exits' geometry), so its
+  // entry lands exactly as the scratch window ends.
+  const startBSec = entrySec - windowSec;
+  if (startBSec < 0) return null;
+
+  const entryEnergy = entryEnergyOf(incoming, entry.beat);
+  const shape: ScratchShape = {
+    technique: entryEnergy !== null && entryEnergy >= 0.6 ? "chirp" : "baby",
+    beats: windowBeats,
+    strokes: 2,
+    excursionBeats: 0.75,
+  };
+  const durationMs = windowSec * 1000;
+
+  return ownJoin(request, {
+    preset: "cut",
+    startASec: exitSec,
+    startBSec,
+    durationMs,
+    automation: {
+      // A plays at full level THROUGH the scratch — the hand and
+      // the gate are the sound — and is gone at its end; B is
+      // silent until the window completes, then arrives whole.
+      volumeOut: curve("linear-gain", "linear", [
+        [0, 1],
+        [durationMs, 1],
+        [durationMs, 0],
+      ]),
+      volumeIn: curve("linear-gain", "linear", [
+        [0, 0],
+        [durationMs, 0],
+        [durationMs, 1],
+      ]),
+      eqOut: { low: flatEq(), mid: flatEq(), high: flatEq() },
+      eqIn: { low: flatEq(), mid: flatEq(), high: flatEq() },
+      filterOut: flatCurve("filter-cutoff", "hertz", OPEN_FILTER_HZ),
+      filterIn: flatCurve("filter-cutoff", "hertz", OPEN_FILTER_HZ),
+      rateB: flatCurve("rate", "ratio", 1),
+      echoSendOut: flatCurve("dry-wet", "percent", 0),
+      echoSendIn: flatCurve("dry-wet", "percent", 0),
+    },
+    loops: [scratchBlock(shape, "A", exitSec, windowSec)],
+    entryReason: entry.reason,
+    exitReason: `the outgoing is scratched out — a ${shape.technique} across its outro's first beats, over witnessed low-vocal material, handed to the incoming's entry`,
+  });
+}
+
+// ---------------------------------------------------------------------
 // Enumeration
 // ---------------------------------------------------------------------
 
 function signatureOf(recipe: TransitionRecipe): string {
   const o = recipe.overlap;
   const loops = recipe.loops
-    .map((l) => `${l.type}:${Math.round(l.startMs)}-${Math.round(l.endMs)}`)
+    .map(
+      (l) =>
+        `${l.type}:${l.technique ?? ""}:${l.strokes ?? ""}:${Math.round(l.startMs)}-${Math.round(l.endMs)}`,
+    )
     .join(",");
   return [
     recipe.preset,
@@ -831,6 +1308,25 @@ export function candidatesForPair(
       `family:vinyl-stop:${profile.id}`,
       profile.id,
       "vinyl-stop",
+    );
+  }
+
+  // The scratch joins (R2): authored under every profile that
+  // prices the family within reach — the material gates inside the
+  // authors decide; identical tellings under several profiles
+  // collapse by signature.
+  for (const profile of profiles) {
+    push(
+      authorScratchIn(request, profile),
+      `family:scratch-in:${profile.id}`,
+      profile.id,
+      "scratch",
+    );
+    push(
+      authorScratchOut(request, profile),
+      `family:scratch-out:${profile.id}`,
+      profile.id,
+      "scratch",
     );
   }
 
