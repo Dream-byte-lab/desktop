@@ -1,0 +1,497 @@
+import type { TransitionPlan } from "./transitionPlanner";
+
+// The transition recipe: a complete, self-describing written plan for
+// joining ONE ordered pair of tracks — the outgoing A and the incoming
+// B. It mirrors the shape Spotify's Automix machinery proved at scale
+// (the REA study, rea-study/FINDINGS.md): per-pair geometry (two
+// anchors and a duration, in milliseconds AND bars), per-side playback
+// rates and tempos, a beatmatched flag, a preset family, and full
+// automation curves — point lists with easings — for volume, 3-band
+// EQ, filter and FX, plus loop blocks. Where Spotify's recipes are
+// invalidated by a beats-hash, ours carry the two analyses'
+// fingerprints for the same reason.
+//
+// A recipe is DATA — plain JSON-shaped values, no functions, no audio
+// nodes. It can be printed, logged, diffed, stored and tested without
+// a sound card. Authoring (transitionPlanner.authorRecipe) is policy;
+// performing (twoDeckMixer.performRecipe) is mechanism; this module
+// is only the shared language between them, plus validation and the
+// adapter that re-expresses a legacy TransitionPlan as a recipe so
+// the current session's blends are performed by the same executor.
+//
+// This module holds no policy and performs nothing.
+
+/** The preset families, in the REA vocabulary (plus our plain fade/cut). */
+export type RecipePreset =
+  "beatmatched-fade" | "beatmatched-cut" | "fade" | "cut";
+
+export type CurveKind =
+  "linear-gain" | "eq-gain" | "filter-cutoff" | "dry-wet" | "rate";
+
+export type CurveUnit = "linear" | "decibels" | "hertz" | "percent" | "ratio";
+
+export type CurveEasing = "linear" | "power-in" | "power-out" | "smooth";
+
+/**
+ * One automation knot. Times are milliseconds from the start of the
+ * overlap (points past the overlap's end are legal — the incoming
+ * deck's rate return lives there). `easing` describes the segment
+ * FROM this point to the next; the last point's easing is ignored.
+ */
+export interface AutomationPoint {
+  atMs: number;
+  value: number;
+  easing?: CurveEasing;
+}
+
+export interface AutomationCurve {
+  kind: CurveKind;
+  unit: CurveUnit;
+  points: AutomationPoint[];
+}
+
+export interface EqCurves {
+  low: AutomationCurve;
+  mid: AutomationCurve;
+  high: AutomationCurve;
+}
+
+export interface RecipeOverlap {
+  /**
+   * Track time in A where the overlap begins, in milliseconds — or
+   * null when the recipe was adapted from a legacy plan, whose
+   * geometry is relative ("wherever A is when the overlap begins");
+   * the session's own scheduling owns A's position in that case. The
+   * executor never starts deck A (it is already playing); this anchor
+   * is the artefact's record of intent, and what the vocal referee
+   * needs to re-inspect the window.
+   */
+  startAMs: number | null;
+  /** Track time in B where the overlap begins, in milliseconds. */
+  startBMs: number;
+  /** Length of the overlap in milliseconds (0 for a hard cut). */
+  durationMs: number;
+  /** Length of the overlap in bars of A (display/metadata). */
+  durationBars: number;
+  /** Whether the overlap is tempo-aligned (rates differ to match). */
+  beatmatched: boolean;
+  /** Playback rate of A during the overlap (our author keeps it 1). */
+  rateA: number;
+  /** Playback rate of B during the overlap. */
+  rateB: number;
+  bpmA: number;
+  bpmB: number;
+}
+
+export type RecipeLoopType = "loop" | "spinback" | "vinyl-stop";
+
+export interface RecipeLoopBlock {
+  type: RecipeLoopType;
+  side: "A" | "B";
+  /** Loop region, in the side's own track time. */
+  startMs: number;
+  endMs: number;
+  /** Length of the region in beats of that side. */
+  beats: number;
+}
+
+export interface RecipeEcho {
+  /** Delay time in seconds (the author derives it from A's tempo). */
+  delaySec: number;
+  /** Feedback amount 0..1 (below 1, always — tails must dissolve). */
+  feedback: number;
+  /** Wet level 0..1 at the shared echo return. */
+  wet: number;
+  /** The rhythmic division the delay was derived from, in beats. */
+  divisionBeats: number;
+}
+
+export interface RecipeFx {
+  echo?: RecipeEcho;
+}
+
+/**
+ * What to do instead when the recipe cannot be performed as written
+ * (the analyses it was authored against changed underneath it, or it
+ * fails validation at the deck). S5-2's executor honours this itself:
+ * a plain cut — B starts at its anchor, A stops — never a forced
+ * blend. Session-level fallbacks (Step 2's plain cut at track end)
+ * are a separate, coarser net and stay where they are.
+ */
+export interface RecipeFallback {
+  kind: "cut";
+  note: string;
+}
+
+/**
+ * Why this recipe looks the way it does — the author's evidence,
+ * recorded on the artefact so a performed join can be audited after
+ * the fact (and so the ear-test pattern log has something to read).
+ */
+export interface RecipeEvidence {
+  entryReason: string;
+  exitReason: string;
+  /**
+   * Graded vocal-overlap integral over the performed window, 0..1 —
+   * the integrated product of both sides' confidence-weighted vocal
+   * activity. 0 = at most one voice; 1 = both voices at full activity
+   * throughout. (Legacy-plan recipes carry the old boolean as 0/1 —
+   * coarse, and labelled so by `vocalEvidence` being "trusted" only
+   * in the sense that the boolean was all v1 ever knew.)
+   */
+  vocalOverlap: number;
+  /**
+   * "trusted" when the vocal reading behind the recipe carried real
+   * confidence on both sides; "uncertain" when either side's evidence
+   * was weak over the window — in which case the referee shortened at
+   * most one step and did NOT force a family change on that evidence
+   * alone (a monophonic synth lead can read as voice; see the S5-1
+   * report §3).
+   */
+  vocalEvidence: "trusted" | "uncertain";
+  /** |rateB − 1| for the pair. */
+  tempoStretch: number;
+  /** Camelot fit score 0..1 when both keys are known, else null. */
+  keyScore: number | null;
+  /** True when the vocal referee shortened this recipe's overlap. */
+  refereeShortened: boolean;
+}
+
+export interface TransitionRecipe {
+  version: 1;
+  preset: RecipePreset;
+  overlap: RecipeOverlap;
+  /**
+   * Seconds from the moment performance is requested until the
+   * overlap begins — the author's scheduling lead (exit time minus
+   * the position it authored from; a legacy plan's startsInSec).
+   */
+  leadInSec: number;
+  automation: {
+    volumeOut: AutomationCurve;
+    volumeIn: AutomationCurve;
+    eqOut: EqCurves;
+    eqIn: EqCurves;
+    filterOut: AutomationCurve;
+    filterIn: AutomationCurve;
+    /**
+     * Playback-rate automation for deck B, in overlap-relative
+     * milliseconds. Spans the overlap AND the rate return after it:
+     * the return's length is recipe data, chosen from the incoming
+     * track's structure — never a fixed phrase.
+     */
+    rateB: AutomationCurve;
+    /** Echo send levels 0..1 for each deck (normally only A moves). */
+    echoSendOut: AutomationCurve;
+    echoSendIn: AutomationCurve;
+  };
+  loops: RecipeLoopBlock[];
+  fx: RecipeFx;
+  /** The analyses this recipe was authored against (REA's beats-hash lesson). */
+  fingerprints: {
+    aAudioHash: string | null;
+    bAudioHash: string | null;
+    analysisVersion: number | null;
+  };
+  fallback: RecipeFallback;
+  evidence: RecipeEvidence;
+}
+
+/** The lowpass frequency that means "filter open" in a recipe. */
+export const OPEN_FILTER_HZ = 20_000;
+/** Full bass cut, in dB — matches deck.ts's BASS_CUT_DB. */
+export const FULL_BASS_CUT_DB = -32;
+
+const VALUE_RANGES: Record<CurveKind, [number, number]> = {
+  "linear-gain": [0, 1.5],
+  "eq-gain": [-48, 12],
+  "filter-cutoff": [20, 20_000],
+  "dry-wet": [0, 1],
+  rate: [0.5, 2],
+};
+
+function checkCurve(
+  errors: string[],
+  name: string,
+  curve: AutomationCurve,
+): void {
+  if (curve.points.length === 0) {
+    errors.push(`${name}: curve has no points`);
+    return;
+  }
+  const [min, max] = VALUE_RANGES[curve.kind];
+  let previousAt = -Infinity;
+  for (const point of curve.points) {
+    if (!Number.isFinite(point.atMs) || point.atMs < 0) {
+      errors.push(`${name}: point time ${point.atMs} is not a valid time`);
+    }
+    if (point.atMs < previousAt) {
+      errors.push(`${name}: points are not in ascending time order`);
+    }
+    previousAt = point.atMs;
+    if (
+      !Number.isFinite(point.value) ||
+      point.value < min ||
+      point.value > max
+    ) {
+      errors.push(
+        `${name}: value ${point.value} outside ${curve.kind} range [${min}, ${max}]`,
+      );
+    }
+  }
+}
+
+/**
+ * Structural validation — returns every problem found (empty array =
+ * performable). The executor refuses recipes with errors and performs
+ * the fallback instead; the author is expected to emit none.
+ */
+export function validateRecipe(recipe: TransitionRecipe): string[] {
+  const errors: string[] = [];
+  if (recipe.version !== 1)
+    errors.push(`version ${recipe.version} unsupported`);
+  const o = recipe.overlap;
+  if (o.startAMs !== null && (!Number.isFinite(o.startAMs) || o.startAMs < 0)) {
+    errors.push("overlap.startAMs must be null or a finite time ≥ 0");
+  }
+  if (!Number.isFinite(o.startBMs) || o.startBMs < 0) {
+    errors.push("overlap.startBMs must be a finite time ≥ 0");
+  }
+  if (!Number.isFinite(o.durationMs) || o.durationMs < 0) {
+    errors.push("overlap.durationMs must be ≥ 0");
+  }
+  if (!Number.isFinite(o.durationBars) || o.durationBars < 0) {
+    errors.push("overlap.durationBars must be ≥ 0");
+  }
+  for (const [name, rate] of [
+    ["rateA", o.rateA],
+    ["rateB", o.rateB],
+  ] as const) {
+    if (!Number.isFinite(rate) || rate < 0.5 || rate > 2) {
+      errors.push(`overlap.${name} ${rate} outside [0.5, 2]`);
+    }
+  }
+  if (!(o.bpmA > 0) || !(o.bpmB > 0)) {
+    errors.push("overlap bpms must be positive");
+  }
+  if (!Number.isFinite(recipe.leadInSec) || recipe.leadInSec < 0) {
+    errors.push("leadInSec must be ≥ 0");
+  }
+  const a = recipe.automation;
+  checkCurve(errors, "volumeOut", a.volumeOut);
+  checkCurve(errors, "volumeIn", a.volumeIn);
+  for (const side of ["eqOut", "eqIn"] as const) {
+    checkCurve(errors, `${side}.low`, a[side].low);
+    checkCurve(errors, `${side}.mid`, a[side].mid);
+    checkCurve(errors, `${side}.high`, a[side].high);
+  }
+  checkCurve(errors, "filterOut", a.filterOut);
+  checkCurve(errors, "filterIn", a.filterIn);
+  checkCurve(errors, "rateB", a.rateB);
+  checkCurve(errors, "echoSendOut", a.echoSendOut);
+  checkCurve(errors, "echoSendIn", a.echoSendIn);
+  for (const loop of recipe.loops) {
+    if (loop.endMs <= loop.startMs) {
+      errors.push(`loop on ${loop.side}: endMs must exceed startMs`);
+    }
+    if (!(loop.beats > 0))
+      errors.push(`loop on ${loop.side}: beats must be > 0`);
+  }
+  if (recipe.fx.echo) {
+    const e = recipe.fx.echo;
+    if (!(e.delaySec > 0) || e.delaySec > 2) {
+      errors.push("fx.echo.delaySec outside (0, 2]");
+    }
+    if (e.feedback < 0 || e.feedback >= 0.9) {
+      errors.push("fx.echo.feedback outside [0, 0.9)");
+    }
+    if (e.wet < 0 || e.wet > 1) errors.push("fx.echo.wet outside [0, 1]");
+  }
+  return errors;
+}
+
+/** A flat curve at one value — the honest way to say "this never moves". */
+export function flatCurve(
+  kind: CurveKind,
+  unit: CurveUnit,
+  value: number,
+): AutomationCurve {
+  return { kind, unit, points: [{ atMs: 0, value }] };
+}
+
+function applyEasing(easing: CurveEasing, t: number): number {
+  switch (easing) {
+    case "power-in":
+      return t * t;
+    case "power-out":
+      return 1 - (1 - t) * (1 - t);
+    case "smooth":
+      return t * t * (3 - 2 * t);
+    default:
+      return t;
+  }
+}
+
+/**
+ * The value a curve takes at a moment: piecewise between knots, each
+ * segment shaped by the easing declared on the point it LEAVES (the
+ * convention documented on AutomationPoint), with step semantics at
+ * duplicated times (the last point at an atMs wins). Pure — the
+ * executor samples curves through here, and tests assert performed
+ * automation against it.
+ */
+export function automationValueAt(
+  curve: AutomationCurve,
+  atMs: number,
+): number {
+  const points = curve.points;
+  if (points.length === 0) return 0;
+  if (atMs < points[0].atMs) return points[0].value;
+  for (let i = 0; i < points.length; i += 1) {
+    const point = points[i];
+    if (atMs === point.atMs) {
+      let value = point.value;
+      for (
+        let j = i + 1;
+        j < points.length && points[j].atMs === atMs;
+        j += 1
+      ) {
+        value = points[j].value;
+      }
+      return value;
+    }
+    if (atMs < point.atMs) {
+      const prev = points[i - 1];
+      const span = point.atMs - prev.atMs;
+      if (span <= 0) return point.value;
+      const t = (atMs - prev.atMs) / span;
+      return (
+        prev.value +
+        (point.value - prev.value) * applyEasing(prev.easing ?? "linear", t)
+      );
+    }
+  }
+  return points[points.length - 1].value;
+}
+
+function gainCurve(points: [number, number][]): AutomationCurve {
+  return {
+    kind: "linear-gain",
+    unit: "linear",
+    points: points.map(([atMs, value]) => ({ atMs, value })),
+  };
+}
+
+function eqCurve(points: [number, number][]): AutomationCurve {
+  return {
+    kind: "eq-gain",
+    unit: "decibels",
+    points: points.map(([atMs, value]) => ({ atMs, value })),
+  };
+}
+
+/**
+ * Re-expresses a legacy TransitionPlan as a recipe, reproducing the
+ * automation the v1 executor performed for it: equal-power volume
+ * curves, one bass swap at the plan's swap point, the incoming rate
+ * held across the blend and returned over the plan's return duration.
+ * The current session's blends flow through this adapter into the
+ * recipe executor, so v1 behaviour can be A/B-compared against
+ * authored recipes on identical fixtures — and so there is exactly
+ * one code path that ever touches the decks.
+ */
+export function recipeFromPlan(
+  plan: TransitionPlan,
+  options: { beatsPerBarA?: number } = {},
+): TransitionRecipe {
+  const beatsPerBar = options.beatsPerBarA ?? 4;
+  const durationMs = Math.max(0, plan.blendDurationSec * 1000);
+  const swapMs = Math.max(0, (plan.bassSwapInSec - plan.startsInSec) * 1000);
+  const spbOut =
+    plan.blendBeats > 0 ? plan.blendDurationSec / plan.blendBeats : 0.5;
+  const bpmA = spbOut > 0 ? 60 / spbOut : 120;
+  const bpmB = plan.incomingRate !== 0 ? bpmA / plan.incomingRate : bpmA;
+
+  // Equal-power shapes, sampled at knots the executor's curve sampler
+  // reproduces faithfully.
+  const outPoints: [number, number][] = [];
+  const inPoints: [number, number][] = [];
+  const KNOTS = 8;
+  for (let i = 0; i <= KNOTS; i += 1) {
+    const t = i / KNOTS;
+    outPoints.push([t * durationMs, Math.cos((t * Math.PI) / 2)]);
+    inPoints.push([t * durationMs, Math.sin((t * Math.PI) / 2)]);
+  }
+
+  const ratePoints: AutomationPoint[] =
+    plan.incomingRate === 1
+      ? [{ atMs: 0, value: 1 }]
+      : [
+          { atMs: 0, value: plan.incomingRate },
+          { atMs: durationMs, value: plan.incomingRate, easing: "linear" },
+          {
+            atMs: durationMs + plan.rateReturnDurationSec * 1000,
+            value: 1,
+          },
+        ];
+
+  return {
+    version: 1,
+    preset: "beatmatched-fade",
+    overlap: {
+      startAMs: null,
+      startBMs: plan.incomingStartSec * 1000,
+      durationMs,
+      durationBars: plan.blendBeats / beatsPerBar,
+      beatmatched: true,
+      rateA: 1,
+      rateB: plan.incomingRate,
+      bpmA,
+      bpmB,
+    },
+    leadInSec: plan.startsInSec,
+    automation: {
+      volumeOut: gainCurve(outPoints),
+      volumeIn: gainCurve(inPoints),
+      eqOut: {
+        low: eqCurve([
+          [0, 0],
+          [swapMs, 0],
+          [swapMs + 20, FULL_BASS_CUT_DB],
+        ]),
+        mid: eqCurve([[0, 0]]),
+        high: eqCurve([[0, 0]]),
+      },
+      eqIn: {
+        low: eqCurve([
+          [0, FULL_BASS_CUT_DB],
+          [swapMs, FULL_BASS_CUT_DB],
+          [swapMs + 20, 0],
+        ]),
+        mid: eqCurve([[0, 0]]),
+        high: eqCurve([[0, 0]]),
+      },
+      filterOut: flatCurve("filter-cutoff", "hertz", OPEN_FILTER_HZ),
+      filterIn: flatCurve("filter-cutoff", "hertz", OPEN_FILTER_HZ),
+      rateB: { kind: "rate", unit: "ratio", points: ratePoints },
+      echoSendOut: flatCurve("dry-wet", "percent", 0),
+      echoSendIn: flatCurve("dry-wet", "percent", 0),
+    },
+    loops: [],
+    fx: {},
+    fingerprints: { aAudioHash: null, bAudioHash: null, analysisVersion: null },
+    fallback: {
+      kind: "cut",
+      note: "Legacy plan geometry: if this recipe cannot be performed, cut plainly at the blend's start.",
+    },
+    evidence: {
+      entryReason: "legacy TransitionPlan geometry",
+      exitReason: "legacy TransitionPlan geometry",
+      vocalOverlap: plan.vocalOverlap ? 1 : 0,
+      vocalEvidence: "trusted",
+      tempoStretch: plan.tempoStretch,
+      keyScore: plan.keyCompatibility?.score ?? null,
+      refereeShortened: false,
+    },
+  };
+}

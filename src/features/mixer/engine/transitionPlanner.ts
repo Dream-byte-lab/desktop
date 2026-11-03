@@ -1,3 +1,4 @@
+import type { TrackAnalysis } from "./analyseTrack";
 import {
   beatsAtTime,
   phraseBeats,
@@ -6,8 +7,22 @@ import {
   type BeatMap,
 } from "./beatMap";
 import type { KeyEstimate } from "./detectKey";
-import { overlapsVocals, type VocalRange } from "./detectVocals";
+import {
+  meanVocalActivity,
+  overlapsVocals,
+  type VocalActivityCurve,
+  type VocalRange,
+} from "./detectVocals";
 import { keyCompatibility, type KeyCompatibility } from "./keyCompatibility";
+import {
+  flatCurve,
+  FULL_BASS_CUT_DB,
+  OPEN_FILTER_HZ,
+  type AutomationCurve,
+  type AutomationPoint,
+  type EqCurves,
+  type TransitionRecipe,
+} from "./recipe";
 
 // Plans one beatmatched blend between the track that is playing and the
 // track that comes next. Pure arithmetic on beat maps — no audio, no clock —
@@ -232,4 +247,1193 @@ export function planTransitionWithReferee(
     if (plan && !plan.vocalOverlap) return plan;
   }
   return null;
+}
+
+// =====================================================================
+// The recipe author (Step 5, slice S5-2).
+//
+// Everything above is v1 geometry — kept verbatim because the current
+// session still runs on it (through transitionStyle) until S5-4. What
+// follows is the new centre of this file: authoring a TransitionRecipe
+// for a pair, from the two tracks' analysis-v2 structures.
+//
+// The author's rules, in order:
+//
+// 1. ENTRY is chosen from the incoming track's structure: the
+//    strongest usable drop (drop STRENGTH is spent here — earliest no
+//    longer wins), else the intro's end, else the first chorus, else
+//    a phrase fallback for structure-less analyses.
+// 2. EXIT is chosen from the outgoing track's structure: the outro's
+//    first beat, else a late section boundary the blend can occupy,
+//    else v1's phrase arithmetic (the geometry above, generalised to
+//    accept a chosen exit).
+// 3. TEMPO is a strategy, not a reflex: beatmatching happens only
+//    inside a stated stretch cap and only when the tempo evidence is
+//    trustworthy (tempo confidence and grid confidence — the v1
+//    orphans, spent at last). Beyond that, the recipe is a rate-1
+//    family: a drop-cut, or a filter fade — never silent pitch damage.
+// 4. KEY spends as a bounded veto: a distant relation caps blends at
+//    8 beats; an unknown key is neutral, never a veto.
+// 5. VOCALS are judged by the GRADED referee (applyVocalReferee):
+//    the overlap integral of confidence-weighted vocal activity, with
+//    section means corroborating. A trusted clash shortens the blend,
+//    then changes the family; an uncertain reading shortens at most
+//    one step — a synth lead that reads as voice (S5-1 report §3)
+//    must not, on its own, forbid a blend.
+// 6. The RATE RETURN is chosen from the incoming track's structure
+//    (runway to its next section boundary, clamped) — the fixed
+//    one-phrase glide is abolished; the return is recipe data.
+// 7. When the incoming intro is too short for the blend the pair
+//    deserves but the outgoing has a loopable breakdown/outro, the
+//    recipe carries a LOOP block that extends the outgoing instead
+//    of shrinking the join.
+//
+// The bounds below are the author's interim constants. S5-3's
+// decisionProfile will own them; they live here, named and exported,
+// so nothing about today's judgement is hidden in arithmetic.
+// =====================================================================
+
+export const AUTHOR_BOUNDS = {
+  /** Largest |rate − 1| the author will beatmatch across. */
+  maxBeatmatchStretch: 0.06,
+  /** Below this tempo-confidence, a tempo is a guess: no beatmatch. */
+  minTempoConfidence: 0.2,
+  /** Below this whole-grid confidence, grid anchors are not trusted. */
+  minGridConfidence: 0.15,
+  /** Graded vocal-overlap integral above which two voices are clashing. */
+  vocalClashIntegral: 0.4,
+  /** Mean confidence below which vocal evidence is "uncertain". */
+  vocalTrustConfidence: 0.35,
+  /** A distant key caps blends at this many beats. */
+  distantKeyMaxBlendBeats: 8,
+  /** Minimum incoming drop strength for a drop-cut to be offered. */
+  minDropCutStrength: 1.5,
+  /** The blend may not start sooner than this many beats from now. */
+  minLeadBeats: 8,
+  standardBlendBeats: 16,
+  longBlendBeats: 24,
+  minBlendBeats: MIN_BLEND_BEATS,
+  /** Rate-return runway clamps, in incoming beats. */
+  minRateReturnBeats: 4,
+  maxRateReturnBeats: 32,
+  defaultRateReturnBeats: 8,
+} as const;
+
+export interface RecipeRequest {
+  outgoing: TrackAnalysis;
+  /** Where the outgoing track is playing right now, in track seconds. */
+  outgoingPositionSec: number;
+  incoming: TrackAnalysis;
+}
+
+// ---------- vocal evidence: graded activity, confidence, corroboration
+
+interface VocalWindowReading {
+  /** Integrated product of both sides' effective activity, 0..1. */
+  integral: number;
+  /** Mean confidence of the weaker-evidenced side over the window. */
+  trust: number;
+  /** Both sides were read from graded curves (not fallbacks). */
+  graded: boolean;
+}
+
+/** One window of one track's vocal evidence, sampled for integration. */
+function vocalSamples(
+  analysis: TrackAnalysis,
+  startSec: number,
+  endSec: number,
+): { activityAt: (t: number) => number; trust: number; graded: boolean } {
+  const curve: VocalActivityCurve | undefined = analysis.vocalActivity;
+  if (curve && curve.points.length > 0) {
+    // Effective activity: the reading discounted by its own doubt.
+    // A borderline window counts for less than a decisive one — the
+    // graded curve's confidence is spent, not just stored.
+    let trustSum = 0;
+    let trustCount = 0;
+    for (const point of curve.points) {
+      if (point.timeSec >= startSec && point.timeSec <= endSec) {
+        trustSum += point.confidence;
+        trustCount += 1;
+      }
+    }
+    const trust = trustCount > 0 ? trustSum / trustCount : 0;
+    return {
+      activityAt: (t) =>
+        meanVocalActivity(curve, t, t + curve.stepSec) * (0.35 + 0.65 * trust),
+      trust,
+      graded: true,
+    };
+  }
+  const sections = analysis.sections;
+  if (sections && sections.length > 0) {
+    // Corroborating evidence: the sections' own vocal means. Coarser
+    // than the curve, but an independent read of the same audio.
+    const overlapping = sections.filter(
+      (s) => s.endSec > startSec && s.startSec < endSec,
+    );
+    const trust =
+      overlapping.length > 0
+        ? overlapping.reduce((sum, s) => sum + s.confidence, 0) /
+          overlapping.length
+        : 0;
+    return {
+      activityAt: (t) => {
+        const section = sections.find((s) => t >= s.startSec && t < s.endSec);
+        return section ? section.vocalActivity * (0.35 + 0.65 * trust) : 0;
+      },
+      trust,
+      graded: false,
+    };
+  }
+  // Last resort: v1's binary ranges, as v1 read them. Coarse — and
+  // the reading is labelled ungraded so trust decisions know it.
+  const ranges = analysis.vocalRanges ?? [];
+  return {
+    activityAt: (t) =>
+      ranges.some((r) => t >= r.startSec && t < r.endSec) ? 1 : 0,
+    trust: 1,
+    graded: false,
+  };
+}
+
+/**
+ * The graded overlap integral over a proposed pair of windows: how
+ * much of the overlap has BOTH sides vocally active at once, each
+ * side's activity weighted by the confidence behind it.
+ */
+export function vocalOverlapIntegral(
+  outgoing: TrackAnalysis,
+  outStartSec: number,
+  outEndSec: number,
+  incoming: TrackAnalysis,
+  inStartSec: number,
+  inEndSec: number,
+): VocalWindowReading {
+  const a = vocalSamples(outgoing, outStartSec, outEndSec);
+  const b = vocalSamples(incoming, inStartSec, inEndSec);
+  const duration = Math.max(0, outEndSec - outStartSec);
+  if (duration <= 0)
+    return { integral: 0, trust: 1, graded: a.graded && b.graded };
+  const steps = Math.max(4, Math.ceil(duration / 0.25));
+  let sum = 0;
+  for (let i = 0; i < steps; i += 1) {
+    const tA = outStartSec + ((i + 0.5) / steps) * duration;
+    const spanB = Math.max(0, inEndSec - inStartSec);
+    const tB = inStartSec + ((i + 0.5) / steps) * spanB;
+    sum += a.activityAt(tA) * b.activityAt(tB);
+  }
+  return {
+    integral: sum / steps,
+    trust: Math.min(a.trust, b.trust),
+    graded: a.graded && b.graded,
+  };
+}
+
+// ---------- automation construction (the author's curve vocabulary)
+
+function curveFrom(
+  kind: AutomationCurve["kind"],
+  unit: AutomationCurve["unit"],
+  points: [number, number][],
+): AutomationCurve {
+  return {
+    kind,
+    unit,
+    points: points.map(([atMs, value]) => ({ atMs, value })),
+  };
+}
+
+/** Equal-power knots (the v1 blend shape, as data). */
+function equalPowerPoints(durationMs: number): {
+  out: [number, number][];
+  into: [number, number][];
+} {
+  const out: [number, number][] = [];
+  const into: [number, number][] = [];
+  const KNOTS = 8;
+  for (let i = 0; i <= KNOTS; i += 1) {
+    const t = i / KNOTS;
+    out.push([t * durationMs, Math.cos((t * Math.PI) / 2)]);
+    into.push([t * durationMs, Math.sin((t * Math.PI) / 2)]);
+  }
+  return { out, into };
+}
+
+function smoothstep(t: number): number {
+  return t * t * (3 - 2 * t);
+}
+
+/** Smooth linear-ish fade knots for the rate-1 filter-fade family. */
+function smoothFadePoints(durationMs: number): {
+  out: [number, number][];
+  into: [number, number][];
+} {
+  const out: [number, number][] = [];
+  const into: [number, number][] = [];
+  const KNOTS = 4;
+  for (let i = 0; i <= KNOTS; i += 1) {
+    const t = i / KNOTS;
+    out.push([t * durationMs, 1 - smoothstep(t)]);
+    into.push([t * durationMs, smoothstep(t)]);
+  }
+  return { out, into };
+}
+
+interface AutomationSpec {
+  preset: TransitionRecipe["preset"];
+  durationMs: number;
+  /** Where the bass ownership swaps, ms into the overlap; null = no swap. */
+  swapAtMs: number | null;
+  /** Whether long-blend mid/high opening applies. */
+  openMidHigh: boolean;
+  /** Sweep the outgoing's lowpass down across the overlap. */
+  filterSweep: boolean;
+  rateB: number;
+  /** Rate-return length after the overlap, ms (0 when rateB is 1). */
+  rateReturnMs: number;
+  /** Ramp A's echo send over the overlap's final beat of this length; null = no echo. */
+  echoTailMs: number | null;
+}
+
+function buildAutomation(spec: AutomationSpec): TransitionRecipe["automation"] {
+  const d = spec.durationMs;
+  let volumeOut: AutomationCurve;
+  let volumeIn: AutomationCurve;
+  if (spec.preset === "cut") {
+    volumeOut = curveFrom("linear-gain", "linear", [
+      [0, 1],
+      [0, 0],
+    ]);
+    volumeIn = curveFrom("linear-gain", "linear", [
+      [0, 0],
+      [0, 1],
+    ]);
+  } else if (spec.preset === "fade") {
+    const pts = smoothFadePoints(d);
+    volumeOut = curveFrom("linear-gain", "linear", pts.out);
+    volumeIn = curveFrom("linear-gain", "linear", pts.into);
+  } else {
+    const pts = equalPowerPoints(d);
+    volumeOut = curveFrom("linear-gain", "linear", pts.out);
+    volumeIn = curveFrom("linear-gain", "linear", pts.into);
+  }
+
+  const flatEq = (): AutomationCurve =>
+    curveFrom("eq-gain", "decibels", [[0, 0]]);
+  let eqOut: EqCurves;
+  let eqIn: EqCurves;
+  if (spec.swapAtMs !== null && d > 0) {
+    const swap = spec.swapAtMs;
+    eqOut = {
+      low: curveFrom("eq-gain", "decibels", [
+        [0, 0],
+        [swap, 0],
+        [swap + 20, FULL_BASS_CUT_DB],
+      ]),
+      mid: flatEq(),
+      high: flatEq(),
+    };
+    eqIn = {
+      low: curveFrom("eq-gain", "decibels", [
+        [0, FULL_BASS_CUT_DB],
+        [swap, FULL_BASS_CUT_DB],
+        [swap + 20, 0],
+      ]),
+      mid: flatEq(),
+      high: flatEq(),
+    };
+  } else if (spec.preset === "fade" && d > 0) {
+    // No beat alignment to protect: hand the low end over gradually.
+    eqOut = {
+      low: curveFrom("eq-gain", "decibels", [
+        [0, 0],
+        [d, -12],
+      ]),
+      mid: flatEq(),
+      high: flatEq(),
+    };
+    eqIn = {
+      low: curveFrom("eq-gain", "decibels", [
+        [0, -12],
+        [d, 0],
+      ]),
+      mid: flatEq(),
+      high: flatEq(),
+    };
+  } else {
+    eqOut = { low: flatEq(), mid: flatEq(), high: flatEq() };
+    eqIn = { low: flatEq(), mid: flatEq(), high: flatEq() };
+  }
+  if (spec.openMidHigh && d > 0) {
+    // A long blend opens the incoming's top as it settles, and tucks
+    // the outgoing's away — the blend breathes instead of stacking.
+    eqIn.mid = curveFrom("eq-gain", "decibels", [
+      [0, -3],
+      [d, 0],
+    ]);
+    eqIn.high = curveFrom("eq-gain", "decibels", [
+      [0, -2],
+      [d, 0],
+    ]);
+    eqOut.mid = curveFrom("eq-gain", "decibels", [
+      [0, 0],
+      [d, -3],
+    ]);
+    eqOut.high = curveFrom("eq-gain", "decibels", [
+      [0, 0],
+      [d, -2],
+    ]);
+  }
+
+  const filterOut = spec.filterSweep
+    ? curveFrom("filter-cutoff", "hertz", [
+        [0, OPEN_FILTER_HZ],
+        [d, 700],
+      ])
+    : flatCurve("filter-cutoff", "hertz", OPEN_FILTER_HZ);
+  const filterIn = flatCurve("filter-cutoff", "hertz", OPEN_FILTER_HZ);
+
+  const ratePoints: AutomationPoint[] =
+    spec.rateB === 1
+      ? [{ atMs: 0, value: 1 }]
+      : [
+          { atMs: 0, value: spec.rateB },
+          { atMs: d, value: spec.rateB, easing: "linear" },
+          { atMs: d + spec.rateReturnMs, value: 1 },
+        ];
+
+  const echoSendOut =
+    spec.echoTailMs !== null && d > 0
+      ? curveFrom("dry-wet", "percent", [
+          [0, 0],
+          [Math.max(0, d - spec.echoTailMs), 0],
+          [d, 0.9],
+        ])
+      : flatCurve("dry-wet", "percent", 0);
+
+  return {
+    volumeOut,
+    volumeIn,
+    eqOut,
+    eqIn,
+    filterOut,
+    filterIn,
+    rateB: { kind: "rate", unit: "ratio", points: ratePoints },
+    echoSendOut,
+    echoSendIn: flatCurve("dry-wet", "percent", 0),
+  };
+}
+
+/**
+ * Rebuilds a recipe's automation for a shorter overlap, preserving
+ * its family character: the swap scales with the duration, the rate
+ * return keeps its absolute length (it belongs to the incoming
+ * track's structure, not to the overlap), echo and filter behaviour
+ * carry over. Used by the referee; derived entirely from the recipe's
+ * own data.
+ */
+function rebuildAutomation(
+  recipe: TransitionRecipe,
+  newDurationMs: number,
+): TransitionRecipe["automation"] {
+  const a = recipe.automation;
+  const oldDuration = recipe.overlap.durationMs;
+  const ratio = oldDuration > 0 ? newDurationMs / oldDuration : 0;
+  const oldSwap = a.eqIn.low.points.find(
+    (p, i) =>
+      p.value > FULL_BASS_CUT_DB + 1 &&
+      i > 0 &&
+      a.eqIn.low.points[i - 1].value <= FULL_BASS_CUT_DB + 1,
+  );
+  const hadSwap =
+    recipe.preset === "beatmatched-fade" &&
+    a.eqIn.low.points.some((p) => p.value <= FULL_BASS_CUT_DB + 1) &&
+    oldDuration > 0;
+  const oldReturnMs =
+    a.rateB.points.length > 0
+      ? Math.max(
+          0,
+          a.rateB.points[a.rateB.points.length - 1].atMs - oldDuration,
+        )
+      : 0;
+  return buildAutomation({
+    preset: recipe.preset,
+    durationMs: newDurationMs,
+    swapAtMs: hadSwap
+      ? Math.min(
+          newDurationMs,
+          (oldSwap ? oldSwap.atMs - 20 : oldDuration / 2) * ratio,
+        )
+      : null,
+    openMidHigh: a.eqIn.mid.points.length > 1,
+    filterSweep:
+      a.filterOut.points[a.filterOut.points.length - 1].value < OPEN_FILTER_HZ,
+    rateB: recipe.overlap.rateB,
+    rateReturnMs: oldReturnMs,
+    echoTailMs:
+      recipe.fx.echo && newDurationMs > 0
+        ? (60 / recipe.overlap.bpmA) * 1000
+        : null,
+  });
+}
+
+// ---------- the graded vocal referee
+
+/**
+ * The referee, in its v2 form: a pure function over a drafted recipe.
+ * It reads the graded vocal evidence for the recipe's windows and, if
+ * two voices would genuinely clash, shortens the overlap — moving
+ * both starts later, keeping both landings fixed — rebuilding the
+ * automation for the shorter window. It never changes the family and
+ * never lengthens anything; family changes are the author's call, and
+ * performance-time re-checks (the executor calls this too, against
+ * the deepened analysis) can only ever make a join safer.
+ *
+ * The discipline (from the S5-1 blind spot): the judgement spends the
+ * curve's confidence as well as its activity, corroborated by section
+ * means. When the evidence is UNCERTAIN (weak confidence, or only
+ * fallback evidence on a side), the referee shortens at most one step
+ * and only keeps the shortening if it fully clears the clash — it
+ * does not chase a possibly-phantom voice down the ladder.
+ */
+export function applyVocalReferee(
+  recipe: TransitionRecipe,
+  outgoing: TrackAnalysis,
+  incoming: TrackAnalysis,
+): TransitionRecipe {
+  if (recipe.preset !== "beatmatched-fade") return recipe;
+  const { startAMs, startBMs, durationMs, rateB } = recipe.overlap;
+  if (startAMs === null || durationMs <= 0) return recipe;
+
+  const read = (candidate: TransitionRecipe): VocalWindowReading =>
+    vocalOverlapIntegral(
+      outgoing,
+      candidate.overlap.startAMs! / 1000,
+      (candidate.overlap.startAMs! + candidate.overlap.durationMs) / 1000,
+      incoming,
+      candidate.overlap.startBMs / 1000,
+      (candidate.overlap.startBMs +
+        candidate.overlap.durationMs * candidate.overlap.rateB) /
+        1000,
+    );
+
+  const initial = read(recipe);
+  const trusted =
+    initial.graded && initial.trust >= AUTHOR_BOUNDS.vocalTrustConfidence;
+  const withEvidence = (
+    candidate: TransitionRecipe,
+    reading: VocalWindowReading,
+    shortened: boolean,
+  ): TransitionRecipe => ({
+    ...candidate,
+    evidence: {
+      ...candidate.evidence,
+      vocalOverlap: reading.integral,
+      vocalEvidence: trusted ? "trusted" : "uncertain",
+      refereeShortened: shortened,
+    },
+  });
+
+  if (initial.integral <= AUTHOR_BOUNDS.vocalClashIntegral) {
+    return withEvidence(recipe, initial, false);
+  }
+
+  const spbA = secondsPerBeat(outgoing.beatMap.bpm);
+  const endBeatA = beatsAtTime(
+    outgoing.beatMap,
+    (startAMs + durationMs) / 1000,
+  );
+  const beatsNow = durationMs / 1000 / spbA;
+  const ladder = [12, 8, MIN_BLEND_BEATS].filter((b) => b < beatsNow - 0.5);
+  const maxSteps = trusted ? ladder.length : 1;
+
+  let shortest: TransitionRecipe | null = null;
+  let shortestReading: VocalWindowReading | null = null;
+  for (let step = 0; step < Math.min(maxSteps, ladder.length); step += 1) {
+    const beats = ladder[step];
+    const newDurationMs = beats * spbA * 1000;
+    const newStartAMs = timeAtBeat(outgoing.beatMap, endBeatA - beats) * 1000;
+    const newStartBMs = startBMs + (durationMs - newDurationMs) * rateB;
+    const candidate: TransitionRecipe = {
+      ...recipe,
+      overlap: {
+        ...recipe.overlap,
+        startAMs: newStartAMs,
+        startBMs: newStartBMs,
+        durationMs: newDurationMs,
+        durationBars: beats / outgoing.beatMap.beatsPerBar,
+      },
+      automation: rebuildAutomation(recipe, newDurationMs),
+    };
+    const reading = read(candidate);
+    if (reading.integral <= AUTHOR_BOUNDS.vocalClashIntegral) {
+      return withEvidence(candidate, reading, true);
+    }
+    shortest = candidate;
+    shortestReading = reading;
+  }
+
+  if (!trusted) {
+    // One step did not clear it and the evidence is doubtful: keep
+    // the author's original window rather than chase the phantom.
+    return withEvidence(recipe, initial, false);
+  }
+  if (shortest && shortestReading) {
+    return withEvidence(shortest, shortestReading, true);
+  }
+  return withEvidence(recipe, initial, false);
+}
+
+// ---------- entry / exit choice
+
+function chooseEntry(incoming: TrackAnalysis): {
+  beat: number;
+  reason: string;
+} {
+  const map = incoming.beatMap;
+  const totalBeats = Math.floor(
+    (map.durationSec - map.firstBeatSec) / secondsPerBeat(map.bpm),
+  );
+  // Drop strength is spent, not just sorted: the strongest drop that
+  // leaves a usable intro before it and a runway after it wins.
+  for (const drop of incoming.drops) {
+    if (
+      drop.beat >= AUTHOR_BOUNDS.minLeadBeats &&
+      timeAtBeat(map, drop.beat) <=
+        map.durationSec - 4 * secondsPerBeat(map.bpm)
+    ) {
+      return {
+        beat: drop.beat,
+        reason: `strongest usable drop (strength ${drop.strength.toFixed(2)})`,
+      };
+    }
+  }
+  if (incoming.intro && incoming.intro.endBeat >= MIN_BLEND_BEATS) {
+    return { beat: incoming.intro.endBeat, reason: "the intro's last beat" };
+  }
+  const chorus = (incoming.sections ?? []).find(
+    (s) => s.kind === "chorus" && s.startBeat > 0,
+  );
+  if (chorus) return { beat: chorus.startBeat, reason: "the first chorus" };
+  // Structure-less fallback — entryBeat.ts's rule, inlined so the
+  // author carries no dependency on a file S5-4 deletes.
+  if (totalBeats >= 48)
+    return { beat: 32, reason: "phrase fallback (no structure)" };
+  if (totalBeats >= 24)
+    return { beat: 16, reason: "phrase fallback (no structure)" };
+  return { beat: 0, reason: "the track's first beat (no structure)" };
+}
+
+interface BlendGeometry {
+  exitBeat: number;
+  blendBeats: number;
+  startASec: number;
+  startBSec: number;
+  bassSwapBeatOffset: number;
+  exitReason: string;
+  loop?: { sectionStartBeat: number; sectionEndBeat: number };
+}
+
+/**
+ * Blend geometry for a chosen exit beat — planTransition's arithmetic
+ * generalised to an exit the AUTHOR picked (and to grid-aware times):
+ * the blend shortens rather than overrun either file, and returns
+ * null when even the minimum blend cannot be reached.
+ */
+function blendGeometry(
+  outgoing: TrackAnalysis,
+  exitBeat: number,
+  desiredBlend: number,
+  incoming: TrackAnalysis,
+  entryBeat: number,
+  exitReason: string,
+  positionSec: number,
+): BlendGeometry | null {
+  const outMap = outgoing.beatMap;
+  const inMap = incoming.beatMap;
+  // An exit whose start is already behind the playhead is not an
+  // exit — the phrase walk-back can produce one near a track's end.
+  if (timeAtBeat(outMap, exitBeat) < positionSec - 0.05) return null;
+  const totalBeatsA = beatsAtTime(outMap, outMap.durationSec);
+  let blend = Math.min(desiredBlend, Math.floor(totalBeatsA - exitBeat));
+  while (
+    blend >= MIN_BLEND_BEATS &&
+    timeAtBeat(inMap, entryBeat - blend) < -EPSILON
+  ) {
+    blend -= 1;
+  }
+  if (blend < MIN_BLEND_BEATS) return null;
+  if (timeAtBeat(inMap, entryBeat) >= inMap.durationSec) return null;
+  const halfBars = Math.floor(blend / 2 / outMap.beatsPerBar);
+  return {
+    exitBeat,
+    blendBeats: blend,
+    startASec: timeAtBeat(outMap, exitBeat),
+    startBSec: Math.max(0, timeAtBeat(inMap, entryBeat - blend)),
+    bassSwapBeatOffset: Math.max(
+      outMap.beatsPerBar,
+      halfBars * outMap.beatsPerBar,
+    ),
+    exitReason,
+  };
+}
+
+/** Mean energy of the outgoing's last two seconds (v1's tail test, as evidence). */
+function tailEnergy(analysis: TrackAnalysis): number | null {
+  const curve = analysis.energyCurve;
+  if (curve.length === 0) return null;
+  const tail = curve.slice(-2);
+  return tail.reduce((sum, point) => sum + point.energy, 0) / tail.length;
+}
+
+/** The dotted-eighth echo spacing (mirrors twoDeckMixer's echoDelaySec). */
+function dottedEighthSec(bpm: number): number {
+  if (bpm <= 0) return 0.3;
+  return Math.min(1.2, Math.max(0.08, 0.75 * (60 / bpm)));
+}
+
+function rateReturnMs(incoming: TrackAnalysis, entryBeat: number): number {
+  const map = incoming.beatMap;
+  const next = (incoming.sections ?? []).find((s) => s.startBeat > entryBeat);
+  let beats = next
+    ? next.startBeat - entryBeat
+    : AUTHOR_BOUNDS.defaultRateReturnBeats;
+  beats = Math.min(
+    AUTHOR_BOUNDS.maxRateReturnBeats,
+    Math.max(AUTHOR_BOUNDS.minRateReturnBeats, beats),
+  );
+  return Math.max(
+    0,
+    (timeAtBeat(map, entryBeat + beats) - timeAtBeat(map, entryBeat)) * 1000,
+  );
+}
+
+function fingerprintsOf(
+  outgoing: TrackAnalysis,
+  incoming: TrackAnalysis,
+): TransitionRecipe["fingerprints"] {
+  return {
+    aAudioHash: outgoing.audioHash ?? null,
+    bAudioHash: incoming.audioHash ?? null,
+    analysisVersion:
+      outgoing.analysisVersion ?? incoming.analysisVersion ?? null,
+  };
+}
+
+function fallbackNote(): TransitionRecipe["fallback"] {
+  return {
+    kind: "cut",
+    note: "If this recipe cannot be performed as written, cut plainly — never force the blend.",
+  };
+}
+
+/**
+ * Authors the recipe the evidence best supports for this pair, from
+ * this position. One recipe — the S5-3 seam is that candidates.ts
+ * will ask this machinery for several (see the report); today the
+ * author returns its single best-supported answer, or null when no
+ * honest join exists from here (the session's own fallbacks then
+ * apply, exactly as when the v1 planner returned null).
+ */
+export function authorRecipe(request: RecipeRequest): TransitionRecipe | null {
+  const { outgoing, incoming } = request;
+  const outMap = outgoing.beatMap;
+  const inMap = incoming.beatMap;
+  const position = request.outgoingPositionSec;
+  const nowBeat = beatsAtTime(outMap, position);
+  const minLead = AUTHOR_BOUNDS.minLeadBeats;
+  const totalBeatsA = beatsAtTime(outMap, outMap.durationSec);
+
+  const entry = chooseEntry(incoming);
+  const rateB = outMap.bpm / inMap.bpm;
+  const stretch = Math.abs(rateB - 1);
+  const keyFit = keyCompatibility(outgoing.key, incoming.key);
+
+  // Tempo trust: confidence and grid agreement are spent, per the
+  // charter's third requirement — never beatmatch on a guess.
+  const tempoTrusted =
+    (outgoing.tempoConfidence === undefined ||
+      outgoing.tempoConfidence >= AUTHOR_BOUNDS.minTempoConfidence) &&
+    (incoming.tempoConfidence === undefined ||
+      incoming.tempoConfidence >= AUTHOR_BOUNDS.minTempoConfidence) &&
+    (outMap.grid === undefined ||
+      outMap.grid.confidence >= AUTHOR_BOUNDS.minGridConfidence) &&
+    (inMap.grid === undefined ||
+      inMap.grid.confidence >= AUTHOR_BOUNDS.minGridConfidence);
+  const beatmatchViable =
+    stretch <= AUTHOR_BOUNDS.maxBeatmatchStretch && tempoTrusted;
+
+  if (beatmatchViable) {
+    const recipe = authorBlend(
+      request,
+      entry,
+      rateB,
+      stretch,
+      keyFit,
+      nowBeat,
+      totalBeatsA,
+      minLead,
+    );
+    if (recipe) return recipe;
+  }
+
+  return authorRateOneJoin(
+    request,
+    entry,
+    keyFit,
+    stretch,
+    nowBeat,
+    totalBeatsA,
+    minLead,
+    beatmatchViable,
+  );
+}
+
+function authorBlend(
+  request: RecipeRequest,
+  entry: { beat: number; reason: string },
+  rateB: number,
+  stretch: number,
+  keyFit: KeyCompatibility | null,
+  nowBeat: number,
+  totalBeatsA: number,
+  minLead: number,
+): TransitionRecipe | null {
+  const { outgoing, incoming } = request;
+  const outMap = outgoing.beatMap;
+
+  // Desired length: a long blend is earned by a quiet pair (low vocal
+  // density on both sides, small stretch, friendly keys); the distant
+  // key cap applies no matter what else is true.
+  const density = (a: TrackAnalysis): number | null => {
+    if (a.vocalActivity && a.vocalActivity.points.length > 0) {
+      return meanVocalActivity(a.vocalActivity, 0, a.beatMap.durationSec);
+    }
+    if (a.sections && a.sections.length > 0) {
+      const total = a.sections.reduce(
+        (sum, s) => sum + (s.endSec - s.startSec),
+        0,
+      );
+      if (total <= 0) return null;
+      return (
+        a.sections.reduce(
+          (sum, s) => sum + s.vocalActivity * (s.endSec - s.startSec),
+          0,
+        ) / total
+      );
+    }
+    return null;
+  };
+  const outDensity = density(outgoing);
+  const inDensity = density(incoming);
+  let desired: number = AUTHOR_BOUNDS.standardBlendBeats;
+  if (
+    stretch <= 0.03 &&
+    keyFit?.compatible &&
+    outDensity !== null &&
+    inDensity !== null &&
+    outDensity < 0.3 &&
+    inDensity < 0.3
+  ) {
+    desired = AUTHOR_BOUNDS.longBlendBeats;
+  }
+  if (keyFit && keyFit.relation === "distant") {
+    desired = Math.min(desired, AUTHOR_BOUNDS.distantKeyMaxBlendBeats);
+  }
+
+  // Exit candidates, in the author's order of preference.
+  const exits: { beat: number; reason: string }[] = [];
+  if (outgoing.outro && outgoing.outro.startBeat >= nowBeat + minLead) {
+    exits.push({
+      beat: outgoing.outro.startBeat,
+      reason: "the outro's first beat",
+    });
+  }
+  const sectionStarts = (outgoing.sections ?? [])
+    .filter(
+      (s) =>
+        s.kind !== "intro" &&
+        s.startBeat >= nowBeat + minLead &&
+        s.startBeat + MIN_BLEND_BEATS <= totalBeatsA,
+    )
+    .map((s) => s.startBeat);
+  if (sectionStarts.length > 0) {
+    const last = Math.max(...sectionStarts);
+    exits.push({
+      beat: last,
+      reason: "the last section the blend can occupy",
+    });
+  }
+  const phrase = phraseBeats(outMap, 4);
+  let phraseExit = Math.ceil((nowBeat + minLead - EPSILON) / phrase) * phrase;
+  while (
+    phraseExit > nowBeat &&
+    timeAtBeat(outMap, phraseExit + desired) > outMap.durationSec + EPSILON
+  ) {
+    phraseExit -= phrase;
+  }
+  exits.push({ beat: phraseExit, reason: "a phrase boundary" });
+
+  let geometry: BlendGeometry | null = null;
+  for (const exit of exits) {
+    geometry = blendGeometry(
+      outgoing,
+      exit.beat,
+      desired,
+      incoming,
+      entry.beat,
+      exit.reason,
+      request.outgoingPositionSec,
+    );
+    if (geometry) break;
+  }
+
+  // Loop extension: the desired blend could not fit because the
+  // OUTGOING runs out — and it has a loopable breakdown/outro the
+  // exit sits inside. Extend the outgoing rather than shrink the join.
+  if (
+    !geometry ||
+    (geometry.blendBeats < desired &&
+      geometry.blendBeats < AUTHOR_BOUNDS.standardBlendBeats)
+  ) {
+    const looped = loopExtendedGeometry(
+      outgoing,
+      incoming,
+      entry.beat,
+      desired,
+      nowBeat,
+      minLead,
+    );
+    if (looped && (!geometry || looped.blendBeats > geometry.blendBeats)) {
+      geometry = looped;
+    }
+  }
+  if (!geometry) return null;
+
+  const durationMs =
+    (timeAtBeat(outMap, geometry.exitBeat + geometry.blendBeats) -
+      geometry.startASec) *
+    1000;
+  const returnMs = rateReturnMs(incoming, entry.beat);
+  const draft: TransitionRecipe = {
+    version: 1,
+    preset: "beatmatched-fade",
+    overlap: {
+      startAMs: geometry.startASec * 1000,
+      startBMs: geometry.startBSec * 1000,
+      durationMs,
+      durationBars: geometry.blendBeats / outMap.beatsPerBar,
+      beatmatched: true,
+      rateA: 1,
+      rateB,
+      bpmA: outMap.bpm,
+      bpmB: incoming.beatMap.bpm,
+    },
+    leadInSec: Math.max(0, geometry.startASec - request.outgoingPositionSec),
+    automation: buildAutomation({
+      preset: "beatmatched-fade",
+      durationMs,
+      swapAtMs: geometry.bassSwapBeatOffset * secondsPerBeat(outMap.bpm) * 1000,
+      openMidHigh: geometry.blendBeats >= 8,
+      filterSweep: false,
+      rateB,
+      rateReturnMs: returnMs,
+      echoTailMs: null,
+    }),
+    loops: geometry.loop
+      ? [
+          {
+            type: "loop",
+            side: "A",
+            startMs: timeAtBeat(outMap, geometry.loop.sectionStartBeat) * 1000,
+            endMs: timeAtBeat(outMap, geometry.loop.sectionEndBeat) * 1000,
+            beats:
+              geometry.loop.sectionEndBeat - geometry.loop.sectionStartBeat,
+          },
+        ]
+      : [],
+    fx: {},
+    fingerprints: fingerprintsOf(outgoing, incoming),
+    fallback: fallbackNote(),
+    evidence: {
+      entryReason: entry.reason,
+      exitReason: geometry.exitReason,
+      vocalOverlap: 0,
+      vocalEvidence: "trusted",
+      tempoStretch: stretch,
+      keyScore: keyFit?.score ?? null,
+      refereeShortened: false,
+    },
+  };
+
+  const refereed = applyVocalReferee(draft, outgoing, incoming);
+  // A trusted, still-clashing blend is not an honest blend: the
+  // author changes family instead of shipping the clash.
+  if (
+    refereed.evidence.vocalOverlap > AUTHOR_BOUNDS.vocalClashIntegral &&
+    refereed.evidence.vocalEvidence === "trusted"
+  ) {
+    return null;
+  }
+  return refereed;
+}
+
+function loopExtendedGeometry(
+  outgoing: TrackAnalysis,
+  incoming: TrackAnalysis,
+  entryBeat: number,
+  desired: number,
+  nowBeat: number,
+  minLead: number,
+): BlendGeometry | null {
+  const outMap = outgoing.beatMap;
+  const phrase = phraseBeats(outMap, 4);
+  for (const section of outgoing.sections ?? []) {
+    if (section.kind !== "breakdown" && section.kind !== "outro") continue;
+    const lengthBeats = section.endBeat - section.startBeat;
+    if (lengthBeats < MIN_BLEND_BEATS) continue;
+    if (
+      outMap.grid &&
+      outMap.grid.confidence < AUTHOR_BOUNDS.minGridConfidence
+    ) {
+      continue;
+    }
+    // The exit must sit inside the loopable section, with the
+    // section extending at least two beats past it.
+    let exitBeat = Math.max(
+      section.startBeat,
+      Math.ceil((nowBeat + minLead - EPSILON) / phrase) * phrase,
+    );
+    if (exitBeat < nowBeat + minLead) {
+      exitBeat = Math.ceil((nowBeat + minLead - EPSILON) / phrase) * phrase;
+    }
+    if (exitBeat >= section.endBeat - 2) continue;
+    if (timeAtBeat(incoming.beatMap, entryBeat - desired) < -EPSILON) continue;
+    const halfBars = Math.floor(desired / 2 / outMap.beatsPerBar);
+    return {
+      exitBeat,
+      blendBeats: desired,
+      startASec: timeAtBeat(outMap, exitBeat),
+      startBSec: Math.max(0, timeAtBeat(incoming.beatMap, entryBeat - desired)),
+      bassSwapBeatOffset: Math.max(
+        outMap.beatsPerBar,
+        halfBars * outMap.beatsPerBar,
+      ),
+      exitReason: `inside the loopable ${section.kind} (loop-extended)`,
+      loop: {
+        sectionStartBeat: section.startBeat,
+        sectionEndBeat: section.endBeat,
+      },
+    };
+  }
+  return null;
+}
+
+/**
+ * The rate-1 families: a drop-cut (beatmatched for its two beats when
+ * the tempo evidence allows, a plain cut when it does not), else a
+ * filter fade — echo-flavoured when the outgoing is playing out loud
+ * to its very end. Chosen when beatmatching was refused, or when even
+ * the referee could not make a blend honest.
+ */
+function authorRateOneJoin(
+  request: RecipeRequest,
+  entry: { beat: number; reason: string },
+  keyFit: KeyCompatibility | null,
+  stretch: number,
+  nowBeat: number,
+  totalBeatsA: number,
+  minLead: number,
+  beatmatchViable: boolean,
+): TransitionRecipe | null {
+  const { outgoing, incoming } = request;
+  const outMap = outgoing.beatMap;
+  const inMap = incoming.beatMap;
+  const phrase = phraseBeats(outMap, 4);
+
+  // A landing point for A: the first phrase boundary with enough
+  // lead, walked back if it would overrun the track.
+  let endBeat = Math.ceil((nowBeat + minLead - EPSILON) / phrase) * phrase;
+  while (
+    endBeat > nowBeat &&
+    timeAtBeat(outMap, endBeat) > outMap.durationSec + EPSILON
+  ) {
+    endBeat -= phrase;
+  }
+  const endSec = timeAtBeat(outMap, endBeat);
+  const leadInSec = Math.max(0, endSec - request.outgoingPositionSec);
+
+  const strongDrop = incoming.drops.find(
+    (drop) =>
+      drop.beat >= AUTHOR_BOUNDS.minLeadBeats &&
+      drop.strength >= AUTHOR_BOUNDS.minDropCutStrength &&
+      drop.timeSec <= inMap.durationSec - 2,
+  );
+
+  if (strongDrop && endBeat - nowBeat >= 1) {
+    const dropSec = timeAtBeat(inMap, strongDrop.beat);
+    if (beatmatchViable) {
+      // Beatmatched cut: two beats of matched overlap, the drop
+      // landing exactly as A leaves.
+      const blendBeats = 2;
+      const durationMs = blendBeats * secondsPerBeat(outMap.bpm) * 1000;
+      const startBSec = Math.max(
+        0,
+        timeAtBeat(inMap, strongDrop.beat - blendBeats),
+      );
+      const rateB = outMap.bpm / inMap.bpm;
+      return {
+        version: 1,
+        preset: "beatmatched-cut",
+        overlap: {
+          startAMs: (endSec - durationMs / 1000) * 1000,
+          startBMs: startBSec * 1000,
+          durationMs,
+          durationBars: blendBeats / outMap.beatsPerBar,
+          beatmatched: true,
+          rateA: 1,
+          rateB,
+          bpmA: outMap.bpm,
+          bpmB: inMap.bpm,
+        },
+        leadInSec: Math.max(0, leadInSec - durationMs / 1000),
+        automation: buildAutomation({
+          preset: "beatmatched-cut",
+          durationMs,
+          swapAtMs: durationMs,
+          openMidHigh: false,
+          filterSweep: false,
+          rateB,
+          rateReturnMs: rateReturnMs(incoming, strongDrop.beat),
+          echoTailMs: null,
+        }),
+        loops: [],
+        fx: {},
+        fingerprints: fingerprintsOf(outgoing, incoming),
+        fallback: fallbackNote(),
+        evidence: {
+          entryReason: `drop-cut onto the strongest drop (strength ${strongDrop.strength.toFixed(2)})`,
+          exitReason: "a phrase boundary, cut as the drop lands",
+          vocalOverlap: 0,
+          vocalEvidence: "trusted",
+          tempoStretch: stretch,
+          keyScore: keyFit?.score ?? null,
+          refereeShortened: false,
+        },
+      };
+    }
+    return {
+      version: 1,
+      preset: "cut",
+      overlap: {
+        startAMs: endSec * 1000,
+        startBMs: dropSec * 1000,
+        durationMs: 0,
+        durationBars: 0,
+        beatmatched: false,
+        rateA: 1,
+        rateB: 1,
+        bpmA: outMap.bpm,
+        bpmB: inMap.bpm,
+      },
+      leadInSec,
+      automation: buildAutomation({
+        preset: "cut",
+        durationMs: 0,
+        swapAtMs: null,
+        openMidHigh: false,
+        filterSweep: false,
+        rateB: 1,
+        rateReturnMs: 0,
+        echoTailMs: null,
+      }),
+      loops: [],
+      fx: {},
+      fingerprints: fingerprintsOf(outgoing, incoming),
+      fallback: fallbackNote(),
+      evidence: {
+        entryReason: `cut onto the strongest drop (strength ${strongDrop.strength.toFixed(2)})`,
+        exitReason: "a phrase boundary",
+        vocalOverlap: 0,
+        vocalEvidence: "trusted",
+        tempoStretch: stretch,
+        keyScore: keyFit?.score ?? null,
+        refereeShortened: false,
+      },
+    };
+  }
+
+  // Filter fade over the outgoing's last full section (or its last
+  // eight beats), the incoming entering at its chosen entry.
+  const fadeBeats = 8;
+  let exitBeat = endBeat - fadeBeats;
+  const lastSection = (outgoing.sections ?? [])
+    .filter(
+      (s) =>
+        s.startBeat >= nowBeat + minLead &&
+        s.startBeat + fadeBeats <= totalBeatsA,
+    )
+    .pop();
+  if (lastSection) exitBeat = lastSection.startBeat;
+  if (exitBeat < nowBeat + 1 || exitBeat + fadeBeats > totalBeatsA + EPSILON) {
+    return null;
+  }
+  const startASec = timeAtBeat(outMap, exitBeat);
+  const durationMs = fadeBeats * secondsPerBeat(outMap.bpm) * 1000;
+  const startBSec = Math.max(
+    0,
+    timeAtBeat(inMap, entry.beat) - durationMs / 1000,
+  );
+  const playsOut = exitBeat + fadeBeats >= totalBeatsA - EPSILON;
+  const tail = tailEnergy(outgoing);
+  const echo =
+    playsOut && tail !== null && tail >= 0.08
+      ? {
+          delaySec: dottedEighthSec(outMap.bpm),
+          feedback: 0.38,
+          wet: Math.min(0.6, Math.max(0.3, 0.3 + tail)),
+          divisionBeats: 0.75,
+        }
+      : undefined;
+  return {
+    version: 1,
+    preset: "fade",
+    overlap: {
+      startAMs: startASec * 1000,
+      startBMs: startBSec * 1000,
+      durationMs,
+      durationBars: fadeBeats / outMap.beatsPerBar,
+      beatmatched: false,
+      rateA: 1,
+      rateB: 1,
+      bpmA: outMap.bpm,
+      bpmB: inMap.bpm,
+    },
+    leadInSec: Math.max(0, startASec - request.outgoingPositionSec),
+    automation: buildAutomation({
+      preset: "fade",
+      durationMs,
+      swapAtMs: null,
+      openMidHigh: false,
+      filterSweep: true,
+      rateB: 1,
+      rateReturnMs: 0,
+      echoTailMs: echo ? secondsPerBeat(outMap.bpm) * 1000 : null,
+    }),
+    loops: [],
+    fx: echo ? { echo } : {},
+    fingerprints: fingerprintsOf(outgoing, incoming),
+    fallback: fallbackNote(),
+    evidence: {
+      entryReason: entry.reason,
+      exitReason: lastSection
+        ? `the last ${lastSection.kind} section, faded`
+        : "the final eight beats, faded",
+      vocalOverlap: 0,
+      vocalEvidence: "trusted",
+      tempoStretch: stretch,
+      keyScore: keyFit?.score ?? null,
+      refereeShortened: false,
+    },
+  };
 }

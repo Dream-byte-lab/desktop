@@ -12,6 +12,12 @@ export class Deck {
   readonly gain: GainNode;
   /** Low-shelf gain in dB; the mixer writes the bass swap onto it. */
   readonly bass: BiquadFilterNode;
+  /** Peaking band at 1 kHz; recipe EQ automation writes here. Neutral (0 dB) unless a recipe says otherwise. */
+  readonly mid: BiquadFilterNode;
+  /** High-shelf at 4 kHz; recipe EQ automation writes here. Neutral (0 dB) unless a recipe says otherwise. */
+  readonly high: BiquadFilterNode;
+  /** Lowpass; recipe filter automation writes its cutoff. Fully open (20 kHz) unless a recipe sweeps it. */
+  readonly filter: BiquadFilterNode;
   /**
    * A second low-shelf the automation never touches — the manual bass
    * control (the Pro layer's bass kill / trim). It sits in series with
@@ -44,6 +50,22 @@ export class Deck {
     this.bass.frequency.value = 160;
     this.bass.gain.value = BASS_FLAT_DB;
 
+    this.mid = context.createBiquadFilter();
+    this.mid.type = "peaking";
+    this.mid.frequency.value = 1000;
+    this.mid.Q.value = 0.8;
+    this.mid.gain.value = BASS_FLAT_DB;
+
+    this.high = context.createBiquadFilter();
+    this.high.type = "highshelf";
+    this.high.frequency.value = 4000;
+    this.high.gain.value = BASS_FLAT_DB;
+
+    this.filter = context.createBiquadFilter();
+    this.filter.type = "lowpass";
+    this.filter.frequency.value = 20_000;
+    this.filter.Q.value = 0.5;
+
     this.bassTrim = context.createBiquadFilter();
     this.bassTrim.type = "lowshelf";
     this.bassTrim.frequency.value = 160;
@@ -59,7 +81,10 @@ export class Deck {
     this.level.gain.value = 1;
 
     this.level.connect(this.bass);
-    this.bass.connect(this.bassTrim);
+    this.bass.connect(this.mid);
+    this.mid.connect(this.high);
+    this.high.connect(this.filter);
+    this.filter.connect(this.bassTrim);
     this.bassTrim.connect(this.gain);
     this.gain.connect(destination);
     if (echoInput) {
@@ -99,6 +124,24 @@ export class Deck {
   /** The live playback-rate control of the playing source, if any. */
   get rateControl(): AudioParam | null {
     return this.source ? this.source.playbackRate : null;
+  }
+
+  /**
+   * Arms a loop on the live source (buffer-time seconds, per the Web
+   * Audio spec): playback repeats the region until the loop is
+   * cleared or the deck stops. Recipe loop blocks are performed
+   * through here. A no-op when nothing is playing.
+   */
+  setLoopRegion(startSec: number, endSec: number): void {
+    if (!this.source) return;
+    this.source.loopStart = Math.max(0, startSec);
+    this.source.loopEnd = Math.max(startSec + 0.05, endSec);
+    this.source.loop = true;
+  }
+
+  /** Disarms any loop on the live source. */
+  clearLoop(): void {
+    if (this.source) this.source.loop = false;
   }
 
   stop(when?: number): void {

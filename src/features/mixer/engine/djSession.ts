@@ -1,4 +1,5 @@
 import type { Track } from "@/shared/types";
+import { showToast } from "@/shared/ui/Toast";
 import { usePlayerStore } from "../../player/store/playerStore";
 import { arcTarget, assembleSet, candidateFromAnalysis } from "./curatedSet";
 import { levelGainFor } from "./levelMatch";
@@ -19,7 +20,8 @@ import { TwoDeckMixer, type DeckIndex } from "./twoDeckMixer";
 //   duration, playing/paused — is written into the player's own store
 //   through its public setters, so the existing UI simply follows;
 // - tracks are prepared (downloaded, decoded, analysed) ahead of
-//   the playing track, walking past any that cannot be prepared;
+//   the playing track — the first one included — walking past any
+//   that cannot be prepared;
 //   when the next preparable track is ready, a transition is planned
 //   against the live position and scheduled on the audio clock;
 // - a track that cannot be prepared, or a pair with no honest blend,
@@ -132,17 +134,35 @@ export class DjSession {
     this.unpreparable.clear();
     this.queue = queue;
     this.queueGeneration += 1;
+    const generation = this.queueGeneration;
     const store = usePlayerStore.getState();
     store.setQueue(queue);
     store.setStatus("loading", null);
 
-    const first = await loadTrackForMixing(queue[startIndex]);
-    if (!first || !this.mixer) {
-      store.setStatus("error", "That track could not be prepared for mixing.");
+    // The start walks, like every other door into the session: from
+    // the requested position forward to the first track that can
+    // actually be prepared, stepping over the ones that cannot. One
+    // unpreparable track at the press position must not refuse the
+    // whole session (Note 14).
+    const found = await this.findNextPlayable(startIndex);
+    if (this.queueGeneration !== generation) {
+      // A stop or a newer start took over while tracks were being
+      // prepared; that attempt owns the session now, so this one
+      // leaves quietly instead of dismantling it.
+      return;
+    }
+    if (!found || !this.mixer) {
+      // Nothing from the requested position onward can be prepared.
+      // The refusal must be seen: the store's error field has no
+      // reader in the interface, so the failure is also said on the
+      // toast surface the player itself uses for playback failures.
+      const message = "None of those tracks could be prepared for mixing.";
+      store.setStatus("error", message);
+      showToast(message, "error");
       this.stop();
       return;
     }
-    this.beginTrack(first, startIndex);
+    this.beginTrack(found.prepared, found.index);
     this.ticker = setInterval(() => this.tick(), TICK_MS);
     this.onRunningChange?.(true);
   }
@@ -510,7 +530,9 @@ export class DjSession {
    * remembered for the rest of the session, so a dead track is paid
    * for once, never once per song. Returns null when nothing ahead
    * can be prepared, or when the session moved on while a track was
-   * downloading (a fresher walk owns the answer then).
+   * downloading (a fresher walk owns the answer then). Session start
+   * walks through here too: its anchor is the not-yet-playing index
+   * (−1), so the walk begins exactly at the requested start position.
    */
   private async findNextPlayable(
     fromIndex: number,

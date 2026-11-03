@@ -17,6 +17,14 @@ const loadMock = vi.hoisted(() => ({
   fn: vi.fn<(track: Track) => Promise<PreparedTrack | null>>(),
 }));
 
+const toastMock = vi.hoisted(() => ({
+  fn: vi.fn(),
+}));
+
+vi.mock("@/shared/ui/Toast", () => ({
+  showToast: toastMock.fn,
+}));
+
 vi.mock("./trackSource", () => ({
   loadTrackForMixing: loadMock.fn,
   preparedTrack: vi.fn(() => undefined),
@@ -132,6 +140,7 @@ describe("DjSession resilience — a dead or late next track must not end the se
     vi.useFakeTimers();
     clock.now = 0;
     loadMock.fn.mockReset();
+    toastMock.fn.mockReset();
     store.state.status = "idle";
     store.state.currentTrack = null;
     store.state.currentIndex = -1;
@@ -293,5 +302,135 @@ describe("DjSession resilience — a dead or late next track must not end the se
     expect(session.isRunning).toBe(true);
     expect(store.state.currentTrack?.id).toBe("c");
     expect(store.state.currentIndex).toBe(2);
+  });
+
+  // Note 14: the start door prepared exactly one track — the one at
+  // the start index — and refused the whole session if it failed,
+  // invisibly. The start must walk to the first preparable track,
+  // like every other door into the session, and a total refusal must
+  // be seen.
+  describe("start walks to the first preparable track (Note 14)", () => {
+    const trackD = makeTrack("d");
+    const preparedD = makePrepared(trackD);
+
+    const loadsOf = (id: string) =>
+      loadMock.fn.mock.calls.filter(([track]) => track.id === id).length;
+
+    it("starts at the next track when the start track cannot be prepared", async () => {
+      loadsById(
+        new Map([
+          ["a", null],
+          ["b", preparedB],
+          ["c", preparedC],
+        ]),
+      );
+      await session.start([trackA, trackB, trackC]);
+      await flushMicrotasks();
+
+      expect(session.isRunning).toBe(true);
+      expect(store.state.currentTrack?.id).toBe("b");
+      expect(store.state.currentIndex).toBe(1);
+      expect(store.state.status).toBe("playing");
+      expect(loadsOf("a")).toBe(1); // the dead track was paid for once
+      expect(toastMock.fn).not.toHaveBeenCalled();
+    });
+
+    it("walks past several unpreparable tracks to start", async () => {
+      loadsById(
+        new Map<string, PreparedTrack | null>([
+          ["a", null],
+          ["b", null],
+          ["c", null],
+          ["d", preparedD],
+        ]),
+      );
+      await session.start([trackA, trackB, trackC, trackD]);
+      await flushMicrotasks();
+
+      expect(session.isRunning).toBe(true);
+      expect(store.state.currentTrack?.id).toBe("d");
+      expect(store.state.currentIndex).toBe(3);
+      expect(toastMock.fn).not.toHaveBeenCalled();
+    });
+
+    it("begins the walk at the requested start position, not the queue head", async () => {
+      loadsById(
+        new Map([
+          ["a", preparedA],
+          ["b", null],
+          ["c", preparedC],
+        ]),
+      );
+      await session.start([trackA, trackB, trackC], 1);
+      await flushMicrotasks();
+
+      expect(session.isRunning).toBe(true);
+      expect(store.state.currentTrack?.id).toBe("c");
+      expect(store.state.currentIndex).toBe(2);
+      expect(loadsOf("a")).toBe(0); // before the start position: untouched
+    });
+
+    it("fails visibly and starts nothing when nothing ahead can be prepared", async () => {
+      loadsById(
+        new Map([
+          ["a", null],
+          ["b", null],
+        ]),
+      );
+      await session.start([trackA, trackB]);
+      await flushMicrotasks();
+
+      expect(session.isRunning).toBe(false);
+      expect(store.state.currentTrack).toBeNull();
+      expect(store.state.status).toBe("error");
+      expect(toastMock.fn).toHaveBeenCalledTimes(1);
+      expect(toastMock.fn).toHaveBeenCalledWith(
+        expect.stringContaining("could be prepared for mixing"),
+        "error",
+      );
+    });
+
+    it("a normal start is unchanged: first track, no walk, no toast", async () => {
+      loadsById(
+        new Map([
+          ["a", preparedA],
+          ["b", preparedB],
+        ]),
+      );
+      await session.start([trackA, trackB]);
+      await flushMicrotasks();
+
+      expect(session.isRunning).toBe(true);
+      expect(store.state.currentTrack?.id).toBe("a");
+      expect(store.state.currentIndex).toBe(0);
+      expect(store.state.status).toBe("playing");
+      expect(loadsOf("a")).toBe(1);
+      expect(toastMock.fn).not.toHaveBeenCalled();
+    });
+
+    it("a start superseded mid-preparation leaves the newer session alone", async () => {
+      let resolveA: ((value: PreparedTrack | null) => void) | undefined;
+      const pendingA = new Promise<PreparedTrack | null>((resolve) => {
+        resolveA = resolve;
+      });
+      loadMock.fn.mockImplementation((track) =>
+        track.id === "a" ? pendingA : Promise.resolve(preparedB),
+      );
+
+      const first = session.start([trackA, trackB]);
+      const second = session.start([trackB]);
+      await second;
+      await flushMicrotasks();
+      expect(session.isRunning).toBe(true);
+      expect(store.state.currentTrack?.id).toBe("b");
+
+      resolveA?.(null); // the first attempt's walk now finds nothing
+      await first;
+      await flushMicrotasks();
+
+      expect(session.isRunning).toBe(true);
+      expect(store.state.currentTrack?.id).toBe("b");
+      expect(toastMock.fn).not.toHaveBeenCalled();
+    });
   });
 });
