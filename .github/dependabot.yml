@@ -1,14 +1,47 @@
+# Dependabot — Linerave
+#
+# How this repo uses Dependabot, in plain terms:
+#
+# - Detection stays strong. Every dependency in package.json and every
+#   GitHub Action stays watched, and grouped update PRs keep arriving so
+#   nothing goes stale unnoticed.
+# - But these PRs are a notice board, NOT a merge queue. Linerave's
+#   source of truth is the maintainers' canonical local tree, and the
+#   repo is kept in step with upstream Liner by deliberate, verified
+#   fold-ins. A Dependabot PR merged on GitHub would pull the repo away
+#   from that tree and stall the next upstream fold until someone
+#   reconciled it by hand. So: maintainers review these PRs, apply the
+#   updates they take through the local tree (with the usual full check
+#   before anything is pushed), and close the rest with thanks.
+# - Major version bumps are maintainer decisions, never routine. The
+#   upstream fold-in stops and asks whenever a dependency changes, so
+#   majors arrive through that door, tested as part of the fold.
+# - Security fixes do not wait for this file. Dependabot alerts (a repo
+#   setting) plus the weekly security scan are the tripwire; the fix
+#   itself is folded deliberately, the same as everything else.
+
 version: 2
 updates:
   - package-ecosystem: npm
     directory: /
     schedule:
       interval: weekly
-    open-pull-requests-limit: 5
+      day: monday
+    # Tamed: at most 3 open PRs at once (was 5), grouped so the whole
+    # week arrives as one minor/patch PR and one majors PR.
+    open-pull-requests-limit: 3
+    # No automatic rebasing — a held PR stays quietly held instead of
+    # generating comment noise every time main moves.
+    rebase-strategy: disabled
     groups:
       minor-and-patch:
         update-types: [minor, patch]
+      major-updates:
+        update-types: [major]
     ignore:
+      # These majors are never proposed here at all. Electron majors in
+      # particular reshape the app; they are adopted, if at all, through
+      # an upstream fold-in with the full check — not from a bot PR.
       - dependency-name: electron
         update-types: [version-update:semver-major]
       - dependency-name: "@types/node"
@@ -20,6 +53,8 @@ updates:
     directory: /
     schedule:
       interval: monthly
+    open-pull-requests-limit: 3
+    rebase-strategy: disabled
     groups:
       actions:
         patterns: ["*"]

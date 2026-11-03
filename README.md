@@ -148,7 +148,7 @@ One boundary, stated plainly: Linerave remains a client of the official Liner AP
 
 ## Contributing
 
-This is a personal fork, maintained for its author's own use, and it is not accepting contributions. The upstream project — where bug reports, discussions and contributions belong — is [tryliner/desktop](https://github.com/tryliner/desktop). The [license](./LICENSE) limits what a fork is allowed to do, and this fork stays inside it: personal use and local builds, no commercial distribution, no public competing fork.
+This is a personal fork, maintained for its author's own use. Bug reports and discussion are welcome here, in this repo's Issues and Discussions — reports about Linerave belong with Linerave, not upstream. Security reports never go in a public issue: use this fork's private advisory route (see [SECURITY.md](./SECURITY.md)). Code contributions are not solicited; pull requests are read, but may be declined with thanks. The upstream project is [tryliner/desktop](https://github.com/tryliner/desktop). The [license](./LICENSE) limits what a fork is allowed to do, and this fork stays inside it: personal use and local builds, no commercial distribution, no public competing fork.
 
 ---
 
