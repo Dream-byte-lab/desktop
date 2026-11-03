@@ -7,12 +7,15 @@ import {
   LuPlus,
   LuTrash2,
   LuFolderPlus,
+  LuListMusic,
 } from "react-icons/lu";
 import { ShareForwardLine } from "@mingcute/react";
 import type { DropdownMenuItem } from "@/shared/ui/DropdownMenu";
+import { ApiError } from "@/shared/api";
 import { playerEngine } from "../engine/playerEngine";
 import {
   usePlaylistsList,
+  useAddPlaylistTracks,
   useLikeTrack,
   useUnlikeTrack,
   useIsTrackLiked,
@@ -31,6 +34,12 @@ const CLOUD_ONLY_ITEMS = new Set([
   "remove-from-playlist",
   "share",
 ]);
+
+/** quick-add entries carry their playlist id in the item id */
+const QUICK_ADD_PREFIX = "quick-add-to-playlist:";
+
+/** how many one-click playlist entries sit under "Add to playlist" */
+const QUICK_ADD_LIMIT = 4;
 
 export interface SongMenuContext {
   id?: string;
@@ -69,6 +78,8 @@ export function useSongMenuItems(ctx: SongMenuContext): DropdownMenuItem[] {
 
   const { data: playlistsData } = usePlaylistsList();
 
+  const addPlaylistTrack = useAddPlaylistTracks();
+
   const likeMutation = useLikeTrack();
   const unlikeMutation = useUnlikeTrack();
 
@@ -94,6 +105,60 @@ export function useSongMenuItems(ctx: SongMenuContext): DropdownMenuItem[] {
       });
     }
   }, [id, searchType, title, artists, t]);
+
+  // One-click add with exactly the AddToPlaylist modal's feedback: success
+  // names the playlist, a 409 names the track, anything else is the plain
+  // failure toast. Uses the same mutation the modal uses.
+  const handleQuickAddToPlaylist = useCallback(
+    async (playlistId: string, playlistTitle: string) => {
+      if (!id) return;
+      try {
+        await addPlaylistTrack.mutateAsync({ playlistId, trackId: id });
+        showToast(t("common.added_to_playlist"), "checkmark", {
+          description: playlistTitle,
+        });
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 409) {
+          showToast(t("common.track_already_in_playlist"), "error", {
+            description: title,
+          });
+        } else {
+          showToast(t("common.failed_add_playlist"), "error");
+        }
+      }
+    },
+    [id, title, addPlaylistTrack, t],
+  );
+
+  // Quick-add: the most recently updated playlists, one click, no modal
+  // round-trip. LibraryPlaylistSummary.updatedAt is a real recency signal,
+  // so a copy is sorted by it (stable: equal or unparseable timestamps keep
+  // the server list's order). While the list is loading playlistsData is
+  // still the empty list, and with no track id there is nothing to add —
+  // both yield no entries. `excludePlaylistId` drops one playlist from the
+  // candidates before the cap is applied (the playlist-context branch uses
+  // it for the playlist the track already sits in, whose add is a
+  // guaranteed 409); the non-playlist branch passes nothing and excludes
+  // nothing.
+  const buildQuickAddItems = useCallback(
+    (excludePlaylistId?: string): DropdownMenuItem[] => {
+      if (!id) return [];
+      return [...(playlistsData?.playlists ?? [])]
+        .filter((playlist) => playlist.id !== excludePlaylistId)
+        .sort(
+          (a, b) =>
+            (Date.parse(b.updatedAt) || 0) - (Date.parse(a.updatedAt) || 0),
+        )
+        .slice(0, QUICK_ADD_LIMIT)
+        .map((playlist) => ({
+          id: `${QUICK_ADD_PREFIX}${playlist.id}`,
+          label: playlist.title,
+          icon: <LuListMusic size={15} />,
+          onClick: () => handleQuickAddToPlaylist(playlist.id, playlist.title),
+        }));
+    },
+    [id, playlistsData, handleQuickAddToPlaylist],
+  );
 
   const buildMenu = useCallback((): DropdownMenuItem[] => {
     const isTrack = searchType === "track" || !searchType;
@@ -171,6 +236,10 @@ export function useSongMenuItems(ctx: SongMenuContext): DropdownMenuItem[] {
             icon: <ShareForwardLine size={15} />,
             onClick: handleShare,
           },
+          // Quick-add sits where the modal item would conceptually sit:
+          // adds grouped together, the destructive remove stays last. The
+          // containing playlist is excluded — the track is already in it.
+          ...buildQuickAddItems(playlistId),
           {
             id: "remove-from-playlist",
             label: t("common.remove_from_playlist"),
@@ -273,6 +342,7 @@ export function useSongMenuItems(ctx: SongMenuContext): DropdownMenuItem[] {
             });
           },
         },
+        ...buildQuickAddItems(),
         {
           id: "share",
           label: t("common.share"),
@@ -333,13 +403,18 @@ export function useSongMenuItems(ctx: SongMenuContext): DropdownMenuItem[] {
     liked,
     handleLike,
     handleShare,
+    handleQuickAddToPlaylist,
+    buildQuickAddItems,
     playlistsData,
     t,
   ]);
 
   const items = buildMenu();
   if (!isLocalTrackId(id)) return items;
-  const deviceItems = items.filter((item) => !CLOUD_ONLY_ITEMS.has(item.id));
+  const deviceItems = items.filter(
+    (item) =>
+      !CLOUD_ONLY_ITEMS.has(item.id) && !item.id.startsWith(QUICK_ADD_PREFIX),
+  );
   if (!onRemoveFromDevice) return deviceItems;
   return [
     ...deviceItems,

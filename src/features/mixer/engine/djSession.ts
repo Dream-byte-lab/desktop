@@ -27,6 +27,20 @@ import {
 } from "./trackSource";
 import type { TransitionPlan } from "./transitionPlanner";
 import { TwoDeckMixer, type DeckIndex } from "./twoDeckMixer";
+import {
+  createAnalyserTap,
+  registerVisualizerTap,
+  VISUALIZER_TAP_ID,
+  VISUALIZER_TAP_PRIORITY,
+} from "@/features/greeting/lib/visualizerSource";
+import {
+  STAGE_EFFECT_KINDS,
+  type StageCrossfaderCurve,
+  type StageCurrentMove,
+  type StageEffectKind,
+  type StageFxAssign,
+  type StageSnapshot,
+} from "../ui/stage/stageSnapshot";
 
 // The DJ session, v2: a whole queue played on the two decks, mixed
 // by the brain (brain.ts). It is a guest in Liner's house, and
@@ -38,10 +52,14 @@ import { TwoDeckMixer, type DeckIndex } from "./twoDeckMixer";
 //   duration, playing/paused — is written into the player's own
 //   store through its public setters, so the existing UI follows;
 // - tracks are prepared (downloaded, decoded, analysed) on a
-//   ONE-TRACK horizon — the playing track and the next one — walking
-//   past any that cannot be prepared. The whole queue tail is never
-//   prepared by the decision loop (v1 did, per evaluation poll);
-//   tonight's facts are read from the analysis cache instead;
+//   TWO-TRACK horizon — the playing track and the two after it,
+//   prepared concurrently — walking past any that cannot be
+//   prepared at all. A track that decodes but cannot be analysed
+//   in time is still prepared, as a playable shell: it is played
+//   plainly, never blended, and counts through the fallback
+//   accounting (Note 20). The whole queue tail is never prepared
+//   by the decision loop (v1 did, per evaluation poll); tonight's
+//   facts are read from the analysis cache instead;
 // - every preparation the session awaits carries a deadline: a
 //   stalled download, decode or analysis is a failure RESULT within
 //   the deadline, never a promise that pends forever (guarantee 2);
@@ -69,10 +87,13 @@ import { TwoDeckMixer, type DeckIndex } from "./twoDeckMixer";
 //   an enumerated reason (guarantees 3 and 7);
 // - the Step 2 contracts stand verbatim in behaviour: a user's
 //   explicit hand-pick beats the brain (the command router stops
-//   this session; nothing here restarts it), unready tracks are
-//   immune (preparation walks past them), the party's lifecycle is
-//   supreme (it lives and dies with this session's running state),
-//   and an auth flip never wipes playback (nothing here reads auth).
+//   this session; nothing restarts it over a deliberate stop — the
+//   DJ intent wiring in store/djIntentWiring.ts arms its
+//   auto-resume ONLY on queue-exhausted / start-no-playable ends,
+//   never on user-stop), unready tracks are immune (preparation
+//   walks past them), the party's lifecycle is supreme (it lives
+//   and dies with this session's running state), and an auth flip
+//   never wipes playback (nothing here reads auth).
 //
 // Positions are tracked as rate segments against the audio clock, so
 // pausing (which freezes the clock) freezes the position for free.
@@ -94,10 +115,23 @@ const PLAN_WHEN_REMAINING_SEC = 150;
 export const PREPARATION_DEADLINE_MS = 45_000;
 /** How long a preparation failure is remembered before a retry. */
 export const FAILURE_MARK_TTL_MS = 30_000;
-/** A track is retried at most this many times in one session. */
-export const MAX_PREPARATION_ATTEMPTS = 3;
+/**
+ * Failure marks back off, they never bury (Note 20): a mark blocks
+ * its track for FAILURE_MARK_TTL_MS × attempts, capped here — a
+ * flaky patch of a night cannot permanently erase a song from a
+ * session, however many times it has failed.
+ */
+export const FAILURE_BACKOFF_CAP_MS = 300_000;
 /** Fallback plain cuts beyond this count degrade the session, announced. */
 export const PLAIN_CUT_ANNOUNCE_THRESHOLD = 3;
+/**
+ * How far the position may run past the current track's duration
+ * before the tick's watchdog presumes the end-of-track floor is
+ * stuck and forces it (Note 21). Small on purpose: a healthy floor
+ * lands or ends the set within a tick or two of the end; anything
+ * still unrecovered two seconds past the end is not recovering.
+ */
+export const WATCHDOG_OVERRUN_SEC = 2;
 /** A decision commits once its overlap anchor is this close. */
 const COMMIT_HORIZON_SEC = 1.0;
 
@@ -150,6 +184,128 @@ function raveQueueEntry(prepared: PreparedTrack): RaveQueueEntry<Track> {
   return { track: prepared.track, info };
 }
 
+/**
+ * Narration of a standing decision for the stage, written FROM
+ * THE ARTEFACT: the candidate's family plus what the recipe
+ * itself carries (its scratch loop's technique, a brake block,
+ * its effect kinds). Nothing is invented — a family with nothing
+ * performed ("let-it-play") narrates to null, and the stage's
+ * derivable base lines speak instead.
+ */
+export function describeDecisionMove(
+  decision: BrainDecision | null,
+): StageCurrentMove | null {
+  if (!decision) return null;
+  const family = decision.candidate.family;
+  const recipe = decision.recipe;
+  switch (family) {
+    case "let-it-play":
+      return null;
+    case "scratch": {
+      const technique =
+        recipe.loops.find((loop) => loop.type === "scratch")?.technique ?? null;
+      return {
+        label: technique
+          ? `Performing a ${technique} scratch`
+          : "Performing a scratch",
+        family,
+        technique,
+      };
+    }
+    case "spinback":
+      return {
+        label: "Spinback into the next track",
+        family,
+        technique: "spinback",
+      };
+    case "vinyl-stop": {
+      const brake = recipe.loops.some((loop) => loop.type === "brake");
+      return brake
+        ? {
+            label: "Brake stop into the next track",
+            family,
+            technique: "brake",
+          }
+        : {
+            label: "Vinyl stop into the next track",
+            family,
+            technique: "vinyl-stop",
+          };
+    }
+    case "fx": {
+      const kinds = [
+        ...new Set((recipe.effects ?? []).map((effect) => effect.kind)),
+      ];
+      return {
+        label:
+          kinds.length === 1
+            ? `Blending with ${kinds[0]}`
+            : kinds.length > 1
+              ? "Blending with layered effects"
+              : "Blending with effects",
+        family,
+        technique: kinds[0] ?? null,
+      };
+    }
+    case "long-blend":
+      return {
+        label: "Long blend into the next track",
+        family,
+        technique: null,
+      };
+    case "standard-blend":
+      return {
+        label: "Blending into the next track",
+        family,
+        technique: null,
+      };
+    case "short-blend":
+      return {
+        label: "Short blend into the next track",
+        family,
+        technique: null,
+      };
+    case "loop-extended-blend":
+      return {
+        label: "Loop-extended blend into the next track",
+        family,
+        technique: null,
+      };
+    case "drop-cut":
+      return {
+        label: "Cutting to the next track's drop",
+        family,
+        technique: null,
+      };
+    case "section-swap":
+      return {
+        label: "Section swap into the next track",
+        family,
+        technique: null,
+      };
+    case "echo-out":
+      return {
+        label: "Echoing out into the next track",
+        family,
+        technique: null,
+      };
+    case "filter-fade":
+      return {
+        label: "Filter fade into the next track",
+        family,
+        technique: null,
+      };
+    case "early-cut":
+      return {
+        label: "Early cut into the next track",
+        family,
+        technique: null,
+      };
+    default:
+      return null;
+  }
+}
+
 export class DjSession {
   /**
    * The brain this session thinks with: its signal bank is the
@@ -167,15 +323,34 @@ export class DjSession {
   /** Queue index of `next` — not always index + 1: preparation walks past unpreparable tracks. */
   private nextIndex = -1;
   /**
+   * The horizon's second slot: the playable track after `next`,
+   * prepared concurrently with it (Note 20) so one slow download
+   * cannot strand the set at a track end. Invariant at every
+   * settle point: the slots hold distinct queue indices, both
+   * beyond the current index, ordered nextIndex < afterNextIndex.
+   */
+  private afterNext: PreparedTrack | null = null;
+  /** Queue index of `afterNext`. */
+  private afterNextIndex = -1;
+  /**
    * Preparation failures in this session, with attempts and age.
-   * A mark blocks a track only while fresh (or exhausted): the
-   * one-strike branding of v1 is gone (guarantee 5).
+   * A mark blocks a track only while its backoff window runs, and
+   * the window grows with attempts (capped): the one-strike
+   * branding of v1 is gone, and so is the later 3-strikes burial
+   * (guarantee 5; Note 20).
    */
   private readonly failures = new Map<string, FailureMark>();
   /** Bumped whenever the queue is replaced, so in-flight preparation can tell it is stale. */
   private queueGeneration = 0;
   /** True while the end-of-track plain-cut advance is looking for a playable track. */
   private endAdvanceInFlight = false;
+  /**
+   * The queue index the Note 21 watchdog has already rescued once:
+   * the watchdog fires at most once per track, so a floor it
+   * unlatched that wedges again on the same track is surfaced by
+   * the standing end branch rather than rescued in a loop.
+   */
+  private watchdogRescuedIndex = -1;
   private segments: RateSegment[] = [];
   private ticker: ReturnType<typeof setInterval> | null = null;
   private timers = new Set<ReturnType<typeof setTimeout>>();
@@ -291,6 +466,63 @@ export class DjSession {
     this.mixer?.setDeckBassCut(index, cut);
   }
 
+  setDeckEq(index: DeckIndex, band: "bass" | "mid" | "high", db: number): void {
+    this.mixer?.setDeckEq(index, band, db);
+  }
+
+  setDeckFilter(index: DeckIndex, hz: number): void {
+    this.mixer?.setDeckFilter(index, hz);
+  }
+
+  setCrossfaderCurve(curve: StageCrossfaderCurve): void {
+    this.mixer?.setCrossfaderCurve(curve);
+  }
+
+  setFxAssign(kind: StageEffectKind, assign: StageFxAssign): void {
+    this.mixer?.setManualFxAssign(kind, assign);
+  }
+
+  setFxSendLevel(kind: StageEffectKind, side: "A" | "B", level: number): void {
+    this.mixer?.setManualFxSend(kind, side, level);
+  }
+
+  /** The mixer's master analyser for taps, or null when no session runs. */
+  masterAnalyser(): AnalyserNode | null {
+    return this.mixer?.masterAnalyser() ?? null;
+  }
+
+  /**
+   * The stage snapshot (Build 2A contract): the mixer's current
+   * readings assembled read-only — this never mutates session
+   * state. Null when there is no mixer (no session running).
+   */
+  stageSnapshot(): StageSnapshot | null {
+    if (!this.mixer) return null;
+    const mixer = this.mixer;
+    return {
+      decks: [
+        {
+          ...mixer.stageDeckReadings(0),
+          meter: mixer.deckMeterSummary(0),
+        },
+        {
+          ...mixer.stageDeckReadings(1),
+          meter: mixer.deckMeterSummary(1),
+        },
+      ],
+      master: { meter: mixer.masterMeterSummary() },
+      effects: STAGE_EFFECT_KINDS.map((kind) => ({
+        kind,
+        ...mixer.stageEffectReadings(kind),
+        assign: mixer.manualFxAssign(kind),
+      })),
+      currentMove: describeDecisionMove(
+        this.activeJoin?.decision ?? this.decision,
+      ),
+      crossfaderCurve: mixer.crossfaderCurveName(),
+    };
+  }
+
   async start(queue: Track[], startIndex = 0): Promise<void> {
     this.stop("replaced");
     if (queue.length === 0 || startIndex >= queue.length) {
@@ -378,12 +610,15 @@ export class DjSession {
     const prepared: PreparedTrack[] = [];
     for (const track of tail) {
       const ready = await this.prepareWithDeadline(track);
-      if (ready) {
+      if (ready && ready.mixable !== false) {
         this.failures.delete(track.id);
         prepared.push(ready);
-      } else {
+      } else if (!ready) {
         this.markFailure(track.id);
       }
+      // A shell (ready, not mixable) cannot be curated — it has no
+      // analysis to assemble a set from — but it is not a failure:
+      // it keeps its place in the tail below, unmarked (Note 20).
     }
     // The session may have moved on while tracks were loading.
     if (!this.current || this.joinLocked) return false;
@@ -418,6 +653,8 @@ export class DjSession {
     usePlayerStore.getState().setQueue(this.queue);
     this.next = null;
     this.nextIndex = -1;
+    this.afterNext = null;
+    this.afterNextIndex = -1;
     void this.prepareNext();
     return true;
   }
@@ -445,6 +682,14 @@ export class DjSession {
     const prepared = await this.prepareWithDeadline(input.track);
     if (!prepared) {
       this.markFailure(input.track.id);
+      return null;
+    }
+    // A playable shell can be played from the queue, but a guest
+    // request is SCHEDULED by musical fit — a track with no
+    // analysis cannot be weighed, so the request is refused as
+    // unplayable, exactly as before the split. It is not a
+    // preparation failure, so no failure mark is laid (Note 20).
+    if (prepared.mixable === false) {
       return null;
     }
     this.failures.delete(input.track.id);
@@ -511,8 +756,13 @@ export class DjSession {
         continue;
       }
       const cached = preparedTrack(track.id);
-      if (cached) entries.push(raveQueueEntry(cached));
-      else unweighed.push(track);
+      // Only a mixable entry can be weighed: a shell in the cache
+      // has no musical facts to schedule by (Note 20).
+      if (cached && cached.mixable !== false) {
+        entries.push(raveQueueEntry(cached));
+      } else {
+        unweighed.push(track);
+      }
     }
     // The horizon creeps by one: the first unweighed tail track
     // starts preparing now, so the next evaluation weighs more of
@@ -520,8 +770,12 @@ export class DjSession {
     const creep = unweighed.find((track) => !this.failureBlocked(track.id));
     if (creep) {
       void this.prepareWithDeadline(creep).then((ready) => {
-        if (ready) this.failures.delete(creep.id);
-        else this.markFailure(creep.id);
+        if (ready && ready.mixable !== false) {
+          this.failures.delete(creep.id);
+        } else if (!ready) {
+          this.markFailure(creep.id);
+        }
+        // A shell is neither a weighed success nor a failure.
       });
     }
 
@@ -536,6 +790,8 @@ export class DjSession {
       usePlayerStore.getState().setQueue(this.queue);
       this.next = null;
       this.nextIndex = -1;
+      this.afterNext = null;
+      this.afterNextIndex = -1;
       void this.prepareNext();
     }
     return result.decisions;
@@ -549,6 +805,14 @@ export class DjSession {
     // room heard part of it; history and signals are told).
     this.decision = null;
     this.decisionInputs = null;
+    // The horizon's second slot is a prepared next in waiting: a
+    // skip lands it rather than walking for what is already here.
+    if (!this.next && this.afterNext) {
+      this.next = this.afterNext;
+      this.nextIndex = this.afterNextIndex;
+      this.afterNext = null;
+      this.afterNextIndex = -1;
+    }
     if (this.next) {
       const next = this.next;
       const nextIdx = this.nextIndex;
@@ -663,7 +927,10 @@ export class DjSession {
     this.current = null;
     this.next = null;
     this.nextIndex = -1;
+    this.afterNext = null;
+    this.afterNextIndex = -1;
     this.endAdvanceInFlight = false;
+    this.watchdogRescuedIndex = -1;
     this.segments = [];
     this.decision = null;
     this.decisionInputs = null;
@@ -742,9 +1009,9 @@ export class DjSession {
     if (!this.deliveredBy.has(prepared.track.id)) {
       this.deliveredBy.set(prepared.track.id, "plain-cut");
     }
-    this.next = null;
-    this.nextIndex = -1;
     this.index = index;
+    this.adoptHorizonAfterLanding(index);
+    this.watchdogRescuedIndex = -1;
     this.decision = null;
     this.decisionInputs = null;
     this.renditionRequest = null;
@@ -791,6 +1058,15 @@ export class DjSession {
           timer = setTimeout(() => resolve(null), PREPARATION_DEADLINE_MS);
         }),
       ]);
+    } catch {
+      // This seam NEVER rejects (Note 21): a load that throws or
+      // rejects is a failed preparation, exactly like one that
+      // answers null — the walk marks it and moves on. The field
+      // wedge this guards against was an exception escaping a
+      // preparation and latching the end-of-track floor forever:
+      // every caller of the walk may now rely on a result, never
+      // on an exception.
+      return null;
     } finally {
       if (timer) clearTimeout(timer);
     }
@@ -800,8 +1076,11 @@ export class DjSession {
   private failureBlocked(trackId: string): boolean {
     const mark = this.failures.get(trackId);
     if (!mark) return false;
-    if (mark.attempts >= MAX_PREPARATION_ATTEMPTS) return true;
-    return Date.now() - mark.lastFailedAtMs < FAILURE_MARK_TTL_MS;
+    const backoffMs = Math.min(
+      FAILURE_MARK_TTL_MS * mark.attempts,
+      FAILURE_BACKOFF_CAP_MS,
+    );
+    return Date.now() - mark.lastFailedAtMs < backoffMs;
   }
 
   private markFailure(trackId: string): void {
@@ -816,8 +1095,10 @@ export class DjSession {
    * Walks forward from `fromIndex` to the first track that can be
    * prepared, stepping over unpreparable ones — each failure is
    * marked (with its age), so a dead track is not paid for on every
-   * walk, yet may be retried once its mark expires. Returns null
-   * when nothing ahead can be prepared right now, or when the
+   * walk, yet may be retried once its backoff expires. Indices the
+   * preparation horizon already holds are skipped: the horizon's
+   * knowledge is never re-walked from scratch (Note 20). Returns
+   * null when nothing ahead can be prepared right now, or when the
    * session moved on while a track was downloading (a fresher walk
    * owns the answer then). Session start walks through here too:
    * its anchor is the not-yet-playing index (−1), so the walk begins
@@ -825,53 +1106,163 @@ export class DjSession {
    */
   private async findNextPlayable(
     fromIndex: number,
+    claimed?: ReadonlySet<number>,
   ): Promise<{ prepared: PreparedTrack; index: number } | null> {
     const anchorIndex = this.index;
     const generation = this.queueGeneration;
-    for (
-      let candidate = Math.max(fromIndex, anchorIndex + 1);
-      candidate < this.queue.length;
-      candidate += 1
-    ) {
-      const track = this.queue[candidate];
-      if (this.failureBlocked(track.id)) continue;
-      const prepared = await this.prepareWithDeadline(track);
-      // The session may have moved on while this was downloading.
-      if (this.index !== anchorIndex || this.queueGeneration !== generation) {
-        return null;
+    const held = claimed ?? this.horizonIndices();
+    // The walk iterates a SNAPSHOT of the queue (Note 21): the
+    // live queue can be replaced under an in-flight walk —
+    // liveRave curation rebuilds it, requests rewrite it — and
+    // indexing a shorter replacement would dereference a missing
+    // track. That exception escaping this walk is what latched
+    // the end-of-track floor in the field: the promise rejected,
+    // the latch's only reset lived in its fulfilment handler, and
+    // the set wedged in silence with the clock running past the
+    // end of a finished song. The generation guard below already
+    // discards a result the moment the queue moves on, so the
+    // snapshot costs nothing.
+    const queue = this.queue;
+    try {
+      for (
+        let candidate = Math.max(fromIndex, anchorIndex + 1);
+        candidate < queue.length;
+        candidate += 1
+      ) {
+        if (held.has(candidate)) continue;
+        const track = queue[candidate];
+        if (!track) continue;
+        if (this.failureBlocked(track.id)) continue;
+        const prepared = await this.prepareWithDeadline(track);
+        // The session may have moved on while this was downloading.
+        if (this.index !== anchorIndex || this.queueGeneration !== generation) {
+          return null;
+        }
+        if (!prepared) {
+          this.markFailure(track.id);
+          continue;
+        }
+        this.failures.delete(track.id);
+        return { prepared, index: candidate };
       }
-      if (!prepared) {
-        this.markFailure(track.id);
-        continue;
-      }
-      this.failures.delete(track.id);
-      return { prepared, index: candidate };
+    } catch {
+      // The walk NEVER rejects (Note 21): an unexpected throw
+      // inside it reads as "nothing playable right now", an answer
+      // every caller already handles honestly — a refused start
+      // with its toast, an ended set with its reason, a horizon
+      // pass that simply retries at the next landing.
+      return null;
     }
     return null;
   }
 
+  /** The queue indices the preparation horizon currently holds. */
+  private horizonIndices(): Set<number> {
+    const held = new Set<number>();
+    if (this.nextIndex >= 0) held.add(this.nextIndex);
+    if (this.afterNextIndex >= 0) held.add(this.afterNextIndex);
+    return held;
+  }
+
+  /**
+   * Adopts a landed candidate into the horizon: the slots always
+   * end up holding the two smallest distinct indices beyond the
+   * current track, in order — whichever walk landed first. A
+   * duplicate of a held index is dropped (the source dedupes the
+   * download itself; this is the slot-level belt and braces).
+   */
+  private adoptIntoHorizon(found: {
+    prepared: PreparedTrack;
+    index: number;
+  }): void {
+    if (found.index <= this.index) return;
+    const held: { prepared: PreparedTrack; index: number }[] = [];
+    if (this.next) held.push({ prepared: this.next, index: this.nextIndex });
+    if (this.afterNext) {
+      held.push({ prepared: this.afterNext, index: this.afterNextIndex });
+    }
+    if (held.some((slot) => slot.index === found.index)) return;
+    held.push(found);
+    held.sort((a, b) => a.index - b.index);
+    this.next = held[0]?.prepared ?? null;
+    this.nextIndex = held[0]?.index ?? -1;
+    this.afterNext = held[1]?.prepared ?? null;
+    this.afterNextIndex = held[1]?.index ?? -1;
+  }
+
+  /**
+   * Refills the two-track horizon: the walks for both open slots
+   * run CONCURRENTLY — each is deadline-bound per candidate (the
+   * horizon's second walk starts after the first slot's known
+   * index, or two past the current track when neither is known).
+   * Landing order does not matter; adoptIntoHorizon sorts it out.
+   * A pass that lands nothing new ends the refill (bounded), and a
+   * settle-time promotion is just the sort doing its work: if only
+   * the farther candidate landed, it sits in the first slot.
+   */
   private async prepareNext(): Promise<void> {
     const anchorIndex = this.index;
     const generation = this.queueGeneration;
-    const found = await this.findNextPlayable(anchorIndex + 1);
-    if (!found) {
-      // Clear the slot only if this walk still owns it — a session
-      // that moved on (or re-queued) has its own preparation running.
-      if (
-        this.index === anchorIndex &&
-        this.queueGeneration === generation &&
-        !this.next
-      ) {
-        this.next = null;
-        this.nextIndex = -1;
+    for (let pass = 0; pass < 3; pass += 1) {
+      if (this.index !== anchorIndex || this.queueGeneration !== generation) {
+        return;
       }
-      return;
+      const claimed = this.horizonIndices();
+      const walks: Promise<{
+        prepared: PreparedTrack;
+        index: number;
+      } | null>[] = [];
+      if (!this.next) {
+        walks.push(this.findNextPlayable(anchorIndex + 1, claimed));
+      }
+      if (!this.afterNext) {
+        const secondFrom =
+          (this.nextIndex >= 0 ? this.nextIndex : anchorIndex + 1) + 1;
+        walks.push(this.findNextPlayable(secondFrom, claimed));
+      }
+      if (walks.length === 0) return;
+      // Each walk adopts its landing THE MOMENT it lands — the
+      // first slot must never wait on the second slot's slowest
+      // candidate (a hanging second candidate would otherwise
+      // hold the imminent join hostage until its deadline).
+      const tracked = walks.map((walk) =>
+        walk.then((found) => {
+          if (!found) return false;
+          if (
+            this.index !== anchorIndex ||
+            this.queueGeneration !== generation
+          ) {
+            return false;
+          }
+          const before = `${this.nextIndex}:${this.afterNextIndex}`;
+          this.adoptIntoHorizon(found);
+          return `${this.nextIndex}:${this.afterNextIndex}` !== before;
+        }),
+      );
+      const adopted = (await Promise.all(tracked)).some(Boolean);
+      if (this.index !== anchorIndex || this.queueGeneration !== generation) {
+        return;
+      }
+      if (!adopted) return;
     }
-    if (this.index !== anchorIndex || this.queueGeneration !== generation) {
-      return;
+  }
+
+  /**
+   * Horizon adoption at a landing: the second slot, when it holds
+   * a track beyond the one just landed, becomes the next track —
+   * no re-preparation — and the horizon refills behind it. A stale
+   * second slot (at or before the landed index) is dropped.
+   */
+  private adoptHorizonAfterLanding(landedIndex: number): void {
+    if (this.afterNext && this.afterNextIndex > landedIndex) {
+      this.next = this.afterNext;
+      this.nextIndex = this.afterNextIndex;
+    } else {
+      this.next = null;
+      this.nextIndex = -1;
     }
-    this.next = found.prepared;
-    this.nextIndex = found.index;
+    this.afterNext = null;
+    this.afterNextIndex = -1;
   }
 
   /**
@@ -885,25 +1276,66 @@ export class DjSession {
    */
   private advancePastTrackEnd(): void {
     if (this.endAdvanceInFlight) return;
-    this.endAdvanceInFlight = true;
     const anchorIndex = this.index;
-    void this.findNextPlayable(anchorIndex + 1).then((found) => {
-      this.endAdvanceInFlight = false;
-      if (!this.mixer || !this.current || this.index !== anchorIndex) return;
-      if (!found) {
-        usePlayerStore.getState().setStatus("idle");
-        showToast(
-          "The set ended — nothing playable was left in the queue.",
-          "error",
-        );
-        this.stop("queue-exhausted");
+    // The horizon first: if its second slot already holds a
+    // prepared track, that track is the floor's answer — promote
+    // and cut to it (counted) instead of walking in silence for
+    // what the horizon already knows (Note 20).
+    if (
+      this.mixer &&
+      this.current &&
+      !this.next &&
+      this.afterNext &&
+      this.afterNextIndex > anchorIndex
+    ) {
+      const beyond = this.afterNext;
+      const beyondIndex = this.afterNextIndex;
+      try {
+        this.notePlainCutFallback();
+        this.clearTimers();
+        this.mixer.stopAll();
+        this.beginTrack(beyond, beyondIndex);
         return;
+      } catch {
+        // A promotion that throws part-way must not die inside
+        // the floor (Note 21): fall through to the walk, which
+        // finds its own answer or ends the set honestly.
       }
-      this.notePlainCutFallback();
-      this.clearTimers();
-      this.mixer.stopAll();
-      this.beginTrack(found.prepared, found.index);
-    });
+    }
+    this.endAdvanceInFlight = true;
+    void this.findNextPlayable(anchorIndex + 1)
+      .then((found) => {
+        if (!this.mixer || !this.current || this.index !== anchorIndex) return;
+        if (!found) {
+          usePlayerStore.getState().setStatus("idle");
+          showToast(
+            "The set ended — nothing playable was left in the queue.",
+            "error",
+          );
+          this.stop("queue-exhausted");
+          return;
+        }
+        this.notePlainCutFallback();
+        this.clearTimers();
+        this.mixer.stopAll();
+        this.beginTrack(found.prepared, found.index);
+      })
+      .catch(() => {
+        // Belt and braces (Note 21): the walk is built never to
+        // reject, but if one ever did, the failure is counted
+        // through the degradation honesty — never swallowed — and
+        // the finally below still releases the latch, so the next
+        // tick's floor (or the watchdog) retries instead of the
+        // set wedging in silence.
+        this.notePlainCutFallback();
+      })
+      .finally(() => {
+        // The latch releases on EVERY settle — fulfilment,
+        // rejection, anything. Its reset used to live only in the
+        // fulfilment handler; that single missing path is the
+        // prime suspect for the field wedge this note answers.
+        this.endAdvanceInFlight = false;
+      });
   }
 
   /** Counts a fallback plain cut; crossing the threshold announces it. */
@@ -950,6 +1382,11 @@ export class DjSession {
    */
   private considerJoin(position: number): void {
     if (!this.current || !this.next) return;
+    // A playable shell (decoded, not analysed) can be played
+    // plainly but never blended: no join is considered into or out
+    // of one — the pair falls to the counted plain-cut floor at
+    // the track end instead (Note 20).
+    if (this.current.mixable === false || this.next.mixable === false) return;
     if (this.decision) {
       const anchorMs = this.decision.recipe.overlap.startAMs;
       if (
@@ -1200,9 +1637,8 @@ export class DjSession {
     this.segments = join.pendingSegments;
     this.current = join.incoming;
     this.liveRavePlayedTrackIds.add(join.incoming.track.id);
-    this.next = null;
-    this.nextIndex = -1;
     this.index = join.landedIndex;
+    this.adoptHorizonAfterLanding(join.landedIndex);
     const store = usePlayerStore.getState();
     store.setCurrentTrack(join.incoming.track, this.index);
     store.setDuration(
@@ -1368,8 +1804,17 @@ export class DjSession {
     }
 
     const position = this.positionNow();
-    store.setPosition(Math.max(0, Math.round(position * 1000)));
     const duration = this.current.buffer.duration;
+    // The store never shows a position past the current track's
+    // own length (Note 21): positionNow is a clock integration and
+    // keeps counting while the floor recovers an overrun, but the
+    // display sits AT the end of the finished song, not beyond it.
+    store.setPosition(
+      Math.min(
+        Math.max(0, Math.round(position * 1000)),
+        Math.max(0, Math.round(duration * 1000)),
+      ),
+    );
     const remaining = duration - position;
 
     if (remaining <= 0.05) {
@@ -1387,6 +1832,28 @@ export class DjSession {
         // Its moment has passed unperformed; do not perform a ghost.
         this.decision = null;
         this.decisionInputs = null;
+      }
+      // Note 21 watchdog: the position has run well past the end
+      // and the floor below is supposedly already recovering it —
+      // the end-advance latch is still held. A settled walk
+      // releases that latch in its finally, so a latch held past
+      // this margin belongs to a walk that will never settle:
+      // presume it dead, clear the latch, count the rescue through
+      // the degradation honesty, and let the floor run again. At
+      // most once per track (a rescued floor that wedges again on
+      // the same track is a deeper fault than this watchdog claims
+      // to fix). The extra walk this can rarely start alongside a
+      // slow-but-live one is safe: the stale walk discards itself
+      // on the anchor and generation guards, and the track source
+      // dedupes loads the two walks share.
+      if (
+        position - duration > WATCHDOG_OVERRUN_SEC &&
+        this.endAdvanceInFlight &&
+        this.index !== this.watchdogRescuedIndex
+      ) {
+        this.watchdogRescuedIndex = this.index;
+        this.endAdvanceInFlight = false;
+        this.notePlainCutFallback();
       }
       if (this.next) {
         // A pair the brain could not join: the floor, announced.
@@ -1431,3 +1898,22 @@ export class DjSession {
 
 /** The shared session used by the app. */
 export const djSession = new DjSession();
+
+// The DJ-master tap registration for the greeting visualizer.
+// This registration is why djSession imports the greeting lib —
+// an allowed crossing; no greeting file is edited by this slice.
+// Deliberate adaptation from the tap-prep report's line: that
+// line calls djSession.isRunning() as a function, but the
+// session's standing public API is the isRunning GETTER (pinned
+// by DjStageView and the session suites, which must pass
+// unmodified), so the truth function reads the getter instead.
+// The registration's shape, id and priority are exactly as
+// contracted in the tap-prep report.
+registerVisualizerTap(
+  createAnalyserTap(
+    VISUALIZER_TAP_ID.DJ_MASTER,
+    () => djSession.masterAnalyser(),
+    () => djSession.isRunning,
+  ),
+  VISUALIZER_TAP_PRIORITY.DJ_MASTER,
+);

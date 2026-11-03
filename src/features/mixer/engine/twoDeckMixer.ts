@@ -5,6 +5,7 @@ import {
   recipeFromPlan,
   validateRecipe,
   type AutomationCurve,
+  type RecipeEffectKind,
   type RecipeLoopBlock,
   type TransitionRecipe,
 } from "./recipe";
@@ -57,6 +58,25 @@ import { applyVocalReferee, type TransitionPlan } from "./transitionPlanner";
 // is exactly where unperturbed playback would have put it, and the
 // rate and the gate are both home (written rate, gate open) at
 // that same instant.
+//
+// Effects (the revamp's R3) are performed here as well: a recipe's
+// fx configs tune SHARED networks (reverb, delay, flanger, phaser,
+// distortion, spiral, roll) and its effect blocks open a deck's
+// send into one of them for a window of that side's track time —
+// or, for trans, chop the deck through its fx gate, and for roll,
+// capture a slice into the roll network and let it circulate
+// alone. The networks are built LAZILY, on the first recipe that
+// names them: the constructor creates only their input gains, so
+// a plain recipe creates no convolver, oscillator, waveshaper or
+// buffer and schedules no new automation — its performance is
+// byte-identical to before. The one-writer discipline holds
+// throughout: each send is written only by effect performance
+// (and by the neutralisations that return it to 0), the fx gate
+// only by trans, each network's tuning only at a blend's start or
+// inside its own block's choreography. And a referee-safety clamp
+// guards every block: the vocal referee may have shortened the
+// blend after authoring, so a block that starts inside the
+// overlap may not outlive the PERFORMED overlap's end.
 //
 // One conversion lives here, and only here: a stretch recipe's
 // anchors are written in B's ORIGINAL track time (the same timeline
@@ -267,6 +287,87 @@ function scheduleNudge(
   param.linearRampToValueAtTime(baseRate, startCtx + durationSec);
 }
 
+/**
+ * The distortion network's curve: a 1024-point tanh-style curve
+ * from the config's amount. The drive `k = 1 + amount × 10`
+ * steepens the tanh; dividing by tanh(k) keeps the endpoints at
+ * ±1, so louder amounts saturate harder without simply getting
+ * louder. At amount 0 the curve is tanh itself — gentle, not
+ * identity — which is honest: the network is a saturator, and a
+ * recipe that sends into it has asked for saturation.
+ */
+function makeDistortionCurve(amount: number): Float32Array<ArrayBuffer> {
+  const curve = new Float32Array(1024);
+  const k = 1 + amount * 10;
+  const norm = Math.tanh(k);
+  for (let i = 0; i < 1024; i += 1) {
+    const x = (i / 1023) * 2 - 1;
+    curve[i] = Math.tanh(k * x) / norm;
+  }
+  return curve;
+}
+
+/**
+ * Schedules a send-class effect block's envelope on a deck's send
+ * gain: anchored at 0, ramping to the block's level over the
+ * attack, holding, then ramping back to 0 over the last 0.05 s,
+ * with a final set at 0 — no tail rings past what the network's
+ * own decay does once the send is closed.
+ */
+function scheduleSendEnvelope(
+  param: AudioParam,
+  startCtx: number,
+  endCtx: number,
+  level: number,
+  attackSec: number,
+): void {
+  const duration = Math.max(0, endCtx - startCtx);
+  const attack = Math.min(attackSec, duration / 2);
+  const releaseStart = Math.max(startCtx + attack, endCtx - 0.05);
+  param.setValueAtTime(0, startCtx);
+  param.linearRampToValueAtTime(level, startCtx + attack);
+  if (releaseStart > startCtx + attack) {
+    param.setValueAtTime(level, releaseStart);
+  }
+  param.linearRampToValueAtTime(0, endCtx);
+  param.setValueAtTime(0, endCtx);
+}
+
+/**
+ * Schedules a trans block's gate pattern on a deck's fx gate,
+ * anchored like scheduleScratchGate: within each cycle the gate
+ * ramps (0.002 s) to (1 − depth) for the first half and back to 1
+ * for the second. The first event pins the gate home and the
+ * final event pins it home again — the gate is ALWAYS home at
+ * the window's end.
+ */
+function scheduleTransGate(
+  param: AudioParam,
+  startCtx: number,
+  endCtx: number,
+  cycleSec: number,
+  depth: number,
+): void {
+  const dip = 1 - depth;
+  param.setValueAtTime(1, startCtx);
+  if (!(cycleSec > 0)) {
+    param.setValueAtTime(1, endCtx);
+    return;
+  }
+  let t = startCtx;
+  while (t < endCtx - 1e-9) {
+    const half = t + cycleSec / 2;
+    param.linearRampToValueAtTime(dip, t + 0.002);
+    if (half < endCtx) {
+      param.setValueAtTime(dip, half);
+      param.linearRampToValueAtTime(1, half + 0.002);
+    }
+    t += cycleSec;
+    if (t < endCtx - 1e-9) param.setValueAtTime(1, t);
+  }
+  param.setValueAtTime(1, endCtx);
+}
+
 interface NudgeSpan {
   startOffMs: number;
   durMs: number;
@@ -295,17 +396,42 @@ const SCHEDULE_AHEAD_SEC = 0.1;
 const ECHO_DEFAULT_FEEDBACK = 0.38;
 const ECHO_DEFAULT_WET = 0.55;
 
+/** The crossfader laws the manual stage can lean with (the DJ stage's curve setting). */
+export type CrossfaderCurveName = "smooth" | "constant-power" | "cut";
+
 /**
  * Crossfader gains for a position in -1..1. This crossfader is a lean
  * control layered over the automation, not the primary fader, so the
  * centre is transparent (both decks at full) — an untouched crossfader
  * must never change what the automatic blends sound like. Moving it
- * fades the opposite deck out along a cosine curve.
+ * fades the opposite deck out, along the chosen curve:
+ *
+ * - "smooth" (the original law): the faded deck follows a cosine.
+ * - "constant-power": the faded deck's gain is sqrt(1 − |p|) — its
+ *   POWER (gain²) falls linearly with the lean, so the combined power
+ *   of the two decks stays constant through the sweep.
+ * - "cut": the faded deck stays at full until the lean reaches 0.65,
+ *   then drops straight to 0 — a scratch-style cut, not a fade.
+ *
+ * The leaned-to deck stays at 1 under every curve, and the centre is
+ * transparent under every curve.
  */
-export function crossfadeGains(position: number): [number, number] {
+export function crossfadeGains(
+  position: number,
+  curve: CrossfaderCurveName = "smooth",
+): [number, number] {
   const p = Math.min(1, Math.max(-1, position));
-  const deck1 = p <= 0 ? 1 : Math.cos((p * Math.PI) / 2);
-  const deck2 = p >= 0 ? 1 : Math.cos((-p * Math.PI) / 2);
+  const lean = Math.abs(p);
+  const faded =
+    curve === "constant-power"
+      ? Math.sqrt(1 - lean)
+      : curve === "cut"
+        ? lean < 0.65
+          ? 1
+          : 0
+        : Math.cos((lean * Math.PI) / 2);
+  const deck1 = p <= 0 ? 1 : faded;
+  const deck2 = p >= 0 ? 1 : faded;
   return [deck1, deck2];
 }
 
@@ -384,6 +510,79 @@ export interface PerformRecipeOptions {
   incoming?: TrackAnalysis;
 }
 
+interface ReverbNetwork {
+  convolver: ConvolverNode;
+  wet: GainNode;
+  builtDecaySec: number;
+}
+interface DelayNetwork {
+  delay: DelayNode;
+  feedback: GainNode;
+  wet: GainNode;
+}
+interface FlangerNetwork {
+  delay: DelayNode;
+  feedback: GainNode;
+  wet: GainNode;
+  osc: OscillatorNode;
+  depthGain: GainNode;
+}
+interface PhaserNetwork {
+  filters: BiquadFilterNode[];
+  centres: number[];
+  wet: GainNode;
+  osc: OscillatorNode;
+  depthGains: GainNode[];
+}
+interface DistortionNetwork {
+  drive: GainNode;
+  shaper: WaveShaperNode;
+  wet: GainNode;
+}
+interface RollNetwork {
+  delay: DelayNode;
+  feedback: GainNode;
+  wet: GainNode;
+}
+
+/**
+ * One deck's live manual-stage readings, for the DJ stage's snapshot:
+ * the values the deck's own nodes hold right now (read at call time,
+ * never sampled on a timer).
+ */
+export interface DeckStageReadings {
+  /** The deck gain's current value (the blend curves write it). */
+  gainValue: number;
+  /** The playing source's playback-rate ratio (1 = original tempo; 1 when idle). */
+  rateValue: number;
+  /** The EQ biquads' current gains, in dB. */
+  bassDb: number;
+  midDb: number;
+  highDb: number;
+  /** The lowpass filter's current cutoff, in Hz (20,000 = fully open). */
+  filterHz: number;
+}
+
+/**
+ * One effect's live manual-stage readings, for the DJ stage's
+ * snapshot: whether its shared network has been built yet, the
+ * network's wet-return level, and each deck's send level into it.
+ * Unbuilt networks report null levels — absence is data, not 0.
+ */
+export interface EffectStageReadings {
+  built: boolean;
+  wetLevel: number | null;
+  sendLevels: { A: number | null; B: number | null };
+}
+
+/** Where an effect's manual focus sits: one deck, both, or none. */
+type ManualFxAssign = "A" | "B" | "both" | null;
+
+interface ManualFxState {
+  assign: ManualFxAssign;
+  levels: { A: number; B: number };
+}
+
 export class TwoDeckMixer {
   readonly master: GainNode;
   private readonly decks: [Deck, Deck];
@@ -391,9 +590,47 @@ export class TwoDeckMixer {
   private readonly echoDelay: DelayNode;
   private readonly echoFeedback: GainNode;
   private readonly echoWet: GainNode;
+  // The R3 effect networks' INPUT gains and the delay→reverb
+  // cascade gain. These are the ONLY R3 nodes the constructor
+  // creates (all createGain): the networks behind the inputs are
+  // built lazily, on the first recipe that names them, because
+  // the hand-written fake contexts in the existing suites offer
+  // nothing beyond createGain / createBiquadFilter / createDelay /
+  // createBufferSource. A plain recipe must create nothing more.
+  private readonly reverbInput: GainNode;
+  private readonly delayInput: GainNode;
+  private readonly flangerInput: GainNode;
+  private readonly phaserInput: GainNode;
+  private readonly distortionInput: GainNode;
+  private readonly spiralInput: GainNode;
+  private readonly rollInput: GainNode;
+  private readonly cascadeGain: GainNode;
+  private cascadeWired = false;
+  private reverbNet: ReverbNetwork | null = null;
+  private delayNet: DelayNetwork | null = null;
+  private spiralNet: DelayNetwork | null = null;
+  private flangerNet: FlangerNetwork | null = null;
+  private phaserNet: PhaserNetwork | null = null;
+  private distortionNet: DistortionNetwork | null = null;
+  private rollNet: RollNetwork | null = null;
   private current = 0;
   private crossfadePosition = 0;
+  private crossfaderCurve: CrossfaderCurveName = "smooth";
   private readonly deckTrimLevels: [number, number] = [1, 1];
+  // The stage's lazy analyser taps — the R3 lazy pattern applied to
+  // metering. The constructor creates NONE of these: a tap is built
+  // on the first read that asks for it (deckAnalyser /
+  // masterAnalyser / the meter summaries), so a plain performance
+  // creates no analyser at all.
+  private readonly deckAnalyserNodes: [
+    AnalyserNode | null,
+    AnalyserNode | null,
+  ] = [null, null];
+  private masterAnalyserNode: AnalyserNode | null = null;
+  // The manual FX stage's remembered state, per effect kind. This
+  // is STATE ONLY — the sends themselves are written through
+  // writeManualFxSend, so the one-writer story stays readable.
+  private readonly manualFxStates = new Map<RecipeEffectKind, ManualFxState>();
 
   constructor(private readonly context: AudioContext) {
     this.master = context.createGain();
@@ -423,6 +660,19 @@ export class TwoDeckMixer {
     this.echoDelay.connect(this.echoWet);
     this.echoWet.connect(this.master);
 
+    // The R3 network inputs and cascade: plain gains, resting
+    // transparent (inputs at 1) and silent (cascade at 0). The
+    // networks themselves are NOT built here — see the field note.
+    this.reverbInput = context.createGain();
+    this.delayInput = context.createGain();
+    this.flangerInput = context.createGain();
+    this.phaserInput = context.createGain();
+    this.distortionInput = context.createGain();
+    this.spiralInput = context.createGain();
+    this.rollInput = context.createGain();
+    this.cascadeGain = context.createGain();
+    this.cascadeGain.gain.value = 0;
+
     // The manual stage: each deck runs through its own trim gain before
     // the master. The automation writes the decks' own gains; hands
     // (the Pro layer) write these trims and the crossfader. Because the
@@ -430,10 +680,327 @@ export class TwoDeckMixer {
     // can lean on a blend but can never corrupt its scheduling.
     this.trims = [context.createGain(), context.createGain()];
     for (const trim of this.trims) trim.connect(this.master);
+    const fxInputs = {
+      reverb: this.reverbInput,
+      delay: this.delayInput,
+      flanger: this.flangerInput,
+      phaser: this.phaserInput,
+      distortion: this.distortionInput,
+      spiral: this.spiralInput,
+      roll: this.rollInput,
+    };
     this.decks = [
-      new Deck(context, this.trims[0], this.echoDelay),
-      new Deck(context, this.trims[1], this.echoDelay),
+      new Deck(context, this.trims[0], this.echoDelay, fxInputs),
+      new Deck(context, this.trims[1], this.echoDelay, fxInputs),
     ];
+  }
+
+  // --- The lazy R3 networks -------------------------------------
+  // Each builder runs once, on the first recipe that names its
+  // effect, and wires input → processing → wet gain → master.
+  // Only these builders may create node types beyond the four
+  // factories the constructor is allowed.
+
+  private generateReverbIR(decaySec: number): AudioBuffer {
+    const sampleRate = this.context.sampleRate;
+    const len = Math.max(1, Math.round(decaySec * sampleRate));
+    const buffer = this.context.createBuffer(2, len, sampleRate);
+    for (let ch = 0; ch < 2; ch += 1) {
+      const data = buffer.getChannelData(ch);
+      for (let i = 0; i < len; i += 1) {
+        const t = len > 0 ? i / len : 0;
+        data[i] = (Math.random() * 2 - 1) * Math.pow(1 - t, 2.5);
+      }
+    }
+    return buffer;
+  }
+
+  private ensureReverb(decaySec?: number): ReverbNetwork {
+    if (!this.reverbNet) {
+      const convolver = this.context.createConvolver();
+      const wet = this.context.createGain();
+      wet.gain.value = 0;
+      this.reverbInput.connect(convolver);
+      convolver.connect(wet);
+      wet.connect(this.master);
+      const decay = decaySec ?? 2;
+      convolver.buffer = this.generateReverbIR(decay);
+      this.reverbNet = { convolver, wet, builtDecaySec: decay };
+    } else if (
+      decaySec !== undefined &&
+      decaySec !== this.reverbNet.builtDecaySec
+    ) {
+      // A performance whose decay differs from the built one
+      // regenerates the impulse — the room itself changes size.
+      this.reverbNet.convolver.buffer = this.generateReverbIR(decaySec);
+      this.reverbNet.builtDecaySec = decaySec;
+    }
+    this.tryWireCascade();
+    return this.reverbNet;
+  }
+
+  private ensureDelay(): DelayNetwork {
+    if (!this.delayNet) {
+      const delay = this.context.createDelay(2);
+      delay.delayTime.value = 0.3;
+      // Brighter loop than the echo network's 1200 Hz — the
+      // audible distinction: delay stays rhythmic, echo dissolves
+      // dark.
+      const filter = this.context.createBiquadFilter();
+      filter.type = "lowpass";
+      filter.frequency.value = 6000;
+      const feedback = this.context.createGain();
+      feedback.gain.value = 0;
+      const wet = this.context.createGain();
+      wet.gain.value = 0;
+      this.delayInput.connect(delay);
+      delay.connect(filter);
+      filter.connect(feedback);
+      feedback.connect(delay);
+      delay.connect(wet);
+      wet.connect(this.master);
+      this.delayNet = { delay, feedback, wet };
+    }
+    this.tryWireCascade();
+    return this.delayNet;
+  }
+
+  private ensureSpiral(): DelayNetwork {
+    if (!this.spiralNet) {
+      const delay = this.context.createDelay(2);
+      delay.delayTime.value = 0.3;
+      const filter = this.context.createBiquadFilter();
+      filter.type = "lowpass";
+      filter.frequency.value = 4000;
+      const feedback = this.context.createGain();
+      feedback.gain.value = 0;
+      const wet = this.context.createGain();
+      wet.gain.value = 0;
+      this.spiralInput.connect(delay);
+      delay.connect(filter);
+      filter.connect(feedback);
+      feedback.connect(delay);
+      delay.connect(wet);
+      wet.connect(this.master);
+      this.spiralNet = { delay, feedback, wet };
+    }
+    return this.spiralNet;
+  }
+
+  private ensureFlanger(): FlangerNetwork {
+    if (!this.flangerNet) {
+      const delay = this.context.createDelay(2);
+      delay.delayTime.value = 0.004;
+      const feedback = this.context.createGain();
+      feedback.gain.value = 0;
+      const wet = this.context.createGain();
+      wet.gain.value = 0;
+      const osc = this.context.createOscillator();
+      const depthGain = this.context.createGain();
+      depthGain.gain.value = 0;
+      this.flangerInput.connect(delay);
+      delay.connect(feedback);
+      feedback.connect(delay);
+      delay.connect(wet);
+      wet.connect(this.master);
+      // The send-flanger works against the dry signal: the deck's
+      // own dry path (through its gain to the master) is the other
+      // half of the comb — the swept delayed copy interferes with
+      // it, which is the flanger's sound. Nothing here touches
+      // the dry path itself.
+      osc.connect(depthGain);
+      depthGain.connect(delay.delayTime);
+      osc.start();
+      this.flangerNet = { delay, feedback, wet, osc, depthGain };
+    }
+    return this.flangerNet;
+  }
+
+  private ensurePhaser(): PhaserNetwork {
+    if (!this.phaserNet) {
+      const centres = [400, 800, 1600, 3200];
+      const filters: BiquadFilterNode[] = [];
+      const wet = this.context.createGain();
+      wet.gain.value = 0;
+      const osc = this.context.createOscillator();
+      const depthGains: GainNode[] = [];
+      let prev: AudioNode = this.phaserInput;
+      for (const centre of centres) {
+        const f = this.context.createBiquadFilter();
+        f.type = "allpass";
+        f.frequency.value = centre;
+        prev.connect(f);
+        filters.push(f);
+        prev = f;
+        const dg = this.context.createGain();
+        dg.gain.value = 0;
+        osc.connect(dg);
+        dg.connect(f.frequency);
+        depthGains.push(dg);
+      }
+      prev.connect(wet);
+      wet.connect(this.master);
+      osc.start();
+      this.phaserNet = { filters, centres, wet, osc, depthGains };
+    }
+    return this.phaserNet;
+  }
+
+  private ensureDistortion(): DistortionNetwork {
+    if (!this.distortionNet) {
+      const drive = this.context.createGain();
+      drive.gain.value = 1;
+      const shaper = this.context.createWaveShaper();
+      shaper.oversample = "2x";
+      const wet = this.context.createGain();
+      wet.gain.value = 0;
+      // PARALLEL saturation — the dry path is never touched: the
+      // send feeds this network alongside the deck's clean signal,
+      // and only the wet return is saturated. A deliberate, stated
+      // design decision, not an insert crush.
+      this.distortionInput.connect(drive);
+      drive.connect(shaper);
+      shaper.connect(wet);
+      wet.connect(this.master);
+      this.distortionNet = { drive, shaper, wet };
+    }
+    return this.distortionNet;
+  }
+
+  private ensureRoll(): RollNetwork {
+    if (!this.rollNet) {
+      const delay = this.context.createDelay(2);
+      delay.delayTime.value = 0.25;
+      const feedback = this.context.createGain();
+      feedback.gain.value = 0;
+      const wet = this.context.createGain();
+      wet.gain.value = 0;
+      this.rollInput.connect(delay);
+      delay.connect(feedback);
+      feedback.connect(delay);
+      delay.connect(wet);
+      wet.connect(this.master);
+      this.rollNet = { delay, feedback, wet };
+    }
+    return this.rollNet;
+  }
+
+  private tryWireCascade(): void {
+    if (this.cascadeWired) return;
+    if (!this.delayNet || !this.reverbNet) return;
+    this.delayNet.wet.connect(this.cascadeGain);
+    this.cascadeGain.connect(this.reverbInput);
+    this.cascadeWired = true;
+  }
+
+  /**
+   * Schedules every effect block in a recipe. Window placement
+   * uses the jog formulas (see performRecipe): a block's track
+   * window converts at its side's rate. The referee-safety clamp
+   * (see the header) shortens a block that starts inside the
+   * overlap so no envelope outlives the performed blend; blocks
+   * starting before the overlap (the chop window) are unclamped.
+   */
+  private scheduleEffectBlocks(
+    working: TransitionRecipe,
+    outgoing: Deck,
+    incoming: Deck,
+    blendStart: number,
+  ): void {
+    const blocks = working.effects ?? [];
+    if (blocks.length === 0) return;
+    for (const block of blocks) {
+      const isA = block.side === "A";
+      const deck = isA ? outgoing : incoming;
+      const rate = isA ? working.overlap.rateA : working.overlap.rateB;
+      const bpm = isA ? working.overlap.bpmA : working.overlap.bpmB;
+      const overlapStartTrack = isA
+        ? working.overlap.startAMs
+        : working.overlap.startBMs;
+      let endTrack = block.endMs;
+      if (overlapStartTrack !== null && block.startMs >= overlapStartTrack) {
+        const overlapEndTrack = isA
+          ? overlapStartTrack + working.overlap.durationMs
+          : overlapStartTrack +
+            working.overlap.durationMs * working.overlap.rateB;
+        endTrack = Math.min(endTrack, overlapEndTrack);
+      }
+      if (endTrack <= block.startMs) continue;
+      const anchor = overlapStartTrack ?? 0;
+      const startCtx =
+        blendStart + (block.startMs - anchor) / 1000 / (rate || 1);
+      const endCtx = blendStart + (endTrack - anchor) / 1000 / (rate || 1);
+      const duration = endCtx - startCtx;
+      if (!(duration > 0)) continue;
+      if (block.kind === "trans") {
+        const cfg = working.fx.trans;
+        if (!cfg) continue;
+        const cycleSec = cfg.divisionBeats * (60 / bpm);
+        scheduleTransGate(
+          deck.fxGate.gain,
+          startCtx,
+          endCtx,
+          cycleSec,
+          cfg.depth,
+        );
+      } else if (block.kind === "roll") {
+        const cfg = working.fx.roll;
+        const net = this.rollNet;
+        if (!cfg || !net) continue;
+        const sliceSec = cfg.sliceBeats * (60 / bpm);
+        net.delay.delayTime.setValueAtTime(sliceSec, startCtx);
+        net.feedback.gain.setValueAtTime(cfg.feedback, startCtx);
+        net.wet.gain.setValueAtTime(1, startCtx);
+        const send = deck.rollSend.gain;
+        send.setValueAtTime(0, startCtx);
+        send.linearRampToValueAtTime(block.level, startCtx + 0.005);
+        // The capture closes one slice later: the send returns to
+        // 0 and the slice circulates alone in the network while
+        // the deck plays on — a true slip roll, NOT the source
+        // loop (the deck never loops; only the captured slice
+        // repeats, in the delay).
+        send.setValueAtTime(block.level, startCtx + sliceSec);
+        send.linearRampToValueAtTime(0, startCtx + sliceSec + 0.005);
+        // The tail dies inside the recipe, never into the next
+        // track: feedback and wet ramp home at the window's end.
+        net.feedback.gain.setValueAtTime(
+          cfg.feedback,
+          Math.max(startCtx, endCtx - 0.03),
+        );
+        net.feedback.gain.linearRampToValueAtTime(0, endCtx);
+        net.wet.gain.setValueAtTime(1, Math.max(startCtx, endCtx - 0.05));
+        net.wet.gain.linearRampToValueAtTime(0, endCtx);
+      } else {
+        // Send-class: reverb / delay / flanger / phaser /
+        // distortion / spiral — an envelope on the deck's send.
+        const send =
+          block.kind === "reverb"
+            ? deck.reverbSend.gain
+            : block.kind === "delay"
+              ? deck.delaySend.gain
+              : block.kind === "flanger"
+                ? deck.flangerSend.gain
+                : block.kind === "phaser"
+                  ? deck.phaserSend.gain
+                  : block.kind === "distortion"
+                    ? deck.distortionSend.gain
+                    : deck.spiralSend.gain;
+        const attack =
+          block.kind === "reverb" ? Math.min(0.5, 0.25 * duration) : 0.03;
+        scheduleSendEnvelope(send, startCtx, endCtx, block.level, attack);
+        if (block.kind === "spiral") {
+          const cfg = working.fx.spiral;
+          const net = this.spiralNet;
+          if (cfg && net) {
+            net.delay.delayTime.setValueAtTime(cfg.delaySec, startCtx);
+            net.delay.delayTime.exponentialRampToValueAtTime(
+              cfg.delaySec * cfg.sweepToRatio,
+              endCtx,
+            );
+          }
+        }
+      }
+    }
   }
 
   /**
@@ -480,8 +1047,338 @@ export class TwoDeckMixer {
     );
   }
 
+  /** The manual stage's crossfader law, re-applied to the standing lean at once. */
+  setCrossfaderCurve(curve: CrossfaderCurveName): void {
+    this.crossfaderCurve = curve;
+    this.applyManualStage();
+  }
+
+  /** The crossfader law the manual stage is currently leaning with. */
+  crossfaderCurveName(): CrossfaderCurveName {
+    return this.crossfaderCurve;
+  }
+
+  /**
+   * Manual EQ for one physical deck — the stage's hand on one band.
+   * Honest overwrite semantics: this writes the SAME biquad gain the
+   * recipe executor's EQ automation writes, so the executor's next
+   * performance on that deck overwrites a manual grab (and a grab
+   * overwrites a standing automated value until then). The manual
+   * stage does NOT re-apply grabs after a performance.
+   */
+  setDeckEq(index: DeckIndex, band: "bass" | "mid" | "high", db: number): void {
+    const deck = this.decks[index];
+    const node =
+      band === "bass" ? deck.bass : band === "mid" ? deck.mid : deck.high;
+    const clamped = Math.min(24, Math.max(-24, db));
+    node.gain.setValueAtTime(clamped, this.context.currentTime);
+  }
+
+  /**
+   * Manual filter cutoff for one physical deck. Same overwrite
+   * semantics as setDeckEq: the executor's filter automation writes
+   * this same parameter and wins on its next performance.
+   */
+  setDeckFilter(index: DeckIndex, hz: number): void {
+    const clamped = Math.min(20_000, Math.max(20, hz));
+    this.decks[index].filter.frequency.setValueAtTime(
+      clamped,
+      this.context.currentTime,
+    );
+  }
+
+  // --- The stage's lazy analyser taps ----------------------------
+  // Built on first request only, one per deck plus one on the
+  // master, then cached for the mixer's lifetime. A context that
+  // cannot create an analyser (the hand-written fakes, an exotic
+  // runtime) leaves the tap unbuilt and every read reports null —
+  // the stage renders that honestly as "no meter path".
+
+  /** The deck's analyser tap, built on first call; null when the context cannot make one. */
+  deckAnalyser(index: DeckIndex): AnalyserNode | null {
+    const cached = this.deckAnalyserNodes[index];
+    if (cached) return cached;
+    const node = this.createAnalyserTap();
+    if (!node) return null;
+    this.decks[index].gain.connect(node);
+    this.deckAnalyserNodes[index] = node;
+    return node;
+  }
+
+  /** The master analyser tap, built on first call; null when the context cannot make one. */
+  masterAnalyser(): AnalyserNode | null {
+    if (this.masterAnalyserNode) return this.masterAnalyserNode;
+    const node = this.createAnalyserTap();
+    if (!node) return null;
+    this.master.connect(node);
+    this.masterAnalyserNode = node;
+    return node;
+  }
+
+  private createAnalyserTap(): AnalyserNode | null {
+    try {
+      const factory = this.context.createAnalyser;
+      if (typeof factory !== "function") return null;
+      const node = factory.call(this.context);
+      node.fftSize = 2048;
+      return node;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * The deck's peak/RMS summary, computed from the tap's time-domain
+   * data AT CALL TIME — no timers, no stored state. Null when no tap
+   * can be built.
+   */
+  deckMeterSummary(index: DeckIndex): { peak: number; rms: number } | null {
+    const tap = this.deckAnalyser(index);
+    return tap ? this.meterSummary(tap) : null;
+  }
+
+  /** The master's peak/RMS summary; same contract as deckMeterSummary. */
+  masterMeterSummary(): { peak: number; rms: number } | null {
+    const tap = this.masterAnalyser();
+    return tap ? this.meterSummary(tap) : null;
+  }
+
+  private meterSummary(analyser: AnalyserNode): { peak: number; rms: number } {
+    const size = analyser.fftSize > 0 ? analyser.fftSize : 2048;
+    let samples: ArrayLike<number> | null = null;
+    if (typeof analyser.getFloatTimeDomainData === "function") {
+      const data = new Float32Array(size);
+      analyser.getFloatTimeDomainData(data);
+      samples = data;
+    } else if (typeof analyser.getByteTimeDomainData === "function") {
+      const bytes = new Uint8Array(size);
+      analyser.getByteTimeDomainData(bytes);
+      const data = new Float32Array(bytes.length);
+      for (let i = 0; i < bytes.length; i += 1)
+        data[i] = (bytes[i] - 128) / 128;
+      samples = data;
+    }
+    if (!samples || samples.length === 0) return { peak: 0, rms: 0 };
+    let peak = 0;
+    let sumSquares = 0;
+    for (let i = 0; i < samples.length; i += 1) {
+      const magnitude = Math.abs(samples[i]);
+      if (magnitude > peak) peak = magnitude;
+      sumSquares += samples[i] * samples[i];
+    }
+    return { peak, rms: Math.sqrt(sumSquares / samples.length) };
+  }
+
+  // --- Stage readings ---------------------------------------------
+  // Read-only views over the nodes as they stand, for the stage
+  // snapshot: the values are the params' `.value`s at call time.
+
+  /** One deck's live readings (gain, rate, EQ, filter). */
+  stageDeckReadings(index: DeckIndex): DeckStageReadings {
+    const deck = this.decks[index];
+    return {
+      gainValue: deck.gain.gain.value,
+      rateValue: deck.rateControl?.value ?? 1,
+      bassDb: deck.bass.gain.value,
+      midDb: deck.mid.gain.value,
+      highDb: deck.high.gain.value,
+      filterHz: deck.filter.frequency.value,
+    };
+  }
+
+  /** One effect's live readings (built?, wet return, per-deck sends). */
+  stageEffectReadings(kind: RecipeEffectKind): EffectStageReadings {
+    if (kind === "trans") {
+      // trans has no lazy network and no sends: its stage is the
+      // per-deck fx gate, a permanent part of the deck chain, so it
+      // is always "built" and its levels are honestly unreadable.
+      return { built: true, wetLevel: null, sendLevels: { A: null, B: null } };
+    }
+    const net = this.effectNetwork(kind);
+    if (!net) {
+      return { built: false, wetLevel: null, sendLevels: { A: null, B: null } };
+    }
+    return {
+      built: true,
+      wetLevel: net.wet.gain.value,
+      sendLevels: {
+        A: this.deckSendNode(this.decks[0], kind)?.gain.value ?? null,
+        B: this.deckSendNode(this.decks[1], kind)?.gain.value ?? null,
+      },
+    };
+  }
+
+  /** The built network behind a send-class kind, or null while unbuilt. */
+  private effectNetwork(kind: RecipeEffectKind): { wet: GainNode } | null {
+    switch (kind) {
+      case "reverb":
+        return this.reverbNet;
+      case "delay":
+        return this.delayNet;
+      case "spiral":
+        return this.spiralNet;
+      case "flanger":
+        return this.flangerNet;
+      case "phaser":
+        return this.phaserNet;
+      case "distortion":
+        return this.distortionNet;
+      case "roll":
+        return this.rollNet;
+      default:
+        return null;
+    }
+  }
+
+  /** A deck's send node into a kind's network (null for trans, which has none). */
+  private deckSendNode(deck: Deck, kind: RecipeEffectKind): GainNode | null {
+    switch (kind) {
+      case "reverb":
+        return deck.reverbSend;
+      case "delay":
+        return deck.delaySend;
+      case "spiral":
+        return deck.spiralSend;
+      case "flanger":
+        return deck.flangerSend;
+      case "phaser":
+        return deck.phaserSend;
+      case "distortion":
+        return deck.distortionSend;
+      case "roll":
+        return deck.rollSend;
+      default:
+        return null;
+    }
+  }
+
+  // --- The manual FX stage ----------------------------------------
+  // The stage's hands on the shared effects: an assign (which deck
+  // or decks an effect is focused on) plus a remembered send level
+  // per side. Honest overwrite semantics, as with setDeckEq: these
+  // setters write the SAME send params the recipe executor's effect
+  // performance writes, so the executor's next performance on that
+  // deck overwrites a manual grab — and playNow / stopAll
+  // neutralisations zero the sends outright. The manual stage does
+  // NOT auto-reapply after either; a grab lasts until the next
+  // performance, neutralisation, or manual change.
+
+  private manualFxState(kind: RecipeEffectKind): ManualFxState {
+    let state = this.manualFxStates.get(kind);
+    if (!state) {
+      state = { assign: null, levels: { A: 0, B: 0 } };
+      this.manualFxStates.set(kind, state);
+    }
+    return state;
+  }
+
+  /** The effect's current manual assign. */
+  manualFxAssign(kind: RecipeEffectKind): ManualFxAssign {
+    return this.manualFxState(kind).assign;
+  }
+
+  /**
+   * Moves an effect's manual focus, re-applying both sides' sends
+   * from the remembered levels: assigned sides open at their stored
+   * level, unassigned sides close to 0.
+   */
+  setManualFxAssign(kind: RecipeEffectKind, assign: ManualFxAssign): void {
+    const state = this.manualFxState(kind);
+    state.assign = assign;
+    this.writeManualFxSend(
+      kind,
+      "A",
+      assign === "A" || assign === "both" ? state.levels.A : 0,
+    );
+    this.writeManualFxSend(
+      kind,
+      "B",
+      assign === "B" || assign === "both" ? state.levels.B : 0,
+    );
+  }
+
+  /**
+   * Sets one side's manual send level (remembered even while the
+   * side is unassigned). Sending on an unassigned side assigns it:
+   * no assign becomes that side, the other side alone becomes both.
+   */
+  setManualFxSend(
+    kind: RecipeEffectKind,
+    side: "A" | "B",
+    level: number,
+  ): void {
+    const state = this.manualFxState(kind);
+    const clamped = Math.min(1, Math.max(0, level));
+    state.levels[side] = clamped;
+    if (state.assign !== "both" && state.assign !== side) {
+      state.assign = state.assign === null ? side : "both";
+    }
+    this.writeManualFxSend(kind, side, clamped);
+  }
+
+  /**
+   * The one writer behind the manual FX stage. For "trans" there is
+   * no send to write — the assign/level state is recorded by the
+   * callers and nothing reaches a node. For the send-class kinds,
+   * opening a send builds the kind's network first if needed (a
+   * failed build leaves the send at 0), then pins the network's wet
+   * return at unity — the manual return sits at 1 and the SEND is
+   * the level control — BEFORE the send opens, so there is no click.
+   */
+  private writeManualFxSend(
+    kind: RecipeEffectKind,
+    side: "A" | "B",
+    level: number,
+  ): void {
+    if (kind === "trans") return;
+    const send = this.deckSendNode(this.decks[side === "A" ? 0 : 1], kind);
+    if (!send) return;
+    const now = this.context.currentTime;
+    if (level === 0) {
+      send.gain.setValueAtTime(0, now);
+      return;
+    }
+    let net: { wet: GainNode } | null = null;
+    try {
+      net = this.ensureEffectNetwork(kind);
+    } catch {
+      send.gain.setValueAtTime(0, now);
+      return;
+    }
+    if (!net) {
+      send.gain.setValueAtTime(0, now);
+      return;
+    }
+    net.wet.gain.setValueAtTime(1, now);
+    send.gain.setValueAtTime(level, now);
+  }
+
+  /** Builds (once) the network behind a send-class kind, via its lazy R3 builder. */
+  private ensureEffectNetwork(
+    kind: RecipeEffectKind,
+  ): { wet: GainNode } | null {
+    switch (kind) {
+      case "reverb":
+        return this.ensureReverb();
+      case "delay":
+        return this.ensureDelay();
+      case "spiral":
+        return this.ensureSpiral();
+      case "flanger":
+        return this.ensureFlanger();
+      case "phaser":
+        return this.ensurePhaser();
+      case "distortion":
+        return this.ensureDistortion();
+      case "roll":
+        return this.ensureRoll();
+      default:
+        return null;
+    }
+  }
+
   private applyManualStage(): void {
-    const [a, b] = crossfadeGains(this.crossfadePosition);
+    const [a, b] = crossfadeGains(this.crossfadePosition, this.crossfaderCurve);
     const levels: [number, number] = [
       a * this.deckTrimLevels[0],
       b * this.deckTrimLevels[1],
@@ -524,6 +1421,17 @@ export class TwoDeckMixer {
     deck.filter.frequency.setValueAtTime(20_000, now);
     deck.echoSend.gain.setValueAtTime(0, now);
     deck.scratchGate.gain.setValueAtTime(1, now);
+    deck.fxGate.gain.setValueAtTime(1, now);
+    deck.reverbSend.gain.setValueAtTime(0, now);
+    deck.delaySend.gain.setValueAtTime(0, now);
+    deck.flangerSend.gain.setValueAtTime(0, now);
+    deck.phaserSend.gain.setValueAtTime(0, now);
+    deck.distortionSend.gain.setValueAtTime(0, now);
+    deck.spiralSend.gain.setValueAtTime(0, now);
+    deck.rollSend.gain.setValueAtTime(0, now);
+    if (this.cascadeGain) {
+      this.cascadeGain.gain.setValueAtTime(0, now);
+    }
     deck.clearLoop();
     const startAt = now + SCHEDULE_AHEAD_SEC;
     deck.play(startAt, offsetSec, 1);
@@ -538,6 +1446,20 @@ export class TwoDeckMixer {
       deck.gain.gain.setValueAtTime(0, now);
       deck.echoSend.gain.cancelScheduledValues(now);
       deck.echoSend.gain.setValueAtTime(0, now);
+      deck.fxGate.gain.cancelScheduledValues(now);
+      deck.fxGate.gain.setValueAtTime(1, now);
+      for (const send of [
+        deck.reverbSend,
+        deck.delaySend,
+        deck.flangerSend,
+        deck.phaserSend,
+        deck.distortionSend,
+        deck.spiralSend,
+        deck.rollSend,
+      ]) {
+        send.gain.cancelScheduledValues(now);
+        send.gain.setValueAtTime(0, now);
+      }
       deck.clearLoop();
       deck.stop(now);
     }
@@ -619,9 +1541,12 @@ export class TwoDeckMixer {
     // against the overlap's startAMs. The legacy relative form has
     // no anchor, so a recipe carrying an A-side move without one
     // cannot be placed — the fallback, never a guessed position.
+    // R3's effect blocks anchor the same way, so an A-side block
+    // without an anchor falls back under the same rule.
     if (
       working.overlap.startAMs === null &&
-      working.loops.some((l) => l.type !== "loop" && l.side === "A")
+      (working.loops.some((l) => l.type !== "loop" && l.side === "A") ||
+        (working.effects ?? []).some((b) => b.side === "A"))
     ) {
       return this.performFallbackCut(
         nextBuffer,
@@ -657,6 +1582,107 @@ export class TwoDeckMixer {
         blendStart,
       );
       this.echoWet.gain.setValueAtTime(working.fx.echo.wet, blendStart);
+    }
+
+    // The R3 networks: built lazily for every effect this recipe
+    // names — in its fx configs or in its effect blocks — then
+    // retuned at the blend's start, echo-style. trans and roll
+    // have no blend-start retune: trans is a gate pattern, roll's
+    // parameters are its block's choreography.
+    {
+      const fx = working.fx;
+      const blockKinds = new Set((working.effects ?? []).map((b) => b.kind));
+      const needs = (kind: string, present: boolean) =>
+        present || blockKinds.has(kind as never);
+      if (needs("reverb", !!fx.reverb)) {
+        this.ensureReverb(fx.reverb?.decaySec);
+      }
+      if (needs("delay", !!fx.delay)) this.ensureDelay();
+      if (needs("spiral", !!fx.spiral)) this.ensureSpiral();
+      if (needs("flanger", !!fx.flanger)) this.ensureFlanger();
+      if (needs("phaser", !!fx.phaser)) this.ensurePhaser();
+      if (needs("distortion", !!fx.distortion)) this.ensureDistortion();
+      if (needs("roll", !!fx.roll)) this.ensureRoll();
+      if (fx.delay && this.delayNet) {
+        this.delayNet.delay.delayTime.setValueAtTime(
+          fx.delay.delaySec,
+          blendStart,
+        );
+        this.delayNet.feedback.gain.setValueAtTime(
+          fx.delay.feedback,
+          blendStart,
+        );
+        this.delayNet.wet.gain.setValueAtTime(fx.delay.wet, blendStart);
+      }
+      if (fx.spiral && this.spiralNet) {
+        // delayTime is per-block (the sweep); only the loop's
+        // character is retuned here.
+        this.spiralNet.feedback.gain.setValueAtTime(
+          fx.spiral.feedback,
+          blendStart,
+        );
+        this.spiralNet.wet.gain.setValueAtTime(fx.spiral.wet, blendStart);
+      }
+      if (fx.flanger && this.flangerNet) {
+        this.flangerNet.osc.frequency.setValueAtTime(
+          fx.flanger.rateHz,
+          blendStart,
+        );
+        this.flangerNet.depthGain.gain.setValueAtTime(
+          fx.flanger.depthMs / 1000,
+          blendStart,
+        );
+        this.flangerNet.feedback.gain.setValueAtTime(
+          fx.flanger.feedback,
+          blendStart,
+        );
+        this.flangerNet.wet.gain.setValueAtTime(fx.flanger.wet, blendStart);
+      }
+      if (fx.phaser && this.phaserNet) {
+        this.phaserNet.osc.frequency.setValueAtTime(
+          fx.phaser.rateHz,
+          blendStart,
+        );
+        // Depth mapping (stated choice): each allpass sweeps
+        // ±centre × depth × 0.75 Hz around its centre — three
+        // quarters of the centre at full depth, so the top
+        // allpass sweeps widest in absolute terms, as a phaser's
+        // notches should.
+        for (let i = 0; i < this.phaserNet.filters.length; i += 1) {
+          this.phaserNet.depthGains[i].gain.setValueAtTime(
+            this.phaserNet.centres[i] * fx.phaser.depth * 0.75,
+            blendStart,
+          );
+        }
+        this.phaserNet.wet.gain.setValueAtTime(fx.phaser.wet, blendStart);
+      }
+      if (fx.reverb && this.reverbNet) {
+        this.reverbNet.wet.gain.setValueAtTime(fx.reverb.wet, blendStart);
+      }
+      if (fx.distortion && this.distortionNet) {
+        // Property sets are not automation; the sends rest at 0
+        // when unused, so a standing curve is inaudible.
+        this.distortionNet.shaper.curve = makeDistortionCurve(
+          fx.distortion.amount,
+        );
+        this.distortionNet.drive.gain.setValueAtTime(
+          1 + fx.distortion.amount * 12,
+          blendStart,
+        );
+        this.distortionNet.wet.gain.setValueAtTime(
+          fx.distortion.wet,
+          blendStart,
+        );
+      }
+      if (this.delayNet || this.reverbNet) {
+        this.cascadeGain.gain.setValueAtTime(
+          fx.chainDelayIntoReverb ? 0.6 : 0,
+          blendStart,
+        );
+      }
+      // Effect blocks are scheduled now, with the decks and the
+      // blend's geometry in hand (the helper reads both decks).
+      this.scheduleEffectBlocks(working, outgoing, incoming, blendStart);
     }
 
     // Loops, armed as written. A's loop engages when its playhead
@@ -960,6 +1986,14 @@ export class TwoDeckMixer {
     incoming.filter.frequency.setValueAtTime(20_000, start);
     incoming.echoSend.gain.setValueAtTime(0, start);
     incoming.scratchGate.gain.setValueAtTime(1, start);
+    incoming.fxGate.gain.setValueAtTime(1, start);
+    incoming.reverbSend.gain.setValueAtTime(0, start);
+    incoming.delaySend.gain.setValueAtTime(0, start);
+    incoming.flangerSend.gain.setValueAtTime(0, start);
+    incoming.phaserSend.gain.setValueAtTime(0, start);
+    incoming.distortionSend.gain.setValueAtTime(0, start);
+    incoming.spiralSend.gain.setValueAtTime(0, start);
+    incoming.rollSend.gain.setValueAtTime(0, start);
     incoming.play(start, Math.max(0, startBSec), 1);
     outgoing.gain.gain.cancelScheduledValues(start);
     outgoing.gain.gain.setValueAtTime(0, start);

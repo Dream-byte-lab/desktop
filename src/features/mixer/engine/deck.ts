@@ -42,6 +42,36 @@ export class Deck {
    */
   readonly scratchGate: GainNode;
   /**
+   * The fx gate (the revamp's R3): a per-deck gain stage in series
+   * just before the volume fader, resting at exactly 1
+   * (transparent). Only trans performance ever writes to it — the
+   * trans effect chops the deck's sound through here at a stated
+   * division, dipping to (1 − depth) and returning home. It is
+   * deliberately NOT the volume fader: the recipe's blend curves
+   * own `gain`, and a gate fighting them for one parameter would
+   * corrupt both. It is also NOT the scratch gate: that gate is
+   * the scratch techniques' fader, this one is trans's alone, so
+   * the two fader patterns can never fight over one parameter
+   * either. No automation, blend, or manual control touches this
+   * node.
+   */
+  readonly fxGate: GainNode;
+  /**
+   * Post-fader sends into the mixer's shared effect networks (the
+   * revamp's R3), each resting at 0 (silent) and tapped exactly
+   * like echoSend (`this.gain.connect(send)`): what is sent is
+   * what the listener hears, fader and all. Effect performance
+   * raises a send for its window and returns it to 0; nothing
+   * else writes to them.
+   */
+  readonly reverbSend: GainNode;
+  readonly delaySend: GainNode;
+  readonly flangerSend: GainNode;
+  readonly phaserSend: GainNode;
+  readonly distortionSend: GainNode;
+  readonly spiralSend: GainNode;
+  readonly rollSend: GainNode;
+  /**
    * Per-track level matching: a static gain set when a track loads,
    * so quiet and loud masters play at comparable loudness. It sits
    * before everything else; no automation ever writes to it.
@@ -55,6 +85,18 @@ export class Deck {
     private readonly context: AudioContext,
     destination: AudioNode,
     echoInput?: AudioNode,
+    fxInputs?: Partial<
+      Record<
+        | "reverb"
+        | "delay"
+        | "flanger"
+        | "phaser"
+        | "distortion"
+        | "spiral"
+        | "roll",
+        AudioNode
+      >
+    >,
   ) {
     this.bass = context.createBiquadFilter();
     this.bass.type = "lowshelf";
@@ -88,8 +130,26 @@ export class Deck {
     this.scratchGate = context.createGain();
     this.scratchGate.gain.value = 1;
 
+    this.fxGate = context.createGain();
+    this.fxGate.gain.value = 1;
+
     this.echoSend = context.createGain();
     this.echoSend.gain.value = 0;
+
+    this.reverbSend = context.createGain();
+    this.reverbSend.gain.value = 0;
+    this.delaySend = context.createGain();
+    this.delaySend.gain.value = 0;
+    this.flangerSend = context.createGain();
+    this.flangerSend.gain.value = 0;
+    this.phaserSend = context.createGain();
+    this.phaserSend.gain.value = 0;
+    this.distortionSend = context.createGain();
+    this.distortionSend.gain.value = 0;
+    this.spiralSend = context.createGain();
+    this.spiralSend.gain.value = 0;
+    this.rollSend = context.createGain();
+    this.rollSend.gain.value = 0;
 
     this.level = context.createGain();
     this.level.gain.value = 1;
@@ -100,11 +160,29 @@ export class Deck {
     this.high.connect(this.filter);
     this.filter.connect(this.bassTrim);
     this.bassTrim.connect(this.scratchGate);
-    this.scratchGate.connect(this.gain);
+    this.scratchGate.connect(this.fxGate);
+    this.fxGate.connect(this.gain);
     this.gain.connect(destination);
     if (echoInput) {
       this.gain.connect(this.echoSend);
       this.echoSend.connect(echoInput);
+    }
+    // The R3 sends: tapped post-fader exactly like echoSend, and
+    // wired out only where the mixer provided a network input.
+    const sends: [GainNode, AudioNode | undefined][] = [
+      [this.reverbSend, fxInputs?.reverb],
+      [this.delaySend, fxInputs?.delay],
+      [this.flangerSend, fxInputs?.flanger],
+      [this.phaserSend, fxInputs?.phaser],
+      [this.distortionSend, fxInputs?.distortion],
+      [this.spiralSend, fxInputs?.spiral],
+      [this.rollSend, fxInputs?.roll],
+    ];
+    for (const [send, input] of sends) {
+      if (input) {
+        this.gain.connect(send);
+        send.connect(input);
+      }
     }
   }
 

@@ -8,7 +8,7 @@ import { FullscreenTopNotch } from "./FullscreenTopNotch";
 import { LyricsNotchStatus } from "./LyricsNotchStatus";
 import { FullscreenFrameGlass } from "./FullscreenFrameGlass";
 import { useLyricsStore, LyricsProviderIsland } from "@/features/lyrics";
-import { AnimatePresence, motion } from "framer-motion";
+import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { PlayerUiElements } from "./PlayerUiElements";
 import { DownLine } from "@mingcute/react";
 import { preloadCoverArt, useCoverSrc } from "@/features/covers";
@@ -18,6 +18,7 @@ import { BetaVisualsWarning } from "./BetaVisualsWarning";
 import { CanvasLyricsView } from "./CanvasLyricsView";
 import { useTranslation } from "@/languages";
 import { useSettledLyricsLayout } from "../hooks/useSettledLyricsLayout";
+import { NOW_PLAYING_MORPH_TRANSITION } from "./nowPlayingMorph";
 
 const KAWARP_FADE_IN_MS = 600;
 
@@ -70,6 +71,7 @@ export function FullscreenPlayer({
 
   const kawarpEnabled = useKawarpEnabled();
   const glassBlur = useGlassBlur();
+  const reduceMotion = useReducedMotion();
   const [queueOpen, setQueueOpen] = useState(false);
   const toggleQueue = useCallback(() => setQueueOpen((open) => !open), []);
   const [kawarpShown, setKawarpShown] = useState(false);
@@ -112,7 +114,16 @@ export function FullscreenPlayer({
       data-theme="dark"
       className="dark relative h-full w-full overflow-hidden bg-black text-white"
     >
-      <div className="absolute inset-0 overflow-hidden">
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={
+          reduceMotion
+            ? { ...NOW_PLAYING_MORPH_TRANSITION, duration: 0.18 }
+            : NOW_PLAYING_MORPH_TRANSITION
+        }
+        className="absolute inset-0 overflow-hidden"
+      >
         <div
           aria-hidden="true"
           className="absolute inset-0"
@@ -139,13 +150,20 @@ export function FullscreenPlayer({
           />
         ) : null}
         <AmbientLayer trackId={currentTrackId} />
-      </div>
+      </motion.div>
 
       <div className="absolute inset-0 z-[1] bg-black/40" />
 
       <FullscreenFrameGlass />
 
-      <div className="absolute inset-1.5 z-10 flex">
+      <motion.div
+        initial={{ opacity: 0, scale: reduceMotion ? 1 : 0.98 }}
+        animate={{ opacity: 1, scale: 1 }}
+        exit={{ opacity: 0, transition: { duration: 0.18 } }}
+        style={{ transformOrigin: "50% 100%" }}
+        transition={NOW_PLAYING_MORPH_TRANSITION}
+        className="absolute inset-1.5 z-10 flex"
+      >
         <div className="flex-1 flex flex-col items-center justify-center gap-5">
           <PlayerUiElements
             onClose={onClose}
@@ -183,7 +201,7 @@ export function FullscreenPlayer({
             </AnimatePresence>
           </div>
         </div>
-      </div>
+      </motion.div>
 
       <AnimatePresence initial={false}>
         {queueOpen && (

@@ -82,8 +82,9 @@ export class PlayerRuntime {
     this.setupAudioListeners(this.audio);
 
     const initialVolume = usePlayerStore.getState().volume;
-    this.audio.volume = initialVolume;
+    this.audio.volume = Math.min(1, Math.max(0, initialVolume));
     this.applyPlaybackRateAndPitch();
+    pitchShifter.setUserVolume(initialVolume, this.audio);
     log("cyan", "boot", `volume ${initialVolume}`);
 
     usePlayerStore.subscribe((state, prevState) => {
@@ -93,7 +94,14 @@ export class PlayerRuntime {
       if (state.volume !== prevState.volume) {
         this.cancelFade();
         if (!this.audio.paused) {
-          this.audio.volume = state.volume;
+          this.audio.volume = Math.min(1, Math.max(0, state.volume));
+        }
+        pitchShifter.setUserVolume(state.volume, this.audio);
+        if (state.volume > 1) {
+          const available = pitchShifter.isAttached();
+          if (state.volumeBoostAvailable !== available) {
+            state.setVolumeBoostAvailable(available);
+          }
         }
       }
       if (
@@ -518,6 +526,7 @@ export class PlayerRuntime {
         isEqEnabled,
         eqGains,
       });
+      pitchShifter.setUserVolume(store.volume, this.audio);
     } catch (err) {
       console.error("[PlayerRuntime] applyPlaybackRateAndPitch error:", err);
     }

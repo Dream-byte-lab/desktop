@@ -73,7 +73,7 @@ export function DjPartyPanel() {
         </div>
         <button
           type="button"
-          onClick={() => void partyHost.stop()}
+          onClick={() => void partyHost.stop(true)}
           className="rounded-full border border-border-tertiary px-3 py-1 text-xs font-semibold text-red-500 transition-colors hover:text-red-600"
         >
           End party
@@ -162,7 +162,7 @@ export function DjPartyPanel() {
             </button>
             <button
               type="button"
-              onClick={() => void partyHost.stop()}
+              onClick={() => void partyHost.stop(true)}
               className="rounded-full border border-border-tertiary px-3 py-1 text-xs font-semibold text-red-500 transition-colors hover:text-red-600"
             >
               End party

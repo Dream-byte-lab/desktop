@@ -1,8 +1,12 @@
 import { MusicNote } from "@solar-icons/react";
-import { AnimatePresence, motion } from "framer-motion";
+import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { useCoverReady, CoverImage } from "@/features/covers";
 import { cn } from "@/shared/lib";
 import { usePlayerStore } from "../store/playerStore";
+import {
+  NOW_PLAYING_ARTWORK_LAYOUT_ID,
+  NOW_PLAYING_MORPH_TRANSITION,
+} from "./nowPlayingMorph";
 
 interface FullscreenCoverArtProps {
   sizes: string;
@@ -12,11 +16,13 @@ export function FullscreenCoverArt({ sizes }: FullscreenCoverArtProps) {
   const track = usePlayerStore((s) => s.currentTrack);
   const coverUrl = track?.coverUrl || "";
   const isCoverLoaded = useCoverReady(coverUrl);
+  const reduceMotion = useReducedMotion();
 
   return (
     <motion.div
       layout
-      transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
+      layoutId={reduceMotion ? undefined : NOW_PLAYING_ARTWORK_LAYOUT_ID}
+      transition={NOW_PLAYING_MORPH_TRANSITION}
       data-ambient-hole
       style={{ borderRadius: 12 }}
       className={cn(

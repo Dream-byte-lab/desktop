@@ -249,6 +249,133 @@ describe("Player State Machine", () => {
   });
 });
 
+describe("Queue-end play/pause must not restart the finished track", () => {
+  beforeEach(() => {
+    usePlayerStore.setState({
+      status: "idle",
+      queue: [],
+      currentIndex: -1,
+      currentTrack: null,
+      positionMs: 0,
+      durationMs: 0,
+      repeat: "off",
+      shuffle: false,
+      error: null,
+      // Keep the suite hermetic: a single track is also the last track,
+      // which would otherwise schedule an autoplay-similar radio fetch.
+      autoplaySimilar: false,
+    });
+  });
+
+  it("single track ends, then resume / toggle / dispatch do not reach the runtime and status stays idle", async () => {
+    const only = mockTrack("only", "Only Song");
+    await playerEngine.playTrack(only, [only]);
+    playerEngine.setRepeat("off");
+
+    // Simulate the runtime "ended" handler: SKIP_NEXT with isAutoEnd.
+    await playerEngine.skipNext(true);
+
+    let state = usePlayerStore.getState();
+    expect(state.status).toBe("idle");
+    expect(state.currentTrack).toBeNull();
+    expect(state.currentIndex).toBe(-1);
+
+    if (!playerRuntime) throw new Error("playerRuntime unavailable in test");
+    // Mock the runtime boundary: the assertion is whether the engine
+    // reaches it at all, not what the runtime does with a real element.
+    const resumeSpy = vi
+      .spyOn(playerRuntime, "resume")
+      .mockImplementation(() => {});
+    const loadSpy = vi
+      .spyOn(playerRuntime, "loadAndPlay")
+      .mockResolvedValue(undefined as never);
+    try {
+      playerEngine.resume();
+      expect(resumeSpy).not.toHaveBeenCalled();
+      expect(loadSpy).not.toHaveBeenCalled();
+      expect(usePlayerStore.getState().status).toBe("idle");
+      expect(usePlayerStore.getState().currentTrack).toBeNull();
+
+      playerEngine.togglePlayPause();
+      expect(resumeSpy).not.toHaveBeenCalled();
+      expect(loadSpy).not.toHaveBeenCalled();
+      expect(usePlayerStore.getState().status).toBe("idle");
+
+      usePlayerStore.getState().dispatch({ type: "RESUME_REQUESTED" });
+      expect(resumeSpy).not.toHaveBeenCalled();
+      expect(loadSpy).not.toHaveBeenCalled();
+      expect(usePlayerStore.getState().status).toBe("idle");
+
+      usePlayerStore.getState().dispatch({ type: "TOGGLE_PLAY_PAUSE" });
+      expect(resumeSpy).not.toHaveBeenCalled();
+      expect(loadSpy).not.toHaveBeenCalled();
+      state = usePlayerStore.getState();
+      expect(state.status).toBe("idle");
+      expect(state.currentTrack).toBeNull();
+    } finally {
+      resumeSpy.mockRestore();
+      loadSpy.mockRestore();
+    }
+  });
+
+  it("resume with a current track still resumes the loaded source", async () => {
+    const track1 = mockTrack("1", "Track 1");
+    await playerEngine.playTrack(track1, [track1]);
+    usePlayerStore.setState({ status: "paused", positionMs: 5000 });
+
+    if (!playerRuntime) throw new Error("playerRuntime unavailable in test");
+    const hasSpy = vi
+      .spyOn(playerRuntime, "hasLoadedSourceFor")
+      .mockReturnValue(true);
+    const resumeSpy = vi
+      .spyOn(playerRuntime, "resume")
+      .mockImplementation(() => {});
+    const loadSpy = vi
+      .spyOn(playerRuntime, "loadAndPlay")
+      .mockResolvedValue(undefined as never);
+    try {
+      playerEngine.resume();
+      expect(resumeSpy).toHaveBeenCalledTimes(1);
+      expect(loadSpy).not.toHaveBeenCalled();
+      expect(usePlayerStore.getState().status).toBe("playing");
+    } finally {
+      hasSpy.mockRestore();
+      resumeSpy.mockRestore();
+      loadSpy.mockRestore();
+    }
+  });
+
+  it("resume with a current track but no loaded source reloads from the saved position", async () => {
+    const track1 = mockTrack("1", "Track 1");
+    await playerEngine.playTrack(track1, [track1]);
+    usePlayerStore.setState({ status: "paused", positionMs: 42000 });
+
+    if (!playerRuntime) throw new Error("playerRuntime unavailable in test");
+    const hasSpy = vi
+      .spyOn(playerRuntime, "hasLoadedSourceFor")
+      .mockReturnValue(false);
+    const resumeSpy = vi
+      .spyOn(playerRuntime, "resume")
+      .mockImplementation(() => {});
+    const loadSpy = vi
+      .spyOn(playerRuntime, "loadAndPlay")
+      .mockResolvedValue(undefined as never);
+    try {
+      playerEngine.resume();
+      expect(loadSpy).toHaveBeenCalledTimes(1);
+      expect(loadSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ id: "1" }),
+        42000,
+      );
+      expect(resumeSpy).not.toHaveBeenCalled();
+    } finally {
+      hasSpy.mockRestore();
+      resumeSpy.mockRestore();
+      loadSpy.mockRestore();
+    }
+  });
+});
+
 describe("Player auto-skip on playback error", () => {
   beforeEach(() => {
     usePlayerStore.setState({

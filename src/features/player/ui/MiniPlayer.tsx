@@ -1,6 +1,6 @@
 import { memo } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AnimatePresence, motion } from "framer-motion";
+import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import {
   Sidebar,
   SkipNext,
@@ -29,14 +29,23 @@ import {
   useUnlikeTrack,
 } from "@/features/library/hooks";
 import { usePlayerStore } from "../store/playerStore";
-import { toVolumeGain, toVolumeLevel } from "../engine/volume";
+import {
+  FULL_VOLUME_LEVEL,
+  toVolumeGain,
+  toVolumeLevel,
+} from "../engine/volume";
 import { VolumeColumn } from "./VolumeColumn";
 import { DjModeButton } from "@/features/mixer/ui/DjModeButton";
 import { DjProToggle } from "@/features/mixer/ui/DjProView";
 import { SpeedPitchPicker } from "./SpeedPitchPicker";
 import { EqualizerPicker } from "./EqualizerPicker";
 import { isEqActive } from "../engine/equalizer";
-import { TimelineSlider } from "./TimelineSlider";
+import { TimelineSlider, formatPlaybackTime } from "./TimelineSlider";
+import { resolveBarExpanded, usePlayerBarSizeStore } from "./playerBarSize";
+import {
+  NOW_PLAYING_ARTWORK_LAYOUT_ID,
+  NOW_PLAYING_MORPH_TRANSITION,
+} from "./nowPlayingMorph";
 import { useTheme } from "next-themes";
 import { useCoverReady, CoverImage, loadCoverElement } from "@/features/covers";
 import { useHasPageBackdrop } from "@/features/settings/store/customizationStore";
@@ -222,6 +231,12 @@ function MiniPlayer({
     : typeof document !== "undefined" &&
       document.documentElement.getAttribute("data-theme") === "light";
   const miniPlayerStyle = usePlayerStore((state) => state.miniPlayerStyle);
+  // The engine's PlayerState does not carry boost availability; the
+  // wheel's travel ceiling reads it from the store.
+  const volumeBoostAvailable = usePlayerStore(
+    (state) => state.volumeBoostAvailable,
+  );
+  const volumeCeiling = volumeBoostAvailable ? 1 : FULL_VOLUME_LEVEL;
   const usesRoundedStyle = !embedded && miniPlayerStyle === "rounded";
   const usesBackgroundProgress = true;
   const hasPageBackdrop = useHasPageBackdrop();
@@ -314,9 +329,16 @@ function MiniPlayer({
     null,
   );
   const [isVolumeDragging, setIsVolumeDragging] = useState(false);
+  const [hovered, setHovered] = useState(false);
+  const [focusWithin, setFocusWithin] = useState(false);
+  const pinnedBarSize = usePlayerBarSizeStore((state) => state.pinned);
+  const reduceMotion = useReducedMotion();
 
   const currentTrack = player.currentTrack;
+  // volumeLevel is slider travel (toVolumeLevel of the gain); the icon
+  // thresholds run on gain percent, which is a different number now.
   const volumeLevel = toVolumeLevel(player.volume);
+  const volumeGainPercent = Math.round(player.volume * 100);
   const isLocal = isLocalTrackId(currentTrack?.id);
   const isLiked = useIsTrackLiked(currentTrack?.id);
   const eqActive = isEqActive(player.isEqEnabled, player.eqGains);
@@ -460,7 +482,10 @@ function MiniPlayer({
       e.stopPropagation();
       e.preventDefault();
       const delta = e.deltaY < 0 ? 0.04 : -0.04;
-      const nextLevel = Math.min(1, Math.max(0, volumeLevel + delta));
+      const nextLevel = Math.min(
+        volumeCeiling,
+        Math.max(0, volumeLevel + delta),
+      );
       playerEngine.setVolume(toVolumeGain(nextLevel));
       setVolumeOpen(true);
       clearVolumeHoverTimer();
@@ -469,7 +494,7 @@ function MiniPlayer({
         setVolumeOpen(false);
       }, 1200);
     },
-    [clearVolumeHoverTimer, volumeLevel],
+    [clearVolumeHoverTimer, volumeCeiling, volumeLevel],
   );
 
   const handleVolumeDraggingChange = useCallback((dragging: boolean) => {
@@ -580,10 +605,30 @@ function MiniPlayer({
     setShownProgress(secondProgress);
   }
 
+  const popupOpen = volumeOpen || speedOpen || eqOpen;
+  const expanded = embedded
+    ? resolveBarExpanded({
+        pinned: pinnedBarSize,
+        hovered,
+        focusWithin,
+        popupOpen,
+      })
+    : false;
+  const displayedPositionMs =
+    scrubRatio !== null ? scrubRatio * durationMs : player.positionMs;
+
   return (
     <div
       ref={miniPlayerRootRef}
       className="relative h-[64px] w-full select-none"
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      onFocus={() => setFocusWithin(true)}
+      onBlur={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+          setFocusWithin(false);
+        }
+      }}
     >
       <AnimatePresence>
         {volumeOpen && (
@@ -616,7 +661,7 @@ function MiniPlayer({
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 10, scale: 0.985 }}
             transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}
-            className="absolute bottom-[74px] z-[92] w-[300px] rounded-item p-[16px] bg-surface-glass backdrop-blur-[16px] backdrop-saturate-150 ring-1 ring-inset ring-rim prevent-seek"
+            className={`absolute ${embedded && expanded ? "bottom-[102px]" : "bottom-[74px]"} z-[92] w-[300px] rounded-item p-[16px] bg-surface-glass backdrop-blur-[16px] backdrop-saturate-150 ring-1 ring-inset ring-rim prevent-seek`}
             style={speedPopupStyle}
             onPointerDown={(e) => e.stopPropagation()}
           >
@@ -634,7 +679,7 @@ function MiniPlayer({
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 10, scale: 0.985 }}
             transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}
-            className="absolute bottom-[74px] z-[92] w-[300px] rounded-item p-[16px] bg-surface-glass backdrop-blur-[16px] backdrop-saturate-150 ring-1 ring-inset ring-rim prevent-seek"
+            className={`absolute ${embedded && expanded ? "bottom-[102px]" : "bottom-[74px]"} z-[92] w-[300px] rounded-item p-[16px] bg-surface-glass backdrop-blur-[16px] backdrop-saturate-150 ring-1 ring-inset ring-rim prevent-seek`}
             style={eqPopupStyle}
             onPointerDown={(e) => e.stopPropagation()}
           >
@@ -644,7 +689,11 @@ function MiniPlayer({
       </AnimatePresence>
 
       <div
-        className={`relative h-[64px] w-full overflow-hidden cursor-pointer ${
+        className={`${
+          embedded
+            ? "absolute inset-x-0 bottom-0 flex flex-col transition-[height] duration-[210ms] ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none"
+            : "relative h-[64px]"
+        } w-full overflow-hidden cursor-pointer ${
           usesRoundedStyle
             ? "rounded-full border-[0.5px] border-border-tertiary bg-bg-primary"
             : embedded
@@ -655,6 +704,7 @@ function MiniPlayer({
                 }`
               : "rounded-3xl border-[0.5px] border-border-tertiary bg-bg-primary"
         }`}
+        style={embedded ? { height: expanded ? 92 : 64 } : undefined}
         onPointerDown={(e) => {
           if (e.button !== 0) return;
           const target = e.target as Element | null;
@@ -744,7 +794,7 @@ function MiniPlayer({
           </div>
         )}
         <div
-          className={`relative grid h-full pointer-events-none ${
+          className={`relative grid ${embedded ? "h-[64px] shrink-0" : "h-full"} pointer-events-none ${
             embedded
               ? // Fluid tracks, not fixed numbers: the track-info column
                 // may yield down to 200px and the toolbox column takes
@@ -774,13 +824,21 @@ function MiniPlayer({
                 />
               </div>
             )}
-            <div
+            <motion.div
+              layout
+              layoutId={
+                embedded && !reduceMotion
+                  ? NOW_PLAYING_ARTWORK_LAYOUT_ID
+                  : undefined
+              }
+              transition={NOW_PLAYING_MORPH_TRANSITION}
               role="button"
               tabIndex={0}
               aria-label="Open player"
               className={`relative h-[38px] w-[38px] shrink-0 overflow-hidden rounded-control bg-bg-elevated cursor-pointer pointer-events-auto prevent-seek ${
                 coverUrl && !isCoverLoaded ? "animate-pulse" : ""
               }`}
+              style={{ borderRadius: 8 }}
               onClick={onFullscreenOpen}
               onPointerDown={(e) => e.stopPropagation()}
             >
@@ -797,7 +855,7 @@ function MiniPlayer({
                 }}
                 className="h-[38px] w-[38px] object-cover rounded-control"
               />
-            </div>
+            </motion.div>
             <div className="flex min-w-0 flex-col pointer-events-none">
               <p
                 className="m-0 truncate text-[16px] font-[400] text-text-primary flex items-center gap-[6px] pointer-events-none"
@@ -1023,9 +1081,9 @@ function MiniPlayer({
                 }}
                 style={{ cursor: "pointer" }}
               >
-                {volumeLevel === 0 ? (
+                {volumeGainPercent === 0 ? (
                   <VolumeCross size={18} weight="Outline" />
-                ) : volumeLevel < 0.33 ? (
+                ) : volumeGainPercent < 40 ? (
                   <VolumeSmall size={18} weight="Outline" />
                 ) : (
                   <VolumeLoud size={18} weight="Outline" />
@@ -1070,11 +1128,48 @@ function MiniPlayer({
           </div>
         </div>
 
-        <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+        {embedded && expanded && (
+          <div
+            className="prevent-seek relative z-30 flex h-[28px] shrink-0 items-center px-[18px]"
+            onPointerDown={(e) => e.stopPropagation()}
+          >
+            <TimelineSlider
+              positionMs={player.positionMs}
+              durationMs={durationMs}
+              onSeek={(pos) => playerEngine.seek(pos)}
+              size="xs"
+              showTime={false}
+              fillColor={accentColorSolid || undefined}
+              fillClassName={
+                !accentColorSolid
+                  ? isLight
+                    ? "bg-text-primary"
+                    : "bg-white"
+                  : undefined
+              }
+              trackBg={
+                isLight ? "rgba(0, 0, 0, 0.08)" : "rgba(255, 255, 255, 0.15)"
+              }
+              trackActiveBg={
+                isLight ? "rgba(0, 0, 0, 0.16)" : "rgba(255, 255, 255, 0.32)"
+              }
+              className="!h-[14px]"
+            />
+          </div>
+        )}
+
+        <div
+          className={`pointer-events-none absolute flex items-center justify-center ${
+            embedded ? "inset-x-0 top-0 h-[64px]" : "inset-0"
+          }`}
+        >
           <div
             className="pointer-events-auto flex items-center gap-[8px] prevent-seek cursor-default"
             onPointerDown={(e) => e.stopPropagation()}
           >
+            <span className="text-[11px] tabular-nums text-text-tertiary w-[36px] shrink-0 text-right pr-[6px]">
+              {formatPlaybackTime(displayedPositionMs)}
+            </span>
             <button
               type="button"
               aria-label="Previous track"
@@ -1134,6 +1229,9 @@ function MiniPlayer({
             >
               <SkipNext size={18} weight="Bold" />
             </button>
+            <span className="text-[11px] tabular-nums text-text-tertiary w-[36px] shrink-0 text-left pl-[6px]">
+              {formatPlaybackTime(durationMs)}
+            </span>
           </div>
         </div>
       </div>

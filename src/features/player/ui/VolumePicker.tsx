@@ -9,7 +9,12 @@ import {
 } from "./morphPlayerIcons";
 import { usePlayerState } from "../hooks/usePlayerState";
 import { playerEngine } from "../engine/playerEngine";
-import { toVolumeGain, toVolumeLevel } from "../engine/volume";
+import {
+  FULL_VOLUME_LEVEL,
+  toVolumeGain,
+  toVolumeLevel,
+} from "../engine/volume";
+import { usePlayerStore } from "../store/playerStore";
 
 export interface VolumePickerProps {
   className?: string;
@@ -49,6 +54,12 @@ export const VolumePicker = memo(function VolumePicker({
   const isVertical = orientation === "vertical";
   const player = usePlayerState();
   const volumeLevel = toVolumeLevel(player.volume);
+  // The engine's PlayerState does not carry boost availability; read it
+  // from the store (same pattern as DjModeButton).
+  const boostAvailable = usePlayerStore((state) => state.volumeBoostAvailable);
+  // Truthful ceiling: without boost the control cannot travel past the
+  // 100% mark, so it never promises gain it cannot deliver.
+  const ceiling = boostAvailable ? 1 : FULL_VOLUME_LEVEL;
 
   const [isHovered, setIsHovered] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
@@ -63,11 +74,15 @@ export const VolumePicker = memo(function VolumePicker({
 
   const currentLevel =
     isDragging && dragLevel !== null ? dragLevel : volumeLevel;
-  const percentage = Math.round(currentLevel * 100);
+  // Travel and gain percent are different numbers now: travel (level)
+  // drives the fill, gain percent drives the value text, icon and aria.
+  const travelPercent = Math.round(currentLevel * 100);
+  const gainPercent = Math.round(toVolumeGain(currentLevel) * 100);
+  const boosted = gainPercent > 100;
 
   const updateVolume = useCallback(
     (level: number) => {
-      const clamped = Math.min(1, Math.max(0, level));
+      const clamped = Math.min(ceiling, Math.max(0, level));
       const gain = toVolumeGain(clamped);
       playerEngine.setVolume(gain);
       if (clamped > 0) {
@@ -75,7 +90,7 @@ export const VolumePicker = memo(function VolumePicker({
       }
       onVolumeChange?.(clamped);
     },
-    [onVolumeChange],
+    [ceiling, onVolumeChange],
   );
 
   const calculateLevelFromPointer = useCallback(
@@ -85,13 +100,13 @@ export const VolumePicker = memo(function VolumePicker({
       if (isVertical) {
         if (rect.height === 0) return currentLevel;
         const ratio = (rect.bottom - clientY) / rect.height;
-        return Math.min(1, Math.max(0, ratio));
+        return Math.min(ceiling, Math.max(0, ratio));
       }
       if (rect.width === 0) return currentLevel;
       const ratio = (clientX - rect.left) / rect.width;
-      return Math.min(1, Math.max(0, ratio));
+      return Math.min(ceiling, Math.max(0, ratio));
     },
-    [currentLevel, isVertical],
+    [ceiling, currentLevel, isVertical],
   );
 
   const handlePointerDown = useCallback(
@@ -134,8 +149,8 @@ export const VolumePicker = memo(function VolumePicker({
       e.stopPropagation();
       e.preventDefault();
       const delta = e.deltaY < 0 ? 0.04 : -0.04;
-      const nextLevel = Math.min(1, Math.max(0, currentLevel + delta));
-      updateVolume(nextLevel);
+      // updateVolume clamps to the ceiling
+      updateVolume(currentLevel + delta);
     },
     [currentLevel, updateVolume],
   );
@@ -153,10 +168,10 @@ export const VolumePicker = memo(function VolumePicker({
         updateVolume(0);
       } else if (e.key === "End") {
         e.preventDefault();
-        updateVolume(1);
+        updateVolume(ceiling);
       }
     },
-    [currentLevel, updateVolume],
+    [ceiling, currentLevel, updateVolume],
   );
 
   const handleToggleMute = useCallback(() => {
@@ -200,11 +215,17 @@ export const VolumePicker = memo(function VolumePicker({
       >
         {showValue && (
           <span
-            className={`w-full text-center text-[10px] font-medium tabular-nums tracking-tight leading-[12px] ${
-              !valueClassName ? "text-text-tertiary" : ""
+            className={`w-full text-center text-[10px] tabular-nums tracking-tight leading-[12px] ${
+              boosted ? "font-semibold" : "font-medium"
+            } ${
+              !valueClassName
+                ? boosted
+                  ? "text-accent-primary"
+                  : "text-text-tertiary"
+                : ""
             } transition-colors ${valueClassName}`}
           >
-            {percentage}%
+            {gainPercent}%
           </span>
         )}
 
@@ -213,13 +234,20 @@ export const VolumePicker = memo(function VolumePicker({
           aria-label="Volume"
           aria-orientation="vertical"
           aria-valuemin={0}
-          aria-valuemax={100}
-          aria-valuenow={percentage}
+          aria-valuemax={500}
+          aria-valuenow={gainPercent}
           tabIndex={0}
           onKeyDown={handleKeyDown}
           onPointerDown={handlePointerDown}
           className="relative flex h-[72px] w-full items-center justify-center cursor-pointer outline-none px-1"
         >
+          {/* 100% tick: the hairline where gain crosses unity;
+              everything above it is boost. */}
+          <div
+            className="pointer-events-none absolute left-1/2 z-10 h-[2px] w-[14px] -translate-x-1/2 bg-accent-primary/80"
+            style={{ bottom: `${FULL_VOLUME_LEVEL * 100}%` }}
+            aria-hidden="true"
+          />
           <motion.div
             ref={trackRef}
             initial={false}
@@ -256,7 +284,7 @@ export const VolumePicker = memo(function VolumePicker({
                 isDragging ? "duration-0" : "duration-100"
               } ${fillClassName}`}
               style={{
-                height: `${percentage}%`,
+                height: `${travelPercent}%`,
                 ...(fillColor ? { backgroundColor: fillColor } : {}),
               }}
             />
@@ -273,9 +301,9 @@ export const VolumePicker = memo(function VolumePicker({
             } transition-colors duration-150 ease-out cursor-pointer ${iconClassName}`}
           >
             <span className="flex items-center justify-center transition-transform duration-150 ease-out hover:scale-110 active:scale-90">
-              {percentage === 0 ? (
+              {gainPercent === 0 ? (
                 <VolumeCross size={15} weight="Outline" />
-              ) : percentage < 40 ? (
+              ) : gainPercent < 40 ? (
                 <VolumeSmall size={15} weight="Outline" />
               ) : (
                 <VolumeLoud size={15} weight="Outline" />
@@ -306,9 +334,9 @@ export const VolumePicker = memo(function VolumePicker({
           <span className="flex items-center justify-center transition-transform duration-150 ease-out hover:scale-110 active:scale-90">
             <PlayerMorphIcon
               icon={
-                percentage === 0
+                gainPercent === 0
                   ? ICON_VOLUME_MUTE
-                  : percentage < 40
+                  : gainPercent < 40
                     ? ICON_VOLUME_LOW
                     : ICON_VOLUME_HIGH
               }
@@ -322,13 +350,20 @@ export const VolumePicker = memo(function VolumePicker({
         role="slider"
         aria-label="Volume"
         aria-valuemin={0}
-        aria-valuemax={100}
-        aria-valuenow={percentage}
+        aria-valuemax={500}
+        aria-valuenow={gainPercent}
         tabIndex={0}
         onKeyDown={handleKeyDown}
         onPointerDown={handlePointerDown}
         className="relative flex h-full flex-1 items-center cursor-pointer outline-none"
       >
+        {/* 100% tick: the hairline where gain crosses unity;
+            everything past it is boost. */}
+        <div
+          className="pointer-events-none absolute top-1/2 z-10 h-[14px] w-[2px] -translate-y-1/2 bg-accent-primary/80"
+          style={{ left: `${FULL_VOLUME_LEVEL * 100}%` }}
+          aria-hidden="true"
+        />
         <motion.div
           ref={trackRef}
           initial={false}
@@ -363,7 +398,7 @@ export const VolumePicker = memo(function VolumePicker({
               isDragging ? "duration-0" : "duration-100"
             } ${fillClassName}`}
             style={{
-              width: `${percentage}%`,
+              width: `${travelPercent}%`,
               ...(fillColor ? { backgroundColor: fillColor } : {}),
             }}
           />
@@ -372,13 +407,17 @@ export const VolumePicker = memo(function VolumePicker({
 
       {showValue && (
         <span
-          className={`w-[32px] shrink-0 text-right text-caption font-[500] tabular-nums ${
+          className={`w-[32px] shrink-0 text-right text-caption tabular-nums ${
+            boosted ? "font-[600]" : "font-[500]"
+          } ${
             !valueClassName
-              ? "text-text-tertiary group-hover:text-text-secondary"
+              ? boosted
+                ? "text-accent-primary"
+                : "text-text-tertiary group-hover:text-text-secondary"
               : ""
           } transition-colors ${valueClassName}`}
         >
-          {percentage}%
+          {gainPercent}%
         </span>
       )}
     </div>

@@ -16,7 +16,7 @@ import {
 const harness = vi.hoisted(() => {
   const analyses = new Map<string, unknown>();
   const calls: { depth: string }[] = [];
-  return { analyses, calls };
+  return { analyses, calls, failFast: false };
 });
 
 vi.mock("@/shared/storage", () => ({
@@ -44,9 +44,12 @@ vi.mock("./analyseTrackRunner", () => ({
     samples: Float32Array,
     sampleRate: number,
     options: { depth?: string } = {},
-  ): Promise<TrackAnalysis> => {
+  ): Promise<TrackAnalysis | null> => {
     const depth = options.depth ?? "deep";
     harness.calls.push({ depth });
+    // A scripted fast-pass failure (Note 20's shell case): the deep
+    // pass behind it still answers, as the real worker's would.
+    if (depth === "fast" && harness.failFast) return null;
     // The real deep pass runs in a worker and takes real time; the
     // fast answer must observably come first, so the mock's deep
     // pass waits a tick of the clock rather than resolving in the
@@ -104,6 +107,7 @@ function track(id: string): Track {
 beforeEach(() => {
   harness.analyses.clear();
   harness.calls.length = 0;
+  harness.failFast = false;
   vi.stubGlobal("OfflineAudioContext", FakeOfflineAudioContext);
 });
 
@@ -129,8 +133,9 @@ describe("trackSource preparation (Step 5)", () => {
     await vi.waitFor(() => {
       expect(preparedTrack("ts-b")?.analysis.depth).toBe("deep");
     });
-    // Push ts-b out of the bounded prepared cache (holds 4).
-    for (const id of ["ts-b2", "ts-b3", "ts-b4", "ts-b5"]) {
+    // Push ts-b out of the bounded prepared cache (holds 5 since
+    // Note 20 deepened the preparation horizon to two tracks).
+    for (const id of ["ts-b2", "ts-b3", "ts-b4", "ts-b5", "ts-b6"]) {
       await loadTrackForMixing(track(id));
     }
     expect(preparedTrack("ts-b")).toBeUndefined();
@@ -143,11 +148,41 @@ describe("trackSource preparation (Step 5)", () => {
     expect(harness.calls.length).toBe(callsBefore);
   });
 
-  it("keeps at most four decoded tracks warm", async () => {
-    for (const id of ["ts-c1", "ts-c2", "ts-c3", "ts-c4", "ts-c5"]) {
+  it("keeps at most five decoded tracks warm", async () => {
+    for (const id of ["ts-c1", "ts-c2", "ts-c3", "ts-c4", "ts-c5", "ts-c6"]) {
       await loadTrackForMixing(track(id));
     }
     expect(preparedTrack("ts-c1")).toBeUndefined();
-    expect(preparedTrack("ts-c5")).toBeDefined();
+    expect(preparedTrack("ts-c6")).toBeDefined();
+  });
+
+  it("answers a playable shell when the decode succeeds but the analysis fails", async () => {
+    harness.failFast = true;
+    const prepared = await loadTrackForMixing(track("ts-shell"));
+    expect(prepared).not.toBeNull();
+    // Playable: the decoded buffer is right there. Not mixable: no
+    // real analysis backs it, only the shell's measured facts.
+    expect(prepared!.mixable).toBe(false);
+    expect(prepared!.buffer.duration).toBe(10);
+    expect(prepared!.analysis.loudness).toBeGreaterThan(0);
+    expect(prepared!.analysis.energyCurve.length).toBeGreaterThan(0);
+    expect(prepared!.analysis.beatMap.bpm).toBe(0);
+    // The shell is never written to the analysis cache.
+    expect(harness.analyses.has("ts-shell")).toBe(false);
+  });
+
+  it("upgrades a shell in place when the background analysis lands", async () => {
+    harness.failFast = true;
+    const prepared = await loadTrackForMixing(track("ts-upgrade"));
+    expect(prepared).not.toBeNull();
+    expect(prepared!.mixable).toBe(false);
+
+    // The deep pass behind the failed fast pass lands and flips the
+    // very object the caller already holds to a mixable entry.
+    await vi.waitFor(() => {
+      expect(preparedTrack("ts-upgrade")?.mixable).toBe(true);
+    });
+    expect(prepared!.mixable).toBe(true);
+    expect(prepared!.analysis.depth).toBe("deep");
   });
 });

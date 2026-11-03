@@ -467,8 +467,10 @@ describe("DjSession v2 — the eight guarantees", () => {
     const loadedIds = new Set(
       loadMock.fn.mock.calls.map(([track]) => track.id),
     );
-    // Start track + each landed track's single next — never the tail.
-    expect([...loadedIds].sort()).toEqual(["t0", "t1", "t2", "t3", "t4"]);
+    // The TWO-track horizon (Note 20): start track + the two ahead
+    // of it, and each landing promotes the second slot and refills
+    // one beyond — never the whole tail.
+    expect([...loadedIds].sort()).toEqual(["t0", "t1", "t2", "t3", "t4", "t5"]);
   });
 
   describe("the brain loop on a friendly pair", () => {

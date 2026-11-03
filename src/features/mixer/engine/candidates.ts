@@ -20,7 +20,9 @@
 // revamp's R1 taught the executor to perform them; they are now
 // enumerated as heavily-gated rivals — see authorStopExit. The
 // scratch family joined under the same rule with R2 — see the
-// scratch authors below.)
+// scratch authors below. The effects rack joined with R3, not as
+// standalone joins but as dressings on joins already authored —
+// see authorEffectVariants.)
 //
 // Deduplication: candidates are keyed on the plan itself (preset,
 // anchors, length, rate, loops, echo) — when two profiles author the
@@ -43,6 +45,8 @@ import {
   OPEN_FILTER_HZ,
   validateRecipe,
   type AutomationCurve,
+  type RecipeEffectBlock,
+  type RecipeFx,
   type RecipeLoopBlock,
   type ScratchTechnique,
   type TransitionRecipe,
@@ -144,6 +148,12 @@ export function familyOfRecipe(recipe: TransitionRecipe): JoinFamily {
   if (recipe.loops.some((l) => l.type === "loop")) {
     return "loop-extended-blend";
   }
+  // An effect-dressed join is its own family, as a loop-extended
+  // blend is: the dressing is what the scorer must price. The
+  // scratch and stop readings above win because those performances
+  // ARE their joins, and our authors never carry effect blocks on
+  // them.
+  if ((recipe.effects ?? []).length > 0) return "fx";
   switch (recipe.preset) {
     case "beatmatched-fade": {
       const beats =
@@ -1183,6 +1193,325 @@ function authorScratchOut(
 }
 
 // ---------------------------------------------------------------------
+// The effect dressings (the revamp's R3)
+// ---------------------------------------------------------------------
+
+/**
+ * The effect author: the effects rack — reverb, delay, flanger,
+ * phaser, distortion, spiral, trans, roll — as DRESSINGS on a join
+ * the author already made, never as standalone joins. A variant is
+ * a shallow clone of its base with fx / effects replaced and the
+ * exit reason extended: the base's automation, loops and geometry
+ * are shared untouched, because a chain is a filter-fade's curves
+ * INTO a delay block INTO a reverb tail — composition, not
+ * replacement. Most pairs earn no dressing at all; every gate
+ * below must hold for the variant it guards:
+ *
+ * - Price: the profile must price the fx family within reach
+ *   (familyCosts.fx ≤ FX_AUTHOR_MAX_FAMILY_COST). STANDARD and
+ *   ADVENTUROUS author dressings; CONSERVATIVE prices the rack out
+ *   of its own reach, mirroring its scratch / stop stance.
+ * - Host: only blends and the two fades carry a dressing. Theatre
+ *   never stacks on theatre (no fx on scratch / stop joins),
+ *   restraint stays restrained (no fx on let-it-play / early-cut /
+ *   section-swap), and a loop-extended base is already dressed.
+ * - Anchor: the base must name its A anchor and span real time.
+ * - The distant-key guard: scoring's distant-key veto is scoped to
+ *   the blend families, and a dressing performs the SAME blend as
+ *   its base while reading family "fx" — so without this gate a
+ *   dressed join would escape a veto its own base receives. The
+ *   author does not dress a join the scorer would refuse as a
+ *   blend: a vetoed blend stays vetoed, dressed or not. (The other
+ *   vetoes are family-blind and share the base's evidence, so they
+ *   already fall on the dressing exactly as on the base.)
+ * - Vocal witness, in two classes, read by the scratch gates'
+ *   instrument (windowVocalReading). The WASH class (reverb, delay,
+ *   spiral, flanger, phaser) ADDS sound around the voice, so its
+ *   windows may carry a witnessed mean up to
+ *   FX_WASH_MAX_VOCAL_ACTIVITY. The STRICT class (trans, roll,
+ *   distortion) cuts or crushes the dry signal itself, so its
+ *   windows answer to the scratch gates' stricter bound. An
+ *   unwitnessed window earns nothing in either class.
+ *
+ * Four variants, returned in this order:
+ *
+ * - TAIL (side A, over the overlap in A's time): the outgoing's
+ *   exit, dressed by its own energy there. A quiet exit (or none
+ *   witnessed) earns a REVERB tail alone; a mid-energy exit earns
+ *   the CHAIN — one beat of delay into the same reverb; a hot exit
+ *   earns the SPIRAL when its window is quiet-voiced enough for
+ *   the sweep to read (a stricter gate of its own), and falls back
+ *   to the chain when it is not.
+ * - WASH (side B, over the overlap in B's time): the incoming's
+ *   arrival. A hot entry earns the FLANGER's motion; a quieter one
+ *   the PHASER's slower sweep.
+ * - CHOP (side A, over the window ENDING at the handover — the
+ *   outgoing's last bars alone, before the join begins):
+ *   transient-rich material earns the ROLL's stutter, flat material
+ *   the TRANS gate's chop. The window must not already be upon us:
+ *   the executor schedules from the call moment, and a window in
+ *   the past cannot be performed.
+ * - GRIT (side B, over the wash's span): DISTORTION on a drop
+ *   landing — only at a genuinely loud entry, and only a bold
+ *   profile reaches for it below the loudest entries.
+ */
+const FX_AUTHOR_MAX_FAMILY_COST = 0.5;
+/** Mean vocal activity a wash-class window may carry — it adds sound AROUND a voice. */
+const FX_WASH_MAX_VOCAL_ACTIVITY = 0.6;
+/** Mean vocal activity above which even a hot exit falls back from the spiral to the chain. */
+const FX_SPIRAL_MAX_VOCAL_ACTIVITY = 0.35;
+/** The fx price at or below which a profile counts as bold for the grit gate. */
+const FX_GRIT_BOLD_MAX_FAMILY_COST = 0.35;
+/** Entry energy at or above which even a cautious profile's entry earns grit. */
+const FX_GRIT_UNIVERSAL_ENTRY_ENERGY = 0.8;
+
+const FX_HOST_FAMILIES: ReadonlySet<JoinFamily> = new Set([
+  "long-blend",
+  "standard-blend",
+  "short-blend",
+  "echo-out",
+  "filter-fade",
+]);
+
+function authorEffectVariants(
+  base: TransitionRecipe,
+  request: RecipeRequest,
+  profile: DecisionProfile,
+): TransitionRecipe[] {
+  if (profile.familyCosts.fx > FX_AUTHOR_MAX_FAMILY_COST) return [];
+  if (!FX_HOST_FAMILIES.has(familyOfRecipe(base))) return [];
+  const startAMs = base.overlap.startAMs;
+  if (startAMs === null || !(base.overlap.durationMs > 0)) return [];
+
+  const { outgoing, incoming } = request;
+  const outMap = outgoing.beatMap;
+  const inMap = incoming.beatMap;
+
+  // The distant-key guard (see the header): the relation counts
+  // only when both key confidences clear the spend floor, exactly
+  // as deriveCandidateEvidence reads it, and the blend's length is
+  // the family reader's own formula.
+  const keyFit = keyCompatibility(outgoing.key, incoming.key);
+  const keyConfidence =
+    outgoing.key && incoming.key
+      ? Math.min(outgoing.key.confidence, incoming.key.confidence)
+      : null;
+  const blendBeats =
+    (base.overlap.durationMs / 1000) * (base.overlap.bpmA / 60);
+  if (
+    keyFit &&
+    keyConfidence !== null &&
+    keyConfidence >= KEY_SPEND_CONFIDENCE &&
+    keyFit.relation === "distant" &&
+    blendBeats > profile.distantKeyMaxBlendBeats
+  ) {
+    return [];
+  }
+
+  const durationMs = base.overlap.durationMs;
+  const durationSec = durationMs / 1000;
+  const startASec = startAMs / 1000;
+  const startBMs = base.overlap.startBMs;
+  const startBSec = startBMs / 1000;
+  const rateB = base.overlap.rateB;
+  const spbA = secondsPerBeat(outMap.bpm);
+  const spbB = secondsPerBeat(inMap.bpm);
+
+  const dress = (
+    fx: RecipeFx,
+    effects: RecipeEffectBlock[],
+    dressing: string,
+  ): TransitionRecipe => ({
+    ...base,
+    fx,
+    effects,
+    evidence: {
+      ...base.evidence,
+      exitReason: `${base.evidence.exitReason} — ${dressing}`,
+    },
+  });
+
+  // ---- the tail (side A, over the overlap in A's time) ----
+  let tail: TransitionRecipe | null = null;
+  const tailBeats = durationSec / spbA;
+  if (tailBeats >= 4) {
+    const vocal = windowVocalReading(
+      outgoing,
+      startASec,
+      startASec + durationSec,
+      profile,
+    );
+    if (vocal.witnessed && vocal.mean <= FX_WASH_MAX_VOCAL_ACTIVITY) {
+      const exitEnergy = entryEnergyOf(
+        outgoing,
+        beatsAtTime(outMap, startASec),
+      );
+      const window = {
+        side: "A" as const,
+        startMs: startAMs,
+        endMs: startAMs + durationMs,
+        beats: tailBeats,
+      };
+      if (exitEnergy === null || exitEnergy < 0.4) {
+        tail = dress(
+          { reverb: { decaySec: 1.8, wet: 0.55 } },
+          [{ kind: "reverb", ...window, level: 0.5 }],
+          "the outgoing leaves through a reverb tail",
+        );
+      } else if (
+        exitEnergy >= 0.65 &&
+        vocal.mean <= FX_SPIRAL_MAX_VOCAL_ACTIVITY
+      ) {
+        tail = dress(
+          {
+            spiral: {
+              delaySec: spbA / 2,
+              sweepToRatio: 0.5,
+              feedback: 0.45,
+              wet: 0.5,
+            },
+          },
+          [{ kind: "spiral", ...window, level: 0.4 }],
+          "the outgoing leaves through a spiralling delay",
+        );
+      } else {
+        tail = dress(
+          {
+            delay: { delaySec: spbA, feedback: 0.35, wet: 0.5 },
+            reverb: { decaySec: 1.8, wet: 0.55 },
+            chainDelayIntoReverb: true,
+          },
+          [
+            { kind: "delay", ...window, level: 0.45 },
+            { kind: "reverb", ...window, level: 0.5 },
+          ],
+          "the outgoing leaves through a delay chained into reverb",
+        );
+      }
+    }
+  }
+
+  // ---- the wash and the grit share B's overlap span ----
+  const bSpanMs = durationMs * rateB;
+  const bSpanSec = bSpanMs / 1000;
+  const bEndSec = startBSec + bSpanSec;
+  const bBeats = bSpanSec / spbB;
+  const bWindow = {
+    side: "B" as const,
+    startMs: startBMs,
+    endMs: startBMs + bSpanMs,
+    beats: bBeats,
+  };
+  const vocalB = windowVocalReading(incoming, startBSec, bEndSec, profile);
+  const entryBeatB = beatsAtTime(inMap, bEndSec);
+  const entryEnergyB = entryEnergyOf(incoming, entryBeatB);
+
+  // ---- the wash (side B, over the overlap in B's time) ----
+  let wash: TransitionRecipe | null = null;
+  if (
+    bBeats >= 4 &&
+    vocalB.witnessed &&
+    vocalB.mean <= FX_WASH_MAX_VOCAL_ACTIVITY
+  ) {
+    wash =
+      (entryEnergyB ?? 0) >= 0.5
+        ? dress(
+            {
+              flanger: { rateHz: 0.3, depthMs: 1.2, feedback: 0.3, wet: 0.5 },
+            },
+            [{ kind: "flanger", ...bWindow, level: 0.35 }],
+            "the incoming arrives through a flanger wash",
+          )
+        : dress(
+            { phaser: { rateHz: 0.18, depth: 0.7, wet: 0.5 } },
+            [{ kind: "phaser", ...bWindow, level: 0.35 }],
+            "the incoming arrives through a phaser wash",
+          );
+  }
+
+  // ---- the chop (side A, ending at the handover) ----
+  let chop: TransitionRecipe | null = null;
+  const chopWindow = (beats: number): { startSec: number; startMs: number } => {
+    const startSec = startASec - beats * spbA;
+    return { startSec, startMs: startAMs - beats * spbA * 1000 };
+  };
+  const chopGatesPass = (startSec: number): boolean => {
+    if (startSec < request.outgoingPositionSec + 0.3) return false;
+    const vocal = windowVocalReading(outgoing, startSec, startASec, profile);
+    return vocal.witnessed && vocal.mean <= SCRATCH_MAX_VOCAL_ACTIVITY;
+  };
+  const rollWindow = chopWindow(2);
+  if (
+    chopGatesPass(rollWindow.startSec) &&
+    windowTransientRich(
+      outgoing,
+      beatsAtTime(outMap, rollWindow.startSec),
+      beatsAtTime(outMap, startASec),
+      rollWindow.startSec,
+      startASec,
+    )
+  ) {
+    chop = dress(
+      { roll: { sliceBeats: 0.5, feedback: 0.94 } },
+      [
+        {
+          kind: "roll",
+          side: "A",
+          startMs: rollWindow.startMs,
+          endMs: startAMs,
+          beats: 2,
+          level: 0.8,
+        },
+      ],
+      "the outgoing's last beats are rolled before the handover",
+    );
+  } else {
+    const transWindow = chopWindow(4);
+    if (chopGatesPass(transWindow.startSec)) {
+      chop = dress(
+        { trans: { divisionBeats: 0.5, depth: 0.85 } },
+        [
+          {
+            kind: "trans",
+            side: "A",
+            startMs: transWindow.startMs,
+            endMs: startAMs,
+            beats: 4,
+            level: 1,
+          },
+        ],
+        "the outgoing's last bars are chopped by a trans gate before the handover",
+      );
+    }
+  }
+
+  // ---- the grit (side B, over the wash's span) ----
+  let grit: TransitionRecipe | null = null;
+  const entryIsDrop =
+    entryIsLanding(incoming, entryBeatB) &&
+    incoming.drops.some((d) => Math.abs(d.beat - entryBeatB) <= 0.5);
+  if (
+    entryIsDrop &&
+    entryEnergyB !== null &&
+    entryEnergyB >= 0.65 &&
+    (profile.familyCosts.fx <= FX_GRIT_BOLD_MAX_FAMILY_COST ||
+      entryEnergyB >= FX_GRIT_UNIVERSAL_ENTRY_ENERGY) &&
+    vocalB.witnessed &&
+    vocalB.mean <= SCRATCH_MAX_VOCAL_ACTIVITY
+  ) {
+    grit = dress(
+      { distortion: { amount: 0.65, wet: 0.55 } },
+      [{ kind: "distortion", ...bWindow, level: 0.5 }],
+      "the incoming lands with distortion grit on its entry",
+    );
+  }
+
+  return [tail, wash, chop, grit].filter(
+    (variant): variant is TransitionRecipe => variant !== null,
+  );
+}
+
+// ---------------------------------------------------------------------
 // Enumeration
 // ---------------------------------------------------------------------
 
@@ -1192,6 +1521,16 @@ function signatureOf(recipe: TransitionRecipe): string {
     .map(
       (l) =>
         `${l.type}:${l.technique ?? ""}:${l.strokes ?? ""}:${Math.round(l.startMs)}-${Math.round(l.endMs)}`,
+    )
+    .join(",");
+  // The dressing is part of the plan: two dressings of the same
+  // base are different joins and must never collapse into one
+  // candidate, while identical dressings under several profiles
+  // still collapse to their first telling.
+  const effects = (recipe.effects ?? [])
+    .map(
+      (e) =>
+        `${e.kind}:${e.side}:${Math.round(e.startMs)}-${Math.round(e.endMs)}`,
     )
     .join(",");
   return [
@@ -1205,6 +1544,7 @@ function signatureOf(recipe: TransitionRecipe): string {
     // never collapse into one candidate.
     o.stretchB === null ? "rate" : `stretch:${o.stretchB.toFixed(4)}`,
     loops,
+    effects,
     recipe.fx.echo ? "echo" : "",
   ].join("|");
 }
@@ -1259,13 +1599,18 @@ export function candidatesForPair(
     });
   };
 
-  // The author's own answer under each temperament.
+  // The author's own answer under each temperament — and, with
+  // R3, the effect dressings that answer earns under the same
+  // temperament (authorEffectVariants' gates decide; identical
+  // dressings under several profiles collapse by signature).
   for (const profile of profiles) {
-    push(
-      authorRecipe({ ...request, profile }),
-      `author:${profile.id}`,
-      profile.id,
-    );
+    const base = authorRecipe({ ...request, profile });
+    push(base, `author:${profile.id}`, profile.id);
+    if (base) {
+      for (const variant of authorEffectVariants(base, request, profile)) {
+        push(variant, `fx:${profile.id}`, profile.id, "fx");
+      }
+    }
   }
 
   // The author's families as rivals, under the standard profile: a

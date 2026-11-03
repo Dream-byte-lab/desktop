@@ -8,6 +8,7 @@ import {
 import { routeDjCommand } from "@/features/mixer/engine/djCommandRouter";
 import { djSession } from "@/features/mixer/engine/djSession";
 import { playerRuntime } from "./playerRuntime";
+import { clampUserVolume } from "./volume";
 import { isRadioContext, shouldRefillRadio } from "./radioMode";
 import { pitchShifter } from "./pitchShifter";
 import { EQ_MAX_CUSTOM_PRESETS, EQ_PRESET_NAME_MAX } from "./equalizer";
@@ -30,6 +31,10 @@ import {
   isProvisionalLyricsCandidate,
   compareLyricsCandidates,
   isBetterLyricsCandidate,
+  fetchLrclibCandidate,
+  shouldAttemptLrclibFallback,
+  hasAttemptedLrclibFallback,
+  markLrclibFallbackAttempted,
   type CachedLyricsItem,
 } from "@/features/lyrics";
 import { preloadCoverArt } from "@/features/covers";
@@ -702,6 +707,12 @@ class PlayerEngine {
 
   public resume(): void {
     const store = usePlayerStore.getState();
+    // At the end of the queue the store clears the current track while
+    // the runtime keeps the finished track's source loaded. Resuming
+    // then would restart that source with no track on screen (and set
+    // a phantom "playing" status), so with nothing current there is
+    // nothing to resume: no status write, no runtime call.
+    if (!store.currentTrack) return;
     if (playerRuntime) {
       if (
         store.currentTrack &&
@@ -821,7 +832,7 @@ class PlayerEngine {
   }
 
   public setVolume(volume: number): void {
-    usePlayerStore.getState().setVolume(Math.min(1, Math.max(0, volume)));
+    usePlayerStore.getState().setVolume(clampUserVolume(volume));
   }
 
   public setVolumeSmooth(volume: number): void {
@@ -1594,6 +1605,11 @@ class PlayerEngine {
     const controller = new AbortController();
     this.lyricsAbort = controller;
     let bestCandidate: LyricsCandidate | null = null;
+    // LRCLIB fallback bookkeeping: only a stream that reaches its done
+    // event may trigger it — a thrown stream (outage) must not
+    let streamCompleted = false;
+    let streamInstrumental = false;
+    let streamCandidateCount = 0;
 
     const memoryCached = lyricsCache.get(trackId);
     let cached: CachedLyricsItem | CachedLyricsRecord | null =
@@ -1718,6 +1734,7 @@ class PlayerEngine {
         if (token !== this.lyricsLoadToken || controller.signal.aborted) break;
 
         if (event.type === "provider" && event.status === "found") {
+          ++streamCandidateCount;
           const candidate = event.candidate;
           const currentStore = useLyricsStore.getState();
           const option = {
@@ -1798,6 +1815,8 @@ class PlayerEngine {
             `provider ${event.provider} error: ${event.message}`,
           );
         } else if (event.type === "done") {
+          streamCompleted = true;
+          streamInstrumental = Boolean(event.instrumental);
           if (bestCandidate && shouldCacheLyricsCandidate(bestCandidate)) {
             const currentProviders =
               useLyricsStore.getState().availableProviders;
@@ -1845,6 +1864,102 @@ class PlayerEngine {
     } finally {
       if (token === this.lyricsLoadToken) {
         useLyricsStore.getState().setLyricsState({ lyricsLoading: false });
+      }
+    }
+
+    // LRCLIB fallback: the primary stream completed and found nothing, and
+    // no cached candidate was shown. A persisted LRCLIB candidate is shown
+    // with no network; otherwise one direct lrclib.net attempt per track
+    // per session. A stream exception never reaches here as a trigger
+    // because streamCompleted stays false.
+    if (
+      token === this.lyricsLoadToken &&
+      !controller.signal.aborted &&
+      streamCompleted &&
+      !bestCandidate &&
+      !streamInstrumental
+    ) {
+      const cachedFallback =
+        lyricsCache.getProvider(trackId, "lrclib") ||
+        (cached as CachedLyricsRecord | null)?.providers?.["lrclib"] ||
+        (cached as CachedLyricsRecord | null)?.availableProviders?.find(
+          (p) => p.provider.toLowerCase().trim() === "lrclib",
+        )?.candidate ||
+        null;
+
+      if (cachedFallback) {
+        const cachedItem = lyricsCache.get(trackId);
+        this.showLyricsCandidate(
+          trackId,
+          cachedFallback,
+          cachedItem?.availableProviders ||
+            (cached as CachedLyricsRecord | null)?.availableProviders || [
+              {
+                provider: cachedFallback.provider,
+                syncLevel: cachedFallback.syncLevel,
+                quality: cachedFallback.quality.total,
+                candidate: cachedFallback,
+              },
+            ],
+        );
+        log("cyan", "lyrics", `cached LRCLIB fallback for "${track.title}"`);
+      } else if (
+        shouldAttemptLrclibFallback({
+          streamCompleted,
+          candidateCount: streamCandidateCount,
+          instrumental: streamInstrumental,
+          enabled: useLyricsStore.getState().lrclibFallbackEnabled,
+          alreadyAttempted: hasAttemptedLrclibFallback(trackId),
+          hasCachedFallback: false,
+        })
+      ) {
+        markLrclibFallbackAttempted(trackId);
+        const fallbackCandidate = await fetchLrclibCandidate(
+          lyricsHint(track),
+          controller.signal,
+        );
+        if (token !== this.lyricsLoadToken || controller.signal.aborted) {
+          return;
+        }
+        if (fallbackCandidate) {
+          lyricsCache.setProvider(trackId, fallbackCandidate);
+          const fallbackProviders = lyricsCache.get(trackId)
+            ?.availableProviders || [
+            {
+              provider: fallbackCandidate.provider,
+              syncLevel: fallbackCandidate.syncLevel,
+              quality: fallbackCandidate.quality.total,
+              candidate: fallbackCandidate,
+            },
+          ];
+          lyricsCache.set(trackId, fallbackCandidate, fallbackProviders);
+          void linerDb.putLyrics({
+            trackId,
+            syncLevel: fallbackCandidate.syncLevel,
+            quality: fallbackCandidate.quality.total,
+            activeProvider: fallbackCandidate.provider,
+            availableProviders: fallbackProviders,
+            rawLyrics: fallbackCandidate.lyrics.content,
+            rawFormat: fallbackCandidate.lyrics.format,
+            candidate: fallbackCandidate,
+            // stale by construction: the next play shows this cached
+            // fallback instantly while the primary stream re-runs
+            lastCheckedAt: 0,
+            updatedAt: Date.now(),
+          });
+          this.showLyricsCandidate(
+            trackId,
+            fallbackCandidate,
+            fallbackProviders,
+          );
+          log(
+            "green",
+            "lyrics",
+            `LRCLIB fallback hit for "${track.title}" sync=${fallbackCandidate.syncLevel}`,
+          );
+        } else {
+          log("cyan", "lyrics", `LRCLIB fallback miss for "${track.title}"`);
+        }
       }
     }
   }

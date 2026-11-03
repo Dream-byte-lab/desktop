@@ -23,8 +23,12 @@ import { stretchChannelsOffThread } from "./stretchTrackRunner";
 //    audio and the analysis are kept per track, so asking again
 //    during the same session is free.
 //
-// Returns null when a track cannot be obtained in full — the session
-// treats such a track as unmixable and skips it rather than stalling.
+// Returns null when a track cannot be obtained in full — the audio
+// itself could not be downloaded or decoded, so nothing can play
+// it. A track that decodes but cannot be ANALYSED in time is a
+// different case (Note 20): it comes back as a playable shell
+// (mixable: false) — playable plainly, never blended — and the
+// analysis upgrades it in place when it lands in the background.
 //
 // Step 5 (slice S5-1) changes what "analysed" costs, in three ways:
 //
@@ -40,9 +44,11 @@ import { stretchChannelsOffThread } from "./stretchTrackRunner";
 //   one on the same PreparedTrack object when it lands — a session
 //   holding the object reads the deepened analysis at its next
 //   decision, because it reads `.analysis` when it decides, not when
-//   the track was prepared. Preparation therefore stays a one-track
-//   horizon: prepare the next track, deepen it in the background —
-//   never analyse the whole queue tail "just in case".
+//   the track was prepared. Note 20 adds the shell to the same
+//   pattern: an analysis that fails or outlasts ANALYSIS_WAIT_MS
+//   answers as a playable shell (mixable: false) and is upgraded in
+//   place when the real analysis lands behind it. Analysis is still
+//   never run over the whole queue tail "just in case".
 // - A BOUNDED BUFFER CACHE. V1 kept every decoded buffer forever
 //   (Note 7's memory-pressure suspect; v2's per-track data is
 //   bigger). The prepared map now holds at most MAX_PREPARED
@@ -55,10 +61,35 @@ export interface PreparedTrack {
   track: Track;
   buffer: AudioBuffer;
   analysis: TrackAnalysis;
+  /**
+   * Whether the analysis is real and the track may be blended.
+   * Absent means mixable (every preparation before Note 20, and the
+   * test fixtures that build PreparedTracks by hand). A track that
+   * decoded but could not be analysed in time is prepared with
+   * mixable: false and a shell analysis (see unanalysedShell): it
+   * can be PLAYED plainly, and the session must never author a
+   * blend into or out of it.
+   */
+  mixable?: boolean;
 }
 
-/** Decoded buffers kept warm at once: current + next + one beyond, plus slack. */
-const MAX_PREPARED = 4;
+/**
+ * How long preparation waits for the fast analysis before answering
+ * with a playable shell instead. The session's own preparation
+ * deadline is 45 s; the shell must arrive well inside it, or the
+ * session would (rightly) count the track as failed. A healthy fast
+ * pass lands in a small fraction of this.
+ */
+export const ANALYSIS_WAIT_MS = 15_000;
+
+/**
+ * Decoded buffers kept warm at once: the sounding track, its join
+ * partner while a blend sounds, the two preparation-horizon slots
+ * (Note 20), plus one of slack for landing churn — a join lands the
+ * incoming and promotes the second slot while the outgoing's entry
+ * is still referenced.
+ */
+const MAX_PREPARED = 5;
 
 const prepared = new Map<string, PreparedTrack>();
 const inFlight = new Map<string, Promise<PreparedTrack | null>>();
@@ -115,12 +146,70 @@ async function deepen(
     await putCachedAnalysis(entry.track.id, deep);
     if (prepared.get(entry.track.id) === entry) {
       entry.analysis = deep;
+      entry.mixable = true;
     }
   } catch {
     // A failed deepening leaves the fast analysis in place — it was
     // always a complete answer, just a shallower one.
   }
 }
+
+/**
+ * The shell analysis for a track that decoded but could not be
+ * analysed in time. What it claims is MEASURED from the decoded
+ * audio — the whole-track loudness (RMS) and the per-second energy
+ * curve (RMS, normalised) are true numbers, and they are all the
+ * session's plain playback of the track ever reads (level-matching
+ * only). Everything musical is EMPTY, not estimated: no tempo, no
+ * key, no drops, no vocal ranges. The entry's mixable: false is the
+ * contract that keeps every consumer from reading musical meaning
+ * into it, and the shell is never written to the analysis cache.
+ */
+function unanalysedShell(
+  buffer: AudioBuffer,
+  samples: Float32Array,
+): TrackAnalysis {
+  let sumSquares = 0;
+  for (let i = 0; i < samples.length; i += 1) {
+    sumSquares += samples[i] * samples[i];
+  }
+  const loudness =
+    samples.length > 0 ? Math.sqrt(sumSquares / samples.length) : 0;
+
+  const perSecond = Math.max(1, Math.floor(buffer.sampleRate));
+  const energyCurve: { timeSec: number; energy: number }[] = [];
+  let peak = 0;
+  for (let start = 0; start < samples.length; start += perSecond) {
+    const end = Math.min(samples.length, start + perSecond);
+    let windowSquares = 0;
+    for (let i = start; i < end; i += 1) {
+      windowSquares += samples[i] * samples[i];
+    }
+    const rms = Math.sqrt(windowSquares / Math.max(1, end - start));
+    if (rms > peak) peak = rms;
+    energyCurve.push({ timeSec: start / buffer.sampleRate, energy: rms });
+  }
+  for (const point of energyCurve) {
+    point.energy = peak > 0 ? point.energy / peak : 0;
+  }
+
+  return {
+    beatMap: {
+      bpm: 0,
+      firstBeatSec: 0,
+      beatsPerBar: 4,
+      durationSec: buffer.duration,
+    },
+    tempoConfidence: 0,
+    energyCurve,
+    drops: [],
+    key: null,
+    vocalRanges: [],
+    loudness,
+  };
+}
+
+const ANALYSIS_TIMED_OUT = Symbol("analysis-timed-out");
 
 async function prepare(track: Track): Promise<PreparedTrack | null> {
   try {
@@ -137,6 +226,7 @@ async function prepare(track: Track): Promise<PreparedTrack | null> {
         track,
         buffer,
         analysis: cached.analysis,
+        mixable: true,
       };
       rememberPrepared(result);
       return result;
@@ -144,13 +234,63 @@ async function prepare(track: Track): Promise<PreparedTrack | null> {
 
     let fast = cached?.analysis ?? null;
     if (!fast) {
-      fast = await analyseSamplesOffThread(samples, buffer.sampleRate, {
+      const fastPromise = analyseSamplesOffThread(samples, buffer.sampleRate, {
         depth: "fast",
+      }).catch(() => null);
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      const raced = await Promise.race([
+        fastPromise,
+        new Promise<typeof ANALYSIS_TIMED_OUT>((resolve) => {
+          timer = setTimeout(
+            () => resolve(ANALYSIS_TIMED_OUT),
+            ANALYSIS_WAIT_MS,
+          );
+        }),
+      ]).finally(() => {
+        if (timer) clearTimeout(timer);
       });
-      if (!fast) return null;
+      if (raced === ANALYSIS_TIMED_OUT || raced === null) {
+        // The audio is here and playable; only the analysis is
+        // missing or late. Answer with the shell now and let the
+        // analysis upgrade this very entry when it lands — the
+        // fast promise keeps running after a timeout, and a failed
+        // fast pass gets the deep pass as its background attempt
+        // (deepen upgrades in place and flips mixable when it
+        // lands; if neither lands, the shell stays a shell).
+        const shell: PreparedTrack = {
+          track,
+          buffer,
+          analysis: unanalysedShell(buffer, samples),
+          mixable: false,
+        };
+        rememberPrepared(shell);
+        if (raced === ANALYSIS_TIMED_OUT) {
+          void fastPromise.then((landed) => {
+            if (!landed) {
+              void deepen(shell, samples, buffer.sampleRate);
+              return;
+            }
+            void putCachedAnalysis(track.id, landed);
+            if (prepared.get(track.id) === shell) {
+              shell.analysis = landed;
+              shell.mixable = true;
+            }
+            void deepen(shell, samples, buffer.sampleRate);
+          });
+        } else {
+          void deepen(shell, samples, buffer.sampleRate);
+        }
+        return shell;
+      }
+      fast = raced;
       void putCachedAnalysis(track.id, fast);
     }
-    const result: PreparedTrack = { track, buffer, analysis: fast };
+    const result: PreparedTrack = {
+      track,
+      buffer,
+      analysis: fast,
+      mixable: true,
+    };
     rememberPrepared(result);
     void deepen(result, samples, buffer.sampleRate);
     return result;

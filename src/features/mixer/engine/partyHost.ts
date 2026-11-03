@@ -11,6 +11,7 @@ import { djSession } from "./djSession";
 import { guestStatus, type RaveDecision } from "./liveRave";
 import { searchListings, searchProgrammeTracks } from "./partyProgrammeSearch";
 import { useDjModeStore } from "../store/djModeStore";
+import { noteDeliberateStop } from "../store/djIntentWiring";
 import { usePartyStore, type PartyFeedItem } from "../store/partyStore";
 
 // The party host: the renderer-side half of liveRave, and the piece
@@ -109,7 +110,7 @@ class PartyHost {
     // a leftover whose panel vanished, say — end it completely
     // first, so nothing (reactions, feed, guests, published state)
     // can carry over into tonight. No silent no-ops.
-    if (this.isOpen) await this.stop();
+    if (this.isOpen) await this.stop(false);
     if (!djSession.isRunning) return false;
     const info = await bridge.partyStart();
     if (!info.running) return false;
@@ -132,7 +133,18 @@ class PartyHost {
     return true;
   }
 
-  async stop(): Promise<void> {
+  /**
+   * Ends the party and wipes every trace of it. `deliberate` marks
+   * a stop the host chose on purpose (the panel's End party): a
+   * deliberate stop also disarms the DJ intent auto-resume, so the
+   * night does not restart itself behind the host's back. Internal
+   * lifecycle stops (the poll seeing the session gone, the DJ-mode
+   * subscription, a restart's leftover cleanup) pass false — those
+   * follow the session's own end, whose reason already decided
+   * whether resuming is right.
+   */
+  async stop(deliberate = false): Promise<void> {
+    if (deliberate) noteDeliberateStop();
     const bridge = window.linerElectron;
     for (const unsubscribe of this.unsubscribers) unsubscribe();
     this.unsubscribers = [];
@@ -295,7 +307,7 @@ class PartyHost {
     // (The DJ-mode subscription below is the fast path to the same
     // end; this ground-truth check in the poll is the guarantee.)
     if (!djSession.isRunning) {
-      void this.stop();
+      void this.stop(false);
       return;
     }
     this.publishState(false);
@@ -399,6 +411,6 @@ export const partyHost = new PartyHost();
 // stopped, every trace wiped. The party never outlives the decks.
 useDjModeStore.subscribe((state, previous) => {
   if (previous.active && !state.active && partyHost.isOpen) {
-    void partyHost.stop();
+    void partyHost.stop(false);
   }
 });

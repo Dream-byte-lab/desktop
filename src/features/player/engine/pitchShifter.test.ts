@@ -1,9 +1,14 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   PitchShifterController,
+  pitchShifter,
   type AudioEffectsParams,
 } from "./pitchShifter";
 import { EQ_PRESETS } from "./equalizer";
+import {
+  visualizerTaps,
+  PlayerGraphTap,
+} from "../../greeting/lib/visualizerSource";
 
 type Target = FakeNode | FakeParam;
 
@@ -99,6 +104,36 @@ class FakeConvolver extends FakeNode {
   }
 }
 
+class FakeDynamicsCompressor extends FakeNode {
+  threshold: FakeParam;
+  knee: FakeParam;
+  ratio: FakeParam;
+  attack: FakeParam;
+  release: FakeParam;
+  constructor(ctx: FakeAudioContext) {
+    super(ctx, "dynamicsCompressor");
+    this.threshold = new FakeParam(this, -24);
+    this.knee = new FakeParam(this, 30);
+    this.ratio = new FakeParam(this, 12);
+    this.attack = new FakeParam(this, 0.003);
+    this.release = new FakeParam(this, 0.25);
+  }
+}
+
+class FakeAnalyser extends FakeNode {
+  fftSize = 2048;
+  smoothingTimeConstant = 0.8;
+  constructor(ctx: FakeAudioContext) {
+    super(ctx, "analyser");
+  }
+  get frequencyBinCount() {
+    return this.fftSize / 2;
+  }
+  getByteFrequencyData(array: Uint8Array) {
+    array.fill(0);
+  }
+}
+
 class FakeBufferSource extends FakeNode {
   buffer: unknown = null;
   loop = false;
@@ -156,6 +191,14 @@ class FakeAudioContext {
 
   createBufferSource() {
     return new FakeBufferSource(this);
+  }
+
+  createDynamicsCompressor() {
+    return new FakeDynamicsCompressor(this);
+  }
+
+  createAnalyser() {
+    return new FakeAnalyser(this);
   }
 
   createMediaElementSource(mediaElement: HTMLMediaElement) {
@@ -401,5 +444,114 @@ describe("audio effects graph idle cost", () => {
     expect(measure().suspended).toBe(false);
     await settle();
     expect(measure().suspended).toBe(true);
+  });
+
+  it("volume boost routes masterOut through boost and limiter", async () => {
+    await start();
+    controller.setUserVolume(2.5);
+    const ctx = FakeAudioContext.instances[0];
+    const graph = (window as any).__liner_pitch_graph;
+    expect(graph.boostConnected).toBe(true);
+    expect(graph.boostGain.gain.value).toBe(2.5);
+    expect(graph.masterOut.outputs.has(ctx.destination)).toBe(false);
+    expect(graph.masterOut.outputs.has(graph.boostGain)).toBe(true);
+    expect(graph.boostGain.outputs.has(graph.limiter)).toBe(true);
+    expect(graph.limiter.outputs.has(ctx.destination)).toBe(true);
+    expect(graph.limiter.threshold.value).toBe(-1);
+    expect(graph.limiter.knee.value).toBe(0);
+    expect(graph.limiter.ratio.value).toBe(20);
+    expect(graph.limiter.attack.value).toBe(0.002);
+    expect(graph.limiter.release.value).toBe(0.2);
+  });
+
+  it("volume at or below 1 never attaches and keeps the direct path", async () => {
+    const fresh = new PitchShifterController();
+    fresh.setUserVolume(0.5);
+    expect(fresh.isAttached()).toBe(false);
+
+    await start();
+    controller.setUserVolume(0.5);
+    const ctx = FakeAudioContext.instances[0];
+    const graph = (window as any).__liner_pitch_graph;
+    expect(graph.boostConnected).toBe(false);
+    expect(graph.boostGain.outputs.size).toBe(0);
+    expect(graph.masterOut.outputs.has(ctx.destination)).toBe(true);
+    expect(graph.masterOut.outputs.has(graph.boostGain)).toBe(false);
+  });
+
+  it("volume boost attaches on demand when above 1", () => {
+    const fresh = new PitchShifterController();
+    fresh.setUserVolume(2, audio);
+    expect(fresh.isAttached()).toBe(true);
+    const graph = (window as any).__liner_pitch_graph;
+    expect(graph.boostConnected).toBe(true);
+    expect(graph.boostGain.gain.value).toBe(2);
+  });
+
+  it("boost deactivation restores the direct wiring after teardown", async () => {
+    await start();
+    controller.setUserVolume(3);
+    controller.setUserVolume(0.8);
+    await vi.advanceTimersByTimeAsync(500);
+    const ctx = FakeAudioContext.instances[0];
+    const graph = (window as any).__liner_pitch_graph;
+    expect(graph.boostConnected).toBe(false);
+    expect(graph.masterOut.outputs.has(ctx.destination)).toBe(true);
+    expect(graph.masterOut.outputs.has(graph.boostGain)).toBe(false);
+    expect(graph.boostGain.outputs.size).toBe(0);
+    expect(graph.limiter.outputs.size).toBe(0);
+  });
+
+  it("keeps the boost when reactivated before teardown", async () => {
+    await start();
+    controller.setUserVolume(3);
+    controller.setUserVolume(0.8);
+    controller.setUserVolume(2);
+    await vi.advanceTimersByTimeAsync(500);
+    const graph = (window as any).__liner_pitch_graph;
+    expect(graph.boostConnected).toBe(true);
+    expect(graph.boostGain.gain.value).toBe(2);
+    expect(graph.masterOut.outputs.has(graph.boostGain)).toBe(true);
+  });
+
+  it("masterAnalyser is null before attach and cached per graph", async () => {
+    const fresh = new PitchShifterController();
+    expect(fresh.masterAnalyser()).toBeNull();
+
+    await start();
+    const graph = (window as any).__liner_pitch_graph;
+    const analyser = controller.masterAnalyser() as unknown as FakeAnalyser;
+    expect(analyser).not.toBeNull();
+    expect(graph.masterOutputGain.outputs.has(analyser)).toBe(true);
+    expect(analyser.fftSize).toBe(256);
+    expect(analyser.smoothingTimeConstant).toBe(0.5);
+    expect(controller.masterAnalyser()).toBe(analyser);
+
+    graph.version = 2;
+    controller.attach(audio);
+    const rebuiltGraph = (window as any).__liner_pitch_graph;
+    expect(rebuiltGraph).not.toBe(graph);
+    const rebuilt = controller.masterAnalyser() as unknown as FakeAnalyser;
+    expect(rebuilt).not.toBe(analyser);
+    expect(rebuiltGraph.masterOutputGain.outputs.has(rebuilt)).toBe(true);
+  });
+
+  it("attach registers the analyser tap on the exported singleton", () => {
+    pitchShifter.attach(audio);
+    expect(pitchShifter.isAttached()).toBe(true);
+    const entries = (visualizerTaps as any).entries as Array<{
+      tap: unknown;
+    }>;
+    const entry = entries.find(
+      (candidate) => (candidate.tap as { id?: string }).id === "player-graph",
+    );
+    expect(entry).toBeDefined();
+    expect(entry!.tap).not.toBeInstanceOf(PlayerGraphTap);
+    const tap = entry!.tap as {
+      analyser(): unknown;
+      isLive(): boolean;
+    };
+    expect(tap.isLive()).toBe(true);
+    expect(tap.analyser()).toBe(pitchShifter.masterAnalyser());
   });
 });

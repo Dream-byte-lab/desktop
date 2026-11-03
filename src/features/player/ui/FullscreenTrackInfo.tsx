@@ -12,6 +12,7 @@ import { ScrollableText } from "@/shared/ui";
 import { usePlayerStore } from "../store/playerStore";
 import { useGlassBlur } from "../store/visualModeStore";
 import { cn } from "@/shared/lib";
+import { DjDoorButton } from "./DjDoorButton";
 import { LikeMorphIcon } from "./LikeMorphIcon";
 
 interface FullscreenTrackInfoProps {
@@ -97,6 +98,8 @@ export function FullscreenTrackInfo({ onClose }: FullscreenTrackInfoProps) {
           <LikeMorphIcon liked={Boolean(isLiked)} size={20} />
         </button>
       )}
+
+      <DjDoorButton />
     </div>
   );
 }

@@ -198,8 +198,97 @@ export interface RecipeEcho {
   divisionBeats: number;
 }
 
+/** The effect kinds a recipe can name (the revamp's R3). */
+export type RecipeEffectKind =
+  | "reverb"
+  | "delay"
+  | "flanger"
+  | "phaser"
+  | "distortion"
+  | "spiral"
+  | "trans"
+  | "roll";
+
+export interface RecipeReverbFx {
+  decaySec: number;
+  wet: number;
+}
+
+export interface RecipeDelayFx {
+  /** Delay time in seconds — ABSOLUTE, authored from the side's tempo (the fx.echo precedent). */
+  delaySec: number;
+  feedback: number;
+  wet: number;
+}
+
+export interface RecipeFlangerFx {
+  rateHz: number;
+  depthMs: number;
+  feedback: number;
+  wet: number;
+}
+
+export interface RecipePhaserFx {
+  rateHz: number;
+  depth: number;
+  wet: number;
+}
+
+export interface RecipeDistortionFx {
+  amount: number;
+  wet: number;
+}
+
+export interface RecipeSpiralFx {
+  delaySec: number;
+  sweepToRatio: number;
+  feedback: number;
+  wet: number;
+}
+
+export interface RecipeTransFx {
+  divisionBeats: number;
+  depth: number;
+}
+
+export interface RecipeRollFx {
+  sliceBeats: number;
+  feedback: number;
+}
+
 export interface RecipeFx {
   echo?: RecipeEcho;
+  reverb?: RecipeReverbFx;
+  delay?: RecipeDelayFx;
+  flanger?: RecipeFlangerFx;
+  phaser?: RecipePhaserFx;
+  distortion?: RecipeDistortionFx;
+  spiral?: RecipeSpiralFx;
+  trans?: RecipeTransFx;
+  roll?: RecipeRollFx;
+  /**
+   * When true, the delay network's wet return also feeds the
+   * reverb input (the cascade) — delay into reverb, the classic
+   * spacious tail. The executor sets the cascade gain at the
+   * blend's start: 0.6 when this is true, 0 otherwise.
+   */
+  chainDelayIntoReverb?: boolean;
+}
+
+/**
+ * One performed effect window: a named effect, on one side, over a
+ * window of that side's track time — the loop blocks' convention.
+ * `level` is the peak send level for the send-class effects, the
+ * capture send level for roll, and 1 (unused) for trans, whose
+ * depth lives in its config.
+ */
+export interface RecipeEffectBlock {
+  kind: RecipeEffectKind;
+  side: "A" | "B";
+  startMs: number;
+  endMs: number;
+  beats: number;
+  level: number;
 }
 
 /**
@@ -279,6 +368,13 @@ export interface TransitionRecipe {
   };
   loops: RecipeLoopBlock[];
   fx: RecipeFx;
+  /**
+   * Performed effect windows (the revamp's R3). OPTIONAL on
+   * purpose — the R1/R2 optional-field precedent: new vocabulary
+   * must not churn every recipe constructor or test literal in
+   * the tree. Everywhere it is read: `recipe.effects ?? []`.
+   */
+  effects?: RecipeEffectBlock[];
   /** The analyses this recipe was authored against (REA's beats-hash lesson). */
   fingerprints: {
     aAudioHash: string | null;
@@ -493,6 +589,152 @@ export function validateRecipe(recipe: TransitionRecipe): string[] {
       errors.push("fx.echo.feedback outside [0, 0.9)");
     }
     if (e.wet < 0 || e.wet > 1) errors.push("fx.echo.wet outside [0, 1]");
+  }
+  if (recipe.fx.reverb) {
+    const c = recipe.fx.reverb;
+    if (!(c.decaySec > 0) || c.decaySec > 8) {
+      errors.push("fx.reverb.decaySec outside (0, 8]");
+    }
+    if (c.wet < 0 || c.wet > 1) errors.push("fx.reverb.wet outside [0, 1]");
+  }
+  if (recipe.fx.delay) {
+    const c = recipe.fx.delay;
+    if (!(c.delaySec > 0) || c.delaySec > 2) {
+      errors.push("fx.delay.delaySec outside (0, 2]");
+    }
+    if (c.feedback < 0 || c.feedback >= 0.9) {
+      errors.push("fx.delay.feedback outside [0, 0.9)");
+    }
+    if (c.wet < 0 || c.wet > 1) errors.push("fx.delay.wet outside [0, 1]");
+  }
+  if (recipe.fx.flanger) {
+    const c = recipe.fx.flanger;
+    if (!(c.rateHz > 0) || c.rateHz > 10) {
+      errors.push("fx.flanger.rateHz outside (0, 10]");
+    }
+    if (!(c.depthMs > 0) || c.depthMs > 5) {
+      errors.push("fx.flanger.depthMs outside (0, 5]");
+    }
+    if (c.feedback < 0 || c.feedback >= 0.9) {
+      errors.push("fx.flanger.feedback outside [0, 0.9)");
+    }
+    if (c.wet < 0 || c.wet > 1) errors.push("fx.flanger.wet outside [0, 1]");
+  }
+  if (recipe.fx.phaser) {
+    const c = recipe.fx.phaser;
+    if (!(c.rateHz > 0) || c.rateHz > 5) {
+      errors.push("fx.phaser.rateHz outside (0, 5]");
+    }
+    if (c.depth < 0 || c.depth > 1) {
+      errors.push("fx.phaser.depth outside [0, 1]");
+    }
+    if (c.wet < 0 || c.wet > 1) errors.push("fx.phaser.wet outside [0, 1]");
+  }
+  if (recipe.fx.distortion) {
+    const c = recipe.fx.distortion;
+    if (c.amount < 0 || c.amount > 1) {
+      errors.push("fx.distortion.amount outside [0, 1]");
+    }
+    if (c.wet < 0 || c.wet > 1) {
+      errors.push("fx.distortion.wet outside [0, 1]");
+    }
+  }
+  if (recipe.fx.spiral) {
+    const c = recipe.fx.spiral;
+    if (!(c.delaySec > 0) || c.delaySec > 2) {
+      errors.push("fx.spiral.delaySec outside (0, 2]");
+    }
+    if (c.sweepToRatio < 0.2 || c.sweepToRatio > 0.95) {
+      errors.push("fx.spiral.sweepToRatio outside [0.2, 0.95]");
+    }
+    if (c.feedback < 0 || c.feedback >= 0.9) {
+      errors.push("fx.spiral.feedback outside [0, 0.9)");
+    }
+    if (c.wet < 0 || c.wet > 1) errors.push("fx.spiral.wet outside [0, 1]");
+  }
+  if (recipe.fx.trans) {
+    const c = recipe.fx.trans;
+    if (c.divisionBeats < 0.25 || c.divisionBeats > 2) {
+      errors.push("fx.trans.divisionBeats outside [0.25, 2]");
+    }
+    if (!(c.depth > 0) || c.depth > 1) {
+      errors.push("fx.trans.depth outside (0, 1]");
+    }
+  }
+  if (recipe.fx.roll) {
+    const c = recipe.fx.roll;
+    if (c.sliceBeats < 0.25 || c.sliceBeats > 2) {
+      errors.push("fx.roll.sliceBeats outside [0.25, 2]");
+    }
+    if (c.feedback < 0.8 || c.feedback > 0.99) {
+      errors.push("fx.roll.feedback outside [0.8, 0.99]");
+    }
+  }
+  {
+    const blocks = recipe.effects ?? [];
+    const kinds: RecipeEffectKind[] = [
+      "reverb",
+      "delay",
+      "flanger",
+      "phaser",
+      "distortion",
+      "spiral",
+      "trans",
+      "roll",
+    ];
+    let rollCount = 0;
+    let spiralCount = 0;
+    for (const block of blocks) {
+      if (!kinds.includes(block.kind)) {
+        errors.push(
+          `effect block: kind ${block.kind} is not a known effect kind`,
+        );
+        continue;
+      }
+      if (block.kind === "roll") rollCount += 1;
+      if (block.kind === "spiral") spiralCount += 1;
+      if (!(block.endMs > block.startMs)) {
+        errors.push(
+          `effect ${block.kind} on ${block.side}: endMs must exceed startMs`,
+        );
+      }
+      if (!(block.beats > 0)) {
+        errors.push(`effect ${block.kind} on ${block.side}: beats must be > 0`);
+      }
+      if (block.level < 0 || block.level > 1) {
+        errors.push(
+          `effect ${block.kind} on ${block.side}: level ${block.level} outside [0, 1]`,
+        );
+      }
+      // An orphan block is unperformable: the block names WHEN,
+      // the fx config names HOW (its network tuning). Without
+      // the config there is nothing honest to perform.
+      if (!recipe.fx[block.kind]) {
+        errors.push(
+          `effect ${block.kind} on ${block.side}: no fx.${block.kind} config for this block`,
+        );
+      }
+    }
+    // Roll and spiral each own shared network parameters (the
+    // roll's delay time and feedback, the spiral's sweeping
+    // delay) — two of either in one recipe would fight over one
+    // network, so the recipe may carry at most one of each.
+    if (rollCount > 1) {
+      errors.push("at most one roll block per recipe");
+    }
+    if (spiralCount > 1) {
+      errors.push("at most one spiral block per recipe");
+    }
+    for (let i = 0; i < blocks.length; i += 1) {
+      for (let j = i + 1; j < blocks.length; j += 1) {
+        const x = blocks[i];
+        const y = blocks[j];
+        if (x.kind !== y.kind || x.side !== y.side) continue;
+        if (x.startMs < y.endMs && y.startMs < x.endMs) {
+          errors.push(`effect ${x.kind} on ${x.side}: blocks overlap in time`);
+        }
+      }
+    }
   }
   return errors;
 }

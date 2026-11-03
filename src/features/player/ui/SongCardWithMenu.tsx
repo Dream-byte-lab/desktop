@@ -1,6 +1,12 @@
 import { memo, useCallback, useMemo, useState } from "react";
+import { HeartFill, HeartLine } from "@mingcute/react";
 import SongCard from "./SongCard";
 import { useSongMenuItems } from "../hooks/useSongMenuItems";
+import {
+  useIsTrackLiked,
+  useLikeTrack,
+  useUnlikeTrack,
+} from "@/features/library";
 import { playerEngine } from "../engine/playerEngine";
 import { usePlayerStore } from "../store/playerStore";
 import { useToast } from "@/shared/ui";
@@ -104,6 +110,37 @@ function SongCardWithMenu({
     onRemoveFromDevice,
   });
 
+  // One-click like heart (upstream #250). It mirrors the menu's Like
+  // action exactly: track rows only (the menu builds no like item for
+  // album/artist/playlist rows), cloud tracks only (the menu drops its
+  // like item for local-device tracks — see CLOUD_ONLY_ITEMS in
+  // useSongMenuItems), and a real track id. State and toggling ride the
+  // shared library machinery (useIsTrackLiked / useLikeTrack /
+  // useUnlikeTrack), so Liked Songs and every other view update at once.
+  const likeable =
+    Boolean(id) &&
+    (searchType === "track" || !searchType) &&
+    !isLocalTrackId(id);
+  const liked = useIsTrackLiked(likeable ? id : undefined);
+  const likeMutation = useLikeTrack();
+  const unlikeMutation = useUnlikeTrack();
+
+  const handleLikeToggle = useCallback(
+    (e: React.MouseEvent) => {
+      // The row plays on click: the heart must never fall through to it,
+      // and it must not open the menu either.
+      e.preventDefault();
+      e.stopPropagation();
+      if (!id) return;
+      if (liked) {
+        unlikeMutation.mutate(id);
+      } else {
+        likeMutation.mutate(id);
+      }
+    },
+    [id, liked, likeMutation, unlikeMutation],
+  );
+
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuPosition, setMenuPosition] = useState<{
     x: number;
@@ -112,6 +149,29 @@ function SongCardWithMenu({
 
   const { t } = useTranslation();
   const { toast } = useToast();
+
+  // SongCard renders trailingAction immediately right of the ⋮ button,
+  // which is exactly where upstream #250 wants the heart: [⋮] [♡]. Any
+  // trailing action a consumer supplied keeps its place after the heart.
+  // Like the ⋮ button it is always rendered (SongCard never hover-hides
+  // the ⋮), so touch and narrow windows keep a reachable target; the
+  // filled accent heart still reads at a glance when the track is liked.
+  const likeButton = likeable ? (
+    <button
+      type="button"
+      aria-label={liked ? t("common.unlike") : t("common.like")}
+      aria-pressed={liked}
+      title={liked ? t("common.unlike") : t("common.like")}
+      onClick={handleLikeToggle}
+      className={`rounded-control bg-transparent border-0 p-0 transition-all duration-150 active:scale-[0.96] flex items-center justify-center cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-text-secondary ${
+        liked
+          ? "text-accent-primary"
+          : "text-text-secondary hover:text-text-primary"
+      }`}
+    >
+      {liked ? <HeartFill size={20} /> : <HeartLine size={20} />}
+    </button>
+  ) : null;
   const trackDoubleClickBehavior = usePlayerStore(
     (state) => state.trackDoubleClickBehavior,
   );
@@ -191,7 +251,14 @@ function SongCardWithMenu({
       icon={icon}
       showReorderHandle={showReorderHandle}
       onGrabStart={onGrabStart}
-      trailingAction={trailingAction}
+      trailingAction={
+        likeButton || trailingAction ? (
+          <>
+            {likeButton}
+            {trailingAction}
+          </>
+        ) : undefined
+      }
     />
   );
 }

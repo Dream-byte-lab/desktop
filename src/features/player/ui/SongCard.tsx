@@ -150,6 +150,13 @@ function SongCard({
       onContextMenu={onContextMenu}
       onKeyDown={(event) => {
         if (!onPlay) return;
+        // Keys aimed at an inner control (the ⋮ menu, the like heart, an
+        // artist link) belong to that control, not to row playback.
+        if (
+          (event.target as HTMLElement).closest("button, a, [role='menuitem']")
+        ) {
+          return;
+        }
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
           onPlay();

@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { userDisplayName } from "@/entities/user";
 import { useAuthStore } from "@/features/auth";
 import { composeFreshGreeting } from "../lib/compose";
+import { GreetingVisualizer } from "./GreetingVisualizer";
 import {
   deriveSessionContext,
   loadGreetingMemory,
@@ -18,6 +19,12 @@ import {
 // composed fresh for this exact moment (see lib/compose.ts) and
 // recorded in the no-repeat memory, so the listener never sees the
 // same greeting twice.
+//
+// The surface (design reference 34): a minimal glass band in the
+// design foundation's material — behind the greeting text, a frosted
+// layer; behind the frost, a live visualizer breathing on a slow
+// heartbeat (see ui/GreetingVisualizer.tsx). The words and their
+// cadence are unchanged; only the surface they speak through moved.
 
 const SHOW_DELAY_MS = 500;
 const VISIBLE_MS = 4600;
@@ -75,17 +82,24 @@ export function WelcomeGreeting() {
             }
             exit={{ opacity: 0, y: reduceMotion ? 0 : -8 }}
             transition={{ duration: 0.45, ease: [0.22, 1, 0.36, 1] }}
-            className="rounded-2xl border border-border-tertiary bg-bg-primary/90 px-5 py-3 text-center shadow-xl backdrop-blur-md"
+            className="relative overflow-hidden rounded-panel text-center shadow-xl ring-1 ring-inset ring-rim"
             role="status"
           >
-            <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-text-secondary">
-              {dateLine}
-            </div>
-            <div className="mt-0.5 text-xl font-semibold text-text-primary">
-              {greeting.headline}
-            </div>
-            <div className="text-sm text-text-secondary">
-              {greeting.subline}
+            <GreetingVisualizer active={visible} />
+            <div
+              aria-hidden
+              className="absolute inset-0 bg-surface-glass backdrop-blur-[16px] backdrop-saturate-150"
+            />
+            <div className="relative px-5 py-3">
+              <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-text-secondary">
+                {dateLine}
+              </div>
+              <div className="mt-0.5 text-xl font-semibold text-text-primary">
+                {greeting.headline}
+              </div>
+              <div className="text-sm text-text-secondary">
+                {greeting.subline}
+              </div>
             </div>
           </motion.div>
         ) : null}

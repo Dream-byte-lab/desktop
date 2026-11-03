@@ -5,10 +5,16 @@ import {
   eqPreampDb,
   isEqActive,
 } from "./equalizer";
+import {
+  createAnalyserTap,
+  registerVisualizerTap,
+  VISUALIZER_TAP_ID,
+  VISUALIZER_TAP_PRIORITY,
+} from "@/features/greeting/lib/visualizerSource";
 
 const GRAIN_PERIOD = 0.038;
 const NUM_TAPS = 4;
-const GRAPH_VERSION = 2;
+const GRAPH_VERSION = 3;
 const BRANCH_TEARDOWN_MS = 200;
 const IDLE_SUSPEND_MS = 400;
 const REVERB_TAIL_SUSPEND_MS = 3000;
@@ -210,7 +216,7 @@ function createReverbImpulseResponse(context: AudioContext): AudioBuffer {
   return buffer;
 }
 
-type BranchName = "pitch" | "reverb" | "eq";
+type BranchName = "pitch" | "reverb" | "eq" | "boost";
 
 interface AudioEffectsGraph {
   version: number;
@@ -232,6 +238,10 @@ interface AudioEffectsGraph {
   eqChainGain: GainNode;
   eqBypassGain: GainNode;
   eqConnected: boolean;
+  masterOut: GainNode;
+  boostGain: GainNode;
+  limiter: DynamicsCompressorNode;
+  boostConnected: boolean;
   teardowns: Record<BranchName, ReturnType<typeof setTimeout> | null>;
 }
 
@@ -343,7 +353,7 @@ function setEqStage(
     cancelTeardown(graph, "eq");
     if (!graph.eqConnected) {
       graph.masterOutputGain.connect(graph.eqPreamp);
-      graph.eqChainGain.connect(graph.ctx.destination);
+      graph.eqChainGain.connect(graph.masterOut);
       graph.eqConnected = true;
     }
   }
@@ -364,7 +374,37 @@ function setEqStage(
     if (!graph.eqConnected) return;
     graph.eqConnected = false;
     graph.masterOutputGain.disconnect(graph.eqPreamp);
-    graph.eqChainGain.disconnect(graph.ctx.destination);
+    graph.eqChainGain.disconnect(graph.masterOut);
+  });
+}
+
+function setBoostStage(
+  graph: AudioEffectsGraph,
+  volume: number,
+  now: number,
+): void {
+  if (volume > 1) {
+    cancelTeardown(graph, "boost");
+    if (!graph.boostConnected) {
+      graph.masterOut.disconnect(graph.ctx.destination);
+      graph.masterOut.connect(graph.boostGain);
+      graph.boostGain.connect(graph.limiter);
+      graph.limiter.connect(graph.ctx.destination);
+      graph.boostConnected = true;
+    }
+    graph.boostGain.gain.setTargetAtTime(volume, now, 0.03);
+    return;
+  }
+
+  if (!graph.boostConnected) return;
+  graph.boostGain.gain.setTargetAtTime(1, now, 0.03);
+  scheduleTeardown(graph, "boost", () => {
+    if (!graph.boostConnected) return;
+    graph.boostConnected = false;
+    graph.masterOut.disconnect(graph.boostGain);
+    graph.boostGain.disconnect();
+    graph.limiter.disconnect();
+    graph.masterOut.connect(graph.ctx.destination);
   });
 }
 
@@ -392,6 +432,9 @@ function disposeStaleGraph(graph: any): void {
     for (const filter of graph.eqFilters ?? []) filter.disconnect();
     graph.eqChainGain?.disconnect();
     graph.eqBypassGain?.disconnect();
+    graph.masterOut?.disconnect();
+    graph.boostGain?.disconnect();
+    graph.limiter?.disconnect();
   } catch {}
 }
 
@@ -460,8 +503,22 @@ function buildGraph(
   }
   eqTail.connect(eqChainGain);
 
+  const masterOut = ctx.createGain();
+  masterOut.gain.value = 1.0;
+
+  const boostGain = ctx.createGain();
+  boostGain.gain.value = 1.0;
+
+  const limiter = ctx.createDynamicsCompressor();
+  limiter.threshold.value = -1.0;
+  limiter.knee.value = 0;
+  limiter.ratio.value = 20;
+  limiter.attack.value = 0.002;
+  limiter.release.value = 0.2;
+
   masterOutputGain.connect(eqBypassGain);
-  eqBypassGain.connect(ctx.destination);
+  eqBypassGain.connect(masterOut);
+  masterOut.connect(ctx.destination);
 
   return {
     version: GRAPH_VERSION,
@@ -483,7 +540,11 @@ function buildGraph(
     eqChainGain,
     eqBypassGain,
     eqConnected: false,
-    teardowns: { pitch: null, reverb: null, eq: null },
+    masterOut,
+    boostGain,
+    limiter,
+    boostConnected: false,
+    teardowns: { pitch: null, reverb: null, eq: null, boost: null },
   };
 }
 
@@ -494,6 +555,11 @@ export class PitchShifterController {
   private audio: HTMLAudioElement | null = null;
   private isConnected = false;
   private suspendTimer: ReturnType<typeof setTimeout> | null = null;
+  private analyserCache: {
+    graph: AudioEffectsGraph;
+    analyser: AnalyserNode;
+  } | null = null;
+  private tapRegistered = false;
 
   public attach(audio: HTMLAudioElement): void {
     if (typeof window === "undefined") return;
@@ -556,6 +622,10 @@ export class PitchShifterController {
           g.eqPreamp &&
           g.eqChainGain &&
           g.eqBypassGain &&
+          g.masterOut &&
+          g.boostGain &&
+          g.limiter &&
+          g.boostConnected !== undefined &&
           g.eqFilters?.length === EQ_BANDS.length,
         );
       };
@@ -582,6 +652,17 @@ export class PitchShifterController {
       this.graph = graph;
       this.audio = audio;
       this.isConnected = true;
+      if (!this.tapRegistered) {
+        this.tapRegistered = true;
+        registerVisualizerTap(
+          createAnalyserTap(
+            VISUALIZER_TAP_ID.PLAYER_GRAPH,
+            () => pitchShifter.masterAnalyser(),
+            () => pitchShifter.isAttached(),
+          ),
+          VISUALIZER_TAP_PRIORITY.PLAYER_GRAPH,
+        );
+      }
       this.bindPlaybackState(audio);
       this.resumeContext();
     } catch (err) {
@@ -592,6 +673,46 @@ export class PitchShifterController {
 
   public isAttached(): boolean {
     return this.isConnected;
+  }
+
+  public setUserVolume(volume: number, audio?: HTMLAudioElement): void {
+    const v = Math.max(0, volume);
+    if (v > 1 && !this.isConnected) {
+      let el = audio;
+      if (!el && typeof window !== "undefined") {
+        const win = window as any;
+        el =
+          win.__liner_audio ||
+          (typeof document !== "undefined" &&
+            document.getElementById("liner-audio"));
+      }
+      if (el) {
+        this.attach(el as HTMLAudioElement);
+      }
+    }
+    if (!this.isConnected || !this.graph || !this.context) {
+      return;
+    }
+    setBoostStage(this.graph, v, this.context.currentTime);
+  }
+
+  public masterAnalyser(): AnalyserNode | null {
+    if (!this.graph || !this.context) {
+      return null;
+    }
+    if (this.analyserCache && this.analyserCache.graph === this.graph) {
+      return this.analyserCache.analyser;
+    }
+    try {
+      const analyser = this.graph.ctx.createAnalyser();
+      analyser.fftSize = 256;
+      analyser.smoothingTimeConstant = 0.5;
+      this.graph.masterOutputGain.connect(analyser);
+      this.analyserCache = { graph: this.graph, analyser };
+      return analyser;
+    } catch {
+      return null;
+    }
   }
 
   public resumeContext(): void {

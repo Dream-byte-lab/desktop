@@ -11,6 +11,7 @@ import {
   normalizeEqGains,
   type EqCustomPreset,
 } from "../engine/equalizer";
+import { clampUserVolume } from "../engine/volume";
 
 export { debouncedStorage };
 
@@ -56,12 +57,14 @@ export interface QueueState {
 
 export interface SessionState {
   volume: number;
+  volumeBoostAvailable: boolean;
   repeat: RepeatMode;
   shuffle: boolean;
   audioQuality: AudioQuality;
   miniPlayerStyle: MiniPlayerStyle;
   accentVariant: AccentVariant;
   pauseOnDeviceChange: boolean;
+  keepPlayingWhenScreenOff: boolean;
   autoplaySimilar: boolean;
   trackDoubleClickBehavior: TrackDoubleClickBehavior;
   defaultPlaybackContext: DefaultPlaybackContext;
@@ -111,6 +114,7 @@ export interface PlayerStore extends PlayerState {
   setRepeat: (mode: RepeatMode) => void;
   setShuffle: (shuffle: boolean) => void;
   setVolume: (volume: number) => void;
+  setVolumeBoostAvailable: (available: boolean) => void;
   setCurrentTrack: (track: Track | null, index: number) => void;
   setQueue: (queue: Track[]) => void;
   setPlaybackContext: (context: string | null) => void;
@@ -119,6 +123,7 @@ export interface PlayerStore extends PlayerState {
   setMiniPlayerStyle: (style: MiniPlayerStyle) => void;
   setAccentVariant: (variant: AccentVariant) => void;
   setPauseOnDeviceChange: (value: boolean) => void;
+  setKeepPlayingWhenScreenOff: (value: boolean) => void;
   setAutoplaySimilar: (value: boolean) => void;
   setTrackDoubleClickBehavior: (value: TrackDoubleClickBehavior) => void;
   setDefaultPlaybackContext: (value: DefaultPlaybackContext) => void;
@@ -185,12 +190,14 @@ export const usePlayerStore = create<PlayerStore>()(
 
       // SessionSlice
       volume: 1,
+      volumeBoostAvailable: true,
       repeat: "off",
       shuffle: false,
       audioQuality: "high",
       miniPlayerStyle: "default",
       accentVariant: "default",
       pauseOnDeviceChange: true,
+      keepPlayingWhenScreenOff: true,
       autoplaySimilar: true,
       trackDoubleClickBehavior: "play",
       defaultPlaybackContext: "resume",
@@ -215,7 +222,9 @@ export const usePlayerStore = create<PlayerStore>()(
       setPlaybackMode: (playbackMode) => set({ playbackMode }),
       setRepeat: (repeat) => set({ repeat }),
       setShuffle: (shuffle) => set({ shuffle }),
-      setVolume: (volume) => set({ volume }),
+      setVolume: (volume) => set({ volume: clampUserVolume(volume) }),
+      setVolumeBoostAvailable: (available) =>
+        set({ volumeBoostAvailable: available }),
       setCurrentTrack: (currentTrack, currentIndex) => {
         const prev = get().currentTrack;
         const isDifferent = prev?.id !== currentTrack?.id;
@@ -236,6 +245,8 @@ export const usePlayerStore = create<PlayerStore>()(
         set({ accentVariant }),
       setPauseOnDeviceChange: (pauseOnDeviceChange: boolean) =>
         set({ pauseOnDeviceChange }),
+      setKeepPlayingWhenScreenOff: (keepPlayingWhenScreenOff: boolean) =>
+        set({ keepPlayingWhenScreenOff }),
       setAutoplaySimilar: (autoplaySimilar: boolean) =>
         set({ autoplaySimilar }),
       setTrackDoubleClickBehavior: (
@@ -393,6 +404,7 @@ export const usePlayerStore = create<PlayerStore>()(
         miniPlayerStyle: state.miniPlayerStyle,
         accentVariant: state.accentVariant,
         pauseOnDeviceChange: state.pauseOnDeviceChange,
+        keepPlayingWhenScreenOff: state.keepPlayingWhenScreenOff,
         autoplaySimilar: state.autoplaySimilar,
         trackDoubleClickBehavior: state.trackDoubleClickBehavior,
         defaultPlaybackContext: state.defaultPlaybackContext,

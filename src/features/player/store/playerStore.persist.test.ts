@@ -129,6 +129,25 @@ describe("player store persistence under playback ticks", () => {
     expect(state.volume).toBe(0.4);
   });
 
+  it("clamps setVolume to the 0..5 user-volume range and persists a >100% volume", async () => {
+    const first = await loadStore();
+    expect(first.usePlayerStore.getState().volumeBoostAvailable).toBe(true);
+    first.usePlayerStore.getState().setVolume(6);
+    expect(first.usePlayerStore.getState().volume).toBe(5);
+    first.usePlayerStore.getState().setVolume(-1);
+    expect(first.usePlayerStore.getState().volume).toBe(0);
+    first.usePlayerStore.getState().setVolumeBoostAvailable(false);
+    expect(first.usePlayerStore.getState().volumeBoostAvailable).toBe(false);
+    first.usePlayerStore.getState().setVolume(3);
+    expect(first.usePlayerStore.getState().volume).toBe(3);
+    first.flush();
+
+    const second = await loadStore();
+    expect(second.usePlayerStore.getState().volume).toBe(3);
+    // availability is re-proven per session, not persisted
+    expect(second.usePlayerStore.getState().volumeBoostAvailable).toBe(true);
+  });
+
   it("restores the resume position saved on pause", async () => {
     const first = await loadStore();
     const queue = makeQueue(5);

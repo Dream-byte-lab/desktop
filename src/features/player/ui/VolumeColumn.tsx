@@ -4,7 +4,12 @@ import { useTranslation } from "@/languages";
 import { cn } from "@/shared/lib";
 import { usePlayerState } from "../hooks/usePlayerState";
 import { playerEngine } from "../engine/playerEngine";
-import { toVolumeGain, toVolumeLevel } from "../engine/volume";
+import {
+  FULL_VOLUME_LEVEL,
+  toVolumeGain,
+  toVolumeLevel,
+} from "../engine/volume";
+import { usePlayerStore } from "../store/playerStore";
 
 export interface VolumeColumnProps {
   onDraggingChange?: (dragging: boolean) => void;
@@ -12,9 +17,9 @@ export interface VolumeColumnProps {
 
 const WHEEL_STEP = 0.04;
 const KEY_STEP = 0.05;
+// A level, not a gain: under the boosted map FULL_VOLUME_LEVEL (0.7) is
+// exactly 100% gain, so restoring to this level restores unity volume.
 const DEFAULT_RESTORE_LEVEL = 0.7;
-
-const clampLevel = (level: number) => Math.min(1, Math.max(0, level));
 
 function VolumeIcon({ percent }: { percent: number }) {
   if (percent === 0) return <VolumeCross size={14} weight="Bold" />;
@@ -25,11 +30,24 @@ function VolumeIcon({ percent }: { percent: number }) {
 export function VolumeColumn({ onDraggingChange }: VolumeColumnProps) {
   const { t } = useTranslation();
   const player = usePlayerState();
+  // The engine's PlayerState does not carry boost availability; read it
+  // from the store (same pattern as DjModeButton).
+  const boostAvailable = usePlayerStore((state) => state.volumeBoostAvailable);
+  // Truthful ceiling: without boost the control cannot travel past the
+  // 100% mark, so it never promises gain it cannot deliver.
+  const ceiling = boostAvailable ? 1 : FULL_VOLUME_LEVEL;
+  const clampLevel = (level: number) => Math.min(ceiling, Math.max(0, level));
   const trackRef = useRef<HTMLDivElement>(null);
   const restoreLevelRef = useRef(DEFAULT_RESTORE_LEVEL);
   const [dragLevel, setDragLevel] = useState<number | null>(null);
   const level = dragLevel ?? toVolumeLevel(player.volume);
-  const percent = Math.round(level * 100);
+  // Travel and gain percent are different numbers now: travel (level)
+  // drives the fill, gain percent drives the label, icon and aria.
+  const fillPercent = Math.round(level * 100);
+  const gainPercent = Math.round(
+    (dragLevel !== null ? toVolumeGain(dragLevel) : player.volume) * 100,
+  );
+  const boosted = gainPercent > 100;
 
   const apply = (next: number) => {
     const clamped = clampLevel(next);
@@ -73,7 +91,7 @@ export function VolumeColumn({ onDraggingChange }: VolumeColumnProps) {
           : event.key === "Home"
             ? 0
             : event.key === "End"
-              ? 1
+              ? ceiling
               : null;
     if (next === null) return;
     event.preventDefault();
@@ -83,7 +101,14 @@ export function VolumeColumn({ onDraggingChange }: VolumeColumnProps) {
   const toggleMute = () => apply(level === 0 ? restoreLevelRef.current : 0);
 
   const label = (
-    <span className="text-[10px] font-[700] tabular-nums">{percent}%</span>
+    <span
+      className={cn(
+        "text-[10px] font-[700] tabular-nums",
+        boosted && "text-accent-primary",
+      )}
+    >
+      {gainPercent}%
+    </span>
   );
 
   return (
@@ -94,8 +119,8 @@ export function VolumeColumn({ onDraggingChange }: VolumeColumnProps) {
       aria-label={t("player.volume") || "Volume"}
       aria-orientation="vertical"
       aria-valuemin={0}
-      aria-valuemax={100}
-      aria-valuenow={percent}
+      aria-valuemax={500}
+      aria-valuenow={gainPercent}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
@@ -111,7 +136,7 @@ export function VolumeColumn({ onDraggingChange }: VolumeColumnProps) {
           "absolute inset-x-0 bottom-0 bg-text-primary/85",
           dragLevel === null && "transition-[height] duration-100 ease-out",
         )}
-        style={{ height: `${percent}%` }}
+        style={{ height: `${fillPercent}%` }}
       />
       <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-between py-[6px] text-text-primary">
         <button
@@ -119,13 +144,13 @@ export function VolumeColumn({ onDraggingChange }: VolumeColumnProps) {
           onPointerDown={(event) => event.stopPropagation()}
           onClick={toggleMute}
           aria-label={
-            percent === 0
+            gainPercent === 0
               ? t("player.unmute") || "Unmute"
               : t("player.mute") || "Mute"
           }
           className="pointer-events-auto flex size-[20px] items-center justify-center rounded-full border-0 bg-transparent p-0 text-inherit"
         >
-          <VolumeIcon percent={percent} />
+          <VolumeIcon percent={gainPercent} />
         </button>
         {label}
       </div>
@@ -134,14 +159,21 @@ export function VolumeColumn({ onDraggingChange }: VolumeColumnProps) {
           "pointer-events-none absolute inset-0 flex flex-col items-center justify-between py-[6px] text-bg-primary",
           dragLevel === null && "transition-[clip-path] duration-100 ease-out",
         )}
-        style={{ clipPath: `inset(${100 - percent}% 0 0 0)` }}
+        style={{ clipPath: `inset(${100 - fillPercent}% 0 0 0)` }}
         aria-hidden="true"
       >
         <span className="flex size-[20px] items-center justify-center">
-          <VolumeIcon percent={percent} />
+          <VolumeIcon percent={gainPercent} />
         </span>
         {label}
       </div>
+      {/* 100% tick: the hairline where gain crosses unity; everything
+          above it is boost. */}
+      <div
+        className="pointer-events-none absolute inset-x-0 h-[2px] bg-accent-primary/80"
+        style={{ bottom: `${FULL_VOLUME_LEVEL * 100}%` }}
+        aria-hidden="true"
+      />
     </div>
   );
 }

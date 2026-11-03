@@ -49,6 +49,15 @@ export const DECISION_PROFILE_VERSION = 2;
  * transformer / flare), priced per profile below: standard pays
  * full theatre price but can reach it, adventurous pays less,
  * conservative prices it out of its own authoring reach entirely.
+ * fx joined with the revamp's R3 — one family for the whole effects
+ * rack (reverb / delay / flanger / phaser / distortion / spiral /
+ * trans / roll), its variants chosen by stated rules in
+ * candidates.ts and priced like the other theatre below: standard
+ * and adventurous can author it, conservative prices it out of its
+ * own authoring reach, mirroring its scratch / stop stance. (As
+ * with R1 and R2, DECISION_PROFILE_VERSION is not bumped for the
+ * addition: the version stamps the judgement VALUES a profile was
+ * written against, and every pre-existing value is untouched.)
  */
 export type JoinFamily =
   | "long-blend"
@@ -62,6 +71,7 @@ export type JoinFamily =
   | "spinback"
   | "vinyl-stop"
   | "scratch"
+  | "fx"
   | "let-it-play"
   | "early-cut";
 
@@ -77,6 +87,7 @@ export const JOIN_FAMILIES: readonly JoinFamily[] = [
   "spinback",
   "vinyl-stop",
   "scratch",
+  "fx",
   "let-it-play",
   "early-cut",
 ];
@@ -133,7 +144,9 @@ export interface DecisionProfile {
    * evidence score: what this profile thinks a family must earn its
    * way past. Spinback and vinyl-stop are priced as habits to break,
    * per the blueprint — rare by design. Scratch (R2) is priced the
-   * same way: the dearest family a profile will still author.
+   * same way: the dearest family a profile will still author. Fx
+   * (R3) is priced like the other theatre — at the stop family's
+   * tier, under the same authoring ceiling.
    */
   familyCosts: Record<JoinFamily, number>;
   /**
@@ -215,6 +228,7 @@ export const STANDARD_PROFILE: DecisionProfile = {
     spinback: 0.45,
     "vinyl-stop": 0.45,
     scratch: 0.5,
+    fx: 0.45,
   },
   weights: {
     keyFit: 0.22,
@@ -276,6 +290,7 @@ export const CONSERVATIVE_PROFILE: DecisionProfile = {
     spinback: 0.6,
     "vinyl-stop": 0.6,
     scratch: 0.75,
+    fx: 0.7,
   },
   weights: {
     keyFit: 0.25,
@@ -339,6 +354,7 @@ export const ADVENTUROUS_PROFILE: DecisionProfile = {
     spinback: 0.3,
     "vinyl-stop": 0.3,
     scratch: 0.35,
+    fx: 0.3,
   },
   weights: {
     keyFit: 0.16,
