@@ -479,6 +479,21 @@ class PlayerEngine {
     }
   }
 
+  /**
+   * A hand-picked track ends the DJ session — picking a song by hand is
+   * the user taking the decks back. Every play surface in the app calls
+   * playTrack / playShuffled / startRadioStation directly and bypasses
+   * the store's command channel, so the arbitration that channel was
+   * designed for happens here instead, at the engine entry points all
+   * of those surfaces share: offer the pick to the router, whose
+   * PLAY_REQUESTED case stops a running session and lets the pick fall
+   * through to this engine untouched. Without this, the session's own
+   * decks keep playing underneath the picked track (Note 2).
+   */
+  private endDjSessionForPickedTrack(track: Track, queue?: Track[]): void {
+    routeDjCommand({ type: "PLAY_REQUESTED", track, queue }, djSession);
+  }
+
   public async playTrack(
     track: Track,
     queue?: Track[],
@@ -487,6 +502,7 @@ class PlayerEngine {
     queueIndex?: number,
     preserveQueue?: boolean,
   ): Promise<void> {
+    this.endDjSessionForPickedTrack(track, queue);
     const store = usePlayerStore.getState();
     const nextQueue = this.normalizeQueue(queue ?? [track], track);
     const nextIndex =
@@ -568,6 +584,7 @@ class PlayerEngine {
         ? startIndex
         : Math.floor(Math.random() * tracks.length);
     const seedTrack = tracks[seedIndex];
+    this.endDjSessionForPickedTrack(seedTrack, tracks);
     const remaining = [
       ...tracks.slice(0, seedIndex),
       ...tracks.slice(seedIndex + 1),
@@ -605,6 +622,7 @@ class PlayerEngine {
 
   public async startRadioStation(track: Track): Promise<void> {
     if (isLocalTrackId(track.id)) return;
+    this.endDjSessionForPickedTrack(track, [track]);
     const store = usePlayerStore.getState();
     this.sessionId += 1;
     const mySession = this.sessionId;
@@ -1016,6 +1034,21 @@ class PlayerEngine {
       this.originalUpcomingQueue.unshift(track);
     }
     this.preloadNextTrack(store);
+  }
+
+  /**
+   * True while there is listening state that an unprompted interruption
+   * must not destroy: a DJ session running on its own decks, or a track
+   * loaded in the plain player in a non-idle state (playing, loading,
+   * or paused mid-queue). The auth store consults this before clearing
+   * playback on a drop to guest, so a server-rejected refresh token can
+   * no longer wipe the music mid-playlist (Note 7, candidate 1).
+   * Explicit sign-out is unaffected: logout calls stopAndClear directly.
+   */
+  public hasActivePlayback(): boolean {
+    if (djSession.isRunning) return true;
+    const state = usePlayerStore.getState();
+    return state.currentTrack !== null && state.status !== "idle";
   }
 
   public async stopAndClear(): Promise<void> {

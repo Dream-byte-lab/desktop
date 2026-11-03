@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { usePlayerStore } from "../store/playerStore";
 import { useGlassBlur, useKawarpEnabled } from "../store/visualModeStore";
@@ -20,6 +20,16 @@ import { useTranslation } from "@/languages";
 import { useSettledLyricsLayout } from "../hooks/useSettledLyricsLayout";
 
 const KAWARP_FADE_IN_MS = 600;
+
+// The queue drawer — the same component the player bar's queue
+// button opens in the shell. Loaded lazily: it is only needed when
+// the queue is actually opened from here, and the dynamic import
+// keeps the player <-> navigation component cycle out of the static
+// module graph.
+const RightDrawer = lazy(() => import("@/features/navigation/ui/RightDrawer"));
+
+// Mirrors RIGHT_DRAWER_WIDTH in AppFrame's shell drawer.
+const QUEUE_DRAWER_WIDTH = 440;
 
 export interface FullscreenPlayerProps {
   effectsReady?: boolean;
@@ -60,6 +70,8 @@ export function FullscreenPlayer({
 
   const kawarpEnabled = useKawarpEnabled();
   const glassBlur = useGlassBlur();
+  const [queueOpen, setQueueOpen] = useState(false);
+  const toggleQueue = useCallback(() => setQueueOpen((open) => !open), []);
   const [kawarpShown, setKawarpShown] = useState(false);
   const [kawarpWasEnabled, setKawarpWasEnabled] = useState(kawarpEnabled);
   if (kawarpWasEnabled !== kawarpEnabled) {
@@ -138,6 +150,8 @@ export function FullscreenPlayer({
           <PlayerUiElements
             onClose={onClose}
             layout={isCompactLayout ? "horizontal" : "vertical"}
+            onQueueToggle={toggleQueue}
+            queueOpen={queueOpen}
           />
         </div>
 
@@ -170,6 +184,24 @@ export function FullscreenPlayer({
           </div>
         </div>
       </div>
+
+      <AnimatePresence initial={false}>
+        {queueOpen && (
+          <motion.aside
+            key="fullscreen-queue-drawer"
+            initial={{ x: QUEUE_DRAWER_WIDTH }}
+            animate={{ x: 0 }}
+            exit={{ x: QUEUE_DRAWER_WIDTH }}
+            transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+            className="absolute top-1.5 bottom-1.5 right-1.5 z-20 max-w-[92vw]"
+            style={{ width: QUEUE_DRAWER_WIDTH }}
+          >
+            <Suspense fallback={null}>
+              <RightDrawer onClose={() => setQueueOpen(false)} />
+            </Suspense>
+          </motion.aside>
+        )}
+      </AnimatePresence>
 
       <div className="absolute top-1.5 left-1/2 z-30 flex -translate-x-1/2 justify-center pointer-events-none">
         <FullscreenTopNotch>

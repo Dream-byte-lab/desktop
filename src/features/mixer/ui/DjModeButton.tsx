@@ -57,8 +57,11 @@ export function DjModeButton({
       onClick={toggle}
       style={{
         cursor: "pointer",
-        width: "auto",
-        padding: "0 8px",
+        // No width/padding overrides: the player bar passes the shared
+        // 30px icon-button class, and this button must live inside the
+        // same geometry budget as its siblings (an auto-width text
+        // button here is what pushed the bar's queue/expand buttons
+        // out of the frame — Step 2, slice C).
         fontSize: 11,
         fontWeight: 700,
         letterSpacing: "0.08em",

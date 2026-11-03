@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
+import { Sidebar } from "@solar-icons/react";
 import { cn } from "@/shared/lib";
+import { useTranslation } from "@/languages";
 import { VolumePicker } from "./VolumePicker";
 import { FullscreenCoverArt } from "./FullscreenCoverArt";
 import { FullscreenTrackInfo } from "./FullscreenTrackInfo";
@@ -35,6 +37,17 @@ interface PlayerUiElementsProps {
   onDuration?: (duration: number) => void;
   onClose?: () => void;
   layout?: "vertical" | "horizontal";
+  /**
+   * Opens/closes the queue from inside the fullscreen player. The
+   * fullscreen surface never had a queue control at all (the player
+   * bar that owns one is hidden beneath it) — when this is provided,
+   * the queue button the bar has is rendered here too (Step 2,
+   * slice C). The expand button needs no twin: this surface *is*
+   * the expanded player, and its collapse control is the chevron
+   * notch at the top-left.
+   */
+  onQueueToggle?: () => void;
+  queueOpen?: boolean;
 }
 
 const LAYOUT_TRANSITION = {
@@ -45,7 +58,10 @@ const LAYOUT_TRANSITION = {
 export function PlayerUiElements({
   onClose,
   layout = "vertical",
+  onQueueToggle,
+  queueOpen = false,
 }: PlayerUiElementsProps) {
+  const { t } = useTranslation();
   const scale = useFullscreenColumnScale();
   const scaled = scale > 1;
   const horizontal = layout === "horizontal";
@@ -104,6 +120,25 @@ export function PlayerUiElements({
             iconClassName="text-white opacity-80 hover:opacity-100"
           />
         </div>
+
+        {onQueueToggle && (
+          <div className="mt-[18px] flex justify-center">
+            <button
+              type="button"
+              aria-label={t("player.queue")}
+              aria-pressed={queueOpen}
+              title={t("player.queue")}
+              onClick={onQueueToggle}
+              className={`inline-flex h-[40px] w-[40px] cursor-pointer items-center justify-center rounded-full border-none transition-colors select-none active:scale-95 ${
+                queueOpen
+                  ? "bg-white/20 text-white"
+                  : "bg-transparent text-white opacity-80 hover:bg-white/10 hover:opacity-100"
+              }`}
+            >
+              <Sidebar size={20} weight="Outline" />
+            </button>
+          </div>
+        )}
       </motion.div>
     </motion.div>
   );

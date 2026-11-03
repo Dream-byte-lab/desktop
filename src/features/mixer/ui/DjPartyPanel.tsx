@@ -6,8 +6,11 @@ import { usePartyStore } from "../store/partyStore";
 
 // The host's party panel: liveRave's front door, on the host's own
 // screen. It follows the house rule — invisible unless DJ mode is
-// on, so the seamless app shows no trace of it. Closed, it is one
-// quiet button. Open, it is the invitation and the guardrails:
+// on, so the seamless app shows no trace of it — with one
+// exception: while a party is open, a slim strip carrying the End
+// control stays even if DJ mode goes off, so the party can always
+// be stopped from the host's screen. Closed, it is one quiet
+// button. Open, it is the invitation and the guardrails:
 //
 // - the invite card: a QR code guests scan, with the join address
 //   underneath for anyone who would rather type it;
@@ -38,9 +41,8 @@ export function DjPartyPanel() {
     return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
   }, [joinUrl]);
 
-  if (!djActive) return null;
-
   if (!party.open) {
+    if (!djActive) return null;
     return (
       <div className="flex justify-center px-3 pb-1">
         <button
@@ -49,6 +51,32 @@ export function DjPartyPanel() {
           className="rounded-full border border-border-tertiary bg-bg-primary/80 px-4 py-1.5 text-xs font-semibold text-text-secondary backdrop-blur-md transition-colors hover:text-text-primary"
         >
           Open a liveRave party
+        </button>
+      </div>
+    );
+  }
+
+  if (!djActive) {
+    // A party is open but DJ mode is off. The full panel follows
+    // DJ mode, as it should — but the End control must not vanish
+    // with it: a party you cannot stop is a party that never ends.
+    // So while the party lives, this strip stays, wherever the
+    // panel would have been.
+    return (
+      <div className="mx-3 mb-2 flex items-center justify-between gap-2 rounded-2xl border border-border-tertiary bg-bg-primary/90 px-4 py-2 shadow-xl backdrop-blur-md">
+        <div className="text-sm font-semibold text-text-primary">
+          Party is live
+          <span className="ml-2 text-xs font-normal text-text-secondary">
+            🔥 {party.reactions.fire} · ❤️ {party.reactions.heart} · 👏{" "}
+            {party.reactions.clap}
+          </span>
+        </div>
+        <button
+          type="button"
+          onClick={() => void partyHost.stop()}
+          className="rounded-full border border-border-tertiary px-3 py-1 text-xs font-semibold text-red-500 transition-colors hover:text-red-600"
+        >
+          End party
         </button>
       </div>
     );

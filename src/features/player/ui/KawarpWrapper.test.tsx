@@ -25,6 +25,26 @@ import {
   KAWARP_RESIZE_SETTLE_MS,
   KawarpWrapper,
 } from "./KawarpWrapper";
+import { KawarpEngine } from "../engine/kawarpEngine";
+
+const engineConstructor = vi.mocked(KawarpEngine);
+
+/** Make the wrapper's WebGL probe see a canvas with this renderer string. */
+function stubWebGLRenderer(renderer: string) {
+  const debugInfo = { UNMASKED_RENDERER_WEBGL: 0x9246 };
+  const gl = {
+    getExtension: (name: string) =>
+      name === "WEBGL_debug_renderer_info" ? debugInfo : null,
+    getParameter: (param: number) =>
+      param === debugInfo.UNMASKED_RENDERER_WEBGL ? renderer : "WebGL 1.0",
+  };
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(((
+    type: string,
+  ) =>
+    type === "webgl" || type === "experimental-webgl"
+      ? gl
+      : null) as typeof HTMLCanvasElement.prototype.getContext);
+}
 
 describe("KawarpWrapper", () => {
   let container: HTMLDivElement;
@@ -101,6 +121,40 @@ describe("KawarpWrapper", () => {
     act(() => vi.advanceTimersByTime(KAWARP_RESIZE_SETTLE_MS));
     expect([canvas.width, canvas.height]).toEqual([1300, 750]);
     expect(engine.resize).toHaveBeenCalledTimes(1);
+  });
+
+  it("never starts the render loop when WebGL is software-rendered", () => {
+    stubWebGLRenderer("Google SwiftShader");
+    engineConstructor.mockClear();
+    engine.start.mockClear();
+    const onLoad = vi.fn();
+    const onError = vi.fn();
+    act(() =>
+      root.render(
+        <KawarpWrapper
+          src="https://example.test/cover.jpg"
+          onLoad={onLoad}
+          onError={onError}
+        />,
+      ),
+    );
+    // No GPU behind WebGL (e.g. hardware acceleration disabled): the
+    // 8-pass full-screen loop would run on the CPU, so the engine is
+    // never even constructed and the static blurred cover stays up —
+    // which also means neither load nor error is reported.
+    expect(engineConstructor).not.toHaveBeenCalled();
+    expect(engine.start).not.toHaveBeenCalled();
+    expect(onLoad).not.toHaveBeenCalled();
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it("starts the engine when WebGL is hardware-rendered", () => {
+    stubWebGLRenderer("ANGLE (NVIDIA, NVIDIA GeForce RTX 4070 Direct3D11)");
+    engineConstructor.mockClear();
+    engine.start.mockClear();
+    act(() => root.render(<KawarpWrapper />));
+    expect(engineConstructor).toHaveBeenCalledTimes(1);
+    expect(engine.start).toHaveBeenCalledTimes(1);
   });
 
   it("skips the resize when the window ends up at the same size", () => {

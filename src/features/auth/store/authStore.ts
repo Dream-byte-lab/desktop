@@ -175,6 +175,15 @@ useAuthStore.subscribe((state, previous) => {
     previous.status !== "guest" &&
     previous.status !== "anonymous"
   ) {
+    // This watcher is the unprompted path: it fires when the session
+    // drops out from under the user (e.g. the server rejects the refresh
+    // token mid-session and initialize() lands on guest). Wiping the
+    // player then destroys music the user is in the middle of, so while
+    // playback is active the clear is skipped — the spared state simply
+    // stays on screen under the guest session. An explicit logout() is
+    // not affected: it calls clearPlayback itself, before the status
+    // flips, so signing out on purpose still stops and clears as before.
+    if (playerEngine.hasActivePlayback()) return;
     void clearPlayback();
   }
 });

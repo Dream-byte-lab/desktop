@@ -6,6 +6,7 @@ import type {
 import { usePlayerStore } from "../../player/store/playerStore";
 import { djSession } from "./djSession";
 import { guestStatus, type RaveDecision } from "./liveRave";
+import { useDjModeStore } from "../store/djModeStore";
 import { usePartyStore, type PartyFeedItem } from "../store/partyStore";
 
 // The party host: the renderer-side half of liveRave, and the piece
@@ -82,7 +83,13 @@ class PartyHost {
 
   async start(): Promise<boolean> {
     const bridge = window.linerElectron;
-    if (!bridge || this.isOpen || !djSession.isRunning) return false;
+    if (!bridge) return false;
+    // A start is always a NEW party. If one is somehow still open —
+    // a leftover whose panel vanished, say — end it completely
+    // first, so nothing (reactions, feed, guests, published state)
+    // can carry over into tonight. No silent no-ops.
+    if (this.isOpen) await this.stop();
+    if (!djSession.isRunning) return false;
     const info = await bridge.partyStart();
     if (!info.running) return false;
     this.addresses = info.addresses;
@@ -116,6 +123,10 @@ class PartyHost {
     this.statusByCanonical.clear();
     this.reactions = { fire: 0, heart: 0, clap: 0 };
     this.lastPublishedKey = "";
+    this.lastCurrentTrackId = null;
+    this.startedAtMs = 0;
+    this.paused = false;
+    this.addresses = [];
     if (bridge) await bridge.partyStop();
     this.syncStore();
   }
@@ -213,6 +224,15 @@ class PartyHost {
   }
 
   private tick(): void {
+    // The party lives and dies with the session. If the decks have
+    // stopped for any reason, the party is over too — it must never
+    // outlive its session as a zombie the host cannot see or stop.
+    // (The DJ-mode subscription below is the fast path to the same
+    // end; this ground-truth check in the poll is the guarantee.)
+    if (!djSession.isRunning) {
+      void this.stop();
+      return;
+    }
     this.publishState(false);
     const currentId = usePlayerStore.getState().currentTrack?.id ?? null;
     if (currentId && currentId !== this.lastCurrentTrackId) {
@@ -293,3 +313,14 @@ class PartyHost {
 
 /** The shared party host used by the panel. */
 export const partyHost = new PartyHost();
+
+// The party's lifetime is tied to the session's: the DJ-mode store
+// mirrors the session's running state, so the moment it reports the
+// session has ended — DJ toggled off, an arbitration stop, or the
+// session ending on its own — an open party ends with it: server
+// stopped, every trace wiped. The party never outlives the decks.
+useDjModeStore.subscribe((state, previous) => {
+  if (previous.active && !state.active && partyHost.isOpen) {
+    void partyHost.stop();
+  }
+});

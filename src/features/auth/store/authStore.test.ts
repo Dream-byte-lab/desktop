@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // the player feature pulls lottie/canvas ui that jsdom cannot load; initialize() never touches it
-const player = vi.hoisted(() => ({ stopAndClear: vi.fn(async () => {}) }));
+const player = vi.hoisted(() => ({
+  stopAndClear: vi.fn(async () => {}),
+  hasActivePlayback: vi.fn(() => false),
+}));
 vi.mock("@/features/player", () => ({ playerEngine: player }));
 
 import { useAuthStore } from "./authStore";
@@ -73,6 +76,8 @@ describe("signing out clears the player", () => {
     vi.restoreAllMocks();
     player.stopAndClear.mockReset();
     player.stopAndClear.mockImplementation(async () => {});
+    player.hasActivePlayback.mockReset();
+    player.hasActivePlayback.mockImplementation(() => false);
     setAuthSession(null);
   });
 
@@ -100,6 +105,42 @@ describe("signing out clears the player", () => {
     await useAuthStore.getState().initialize();
     expect(useAuthStore.getState().status).toBe("guest");
     expect(player.stopAndClear).toHaveBeenCalled();
+  });
+
+  it("does not clear the player on an unprompted drop to guest while playback is active", () => {
+    player.hasActivePlayback.mockReturnValue(true);
+    useAuthStore.setState({ status: "authenticated", user: stored.user });
+
+    useAuthStore.setState({ status: "guest", user: null });
+
+    expect(useAuthStore.getState().status).toBe("guest");
+    expect(player.stopAndClear).not.toHaveBeenCalled();
+  });
+
+  it("still clears the player on a drop to guest when nothing is playing", () => {
+    player.hasActivePlayback.mockReturnValue(false);
+    useAuthStore.setState({ status: "authenticated", user: stored.user });
+
+    useAuthStore.setState({ status: "guest", user: null });
+
+    expect(player.stopAndClear).toHaveBeenCalledTimes(1);
+  });
+
+  it("explicit logout clears the player even while playback is active", async () => {
+    setAuthSession(stored);
+    player.hasActivePlayback.mockReturnValue(true);
+    useAuthStore.setState({ status: "authenticated", user: stored.user });
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(null, { status: 204 }),
+    );
+
+    await useAuthStore.getState().logout();
+
+    // Once, by logout's own clear — the watcher on the status flip is
+    // guarded by the active playback and does not clear a second time.
+    expect(player.stopAndClear).toHaveBeenCalledTimes(1);
+    expect(useAuthStore.getState().status).toBe("guest");
+    expect(getAuthSession()).toBeNull();
   });
 
   it("does not hang logout when the player never finishes", async () => {

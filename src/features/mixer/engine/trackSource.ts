@@ -1,7 +1,8 @@
 import { linerDb } from "@/shared/storage";
 import type { Track } from "@/shared/types";
 import { resolvePlaybackStream } from "../../player/engine/streamResolver";
-import { analyseAudioBuffer, type TrackAnalysis } from "./analyseTrack";
+import { type TrackAnalysis } from "./analyseTrack";
+import { analyseBufferOffThread } from "./analyseTrackRunner";
 
 // Where the DJ session gets its music. The mixer cannot work with a
 // stream that is still arriving — it needs the whole track, decoded,
@@ -58,7 +59,7 @@ async function prepare(track: Track): Promise<PreparedTrack | null> {
     if (!blob) return null;
     const arrayBuffer = await blob.arrayBuffer();
     const buffer = await decoder().decodeAudioData(arrayBuffer);
-    const analysis = analyseAudioBuffer(buffer);
+    const analysis = await analyseBufferOffThread(buffer);
     if (!analysis) return null;
     const result: PreparedTrack = { track, buffer, analysis };
     prepared.set(track.id, result);

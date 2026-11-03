@@ -72,10 +72,9 @@ function lanAddresses(): string[] {
   return addresses;
 }
 
-export class PartyServer {
-  private server: Server | null = null;
-  private boundPort = 0;
-  private state: PartyPublicState = {
+/** The published state of no party at all: closed, and empty. */
+function closedPartyState(): PartyPublicState {
+  return {
     open: false,
     accepting: true,
     partyName: "liveRave party",
@@ -83,6 +82,12 @@ export class PartyServer {
     upNext: [],
     catalogue: [],
   };
+}
+
+export class PartyServer {
+  private server: Server | null = null;
+  private boundPort = 0;
+  private state: PartyPublicState = closedPartyState();
   private guests = new Set<string>();
   private records = new Map<string, PartyRequestRecord>();
   private limiter = new SlidingWindowLimiter(
@@ -164,6 +169,12 @@ export class PartyServer {
     this.mintLimiter.reset();
     this.reactionLimiter.reset();
     this.joinSecret = "";
+    // The published state dies with the party too: a restarted
+    // server must never serve the previous party's now-playing,
+    // up-next or catalogue, not even for the moment before the
+    // host's first publish of the new night lands.
+    this.state = closedPartyState();
+    this.partyStartedAtMs = 0;
     if (server) {
       server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));

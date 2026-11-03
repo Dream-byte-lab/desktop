@@ -5,6 +5,42 @@ import { getCoverElement, useCoverElement } from "@/features/covers";
 export const KAWARP_RESIZE_SETTLE_MS = 300;
 export const KAWARP_RENDER_SCALE = 0.5;
 
+// Renderer strings Chromium reports when WebGL has no GPU behind it
+// (SwiftShader & friends — exactly what a build with hardware
+// acceleration disabled produces). Mirrors the probe in
+// src/shared/lib/deviceTier.ts.
+const SOFTWARE_WEBGL_RENDERER =
+  /swiftshader|llvmpipe|softpipe|software|basic render/i;
+
+/**
+ * True when this renderer's WebGL is software-rasterised, i.e. there
+ * is no hardware acceleration behind it. The Kawarp engine is a
+ * continuous multi-pass full-screen blur/warp loop; on a software
+ * renderer that loop runs entirely on the CPU, so in that case the
+ * wrapper never starts it and the fullscreen player keeps its static
+ * blurred cover instead (Step 2, slice C). Returns false when WebGL
+ * is unavailable outright (the engine constructor already fails over
+ * to onError there) or when the renderer cannot be identified.
+ */
+export function isSoftwareRenderedWebGL(): boolean {
+  try {
+    const canvas = document.createElement("canvas");
+    const gl = (canvas.getContext("webgl") ||
+      canvas.getContext("experimental-webgl")) as WebGLRenderingContext | null;
+    if (!gl) return false;
+    const info = gl.getExtension("WEBGL_debug_renderer_info");
+    const renderer = info
+      ? gl.getParameter(info.UNMASKED_RENDERER_WEBGL)
+      : gl.getParameter(gl.RENDERER);
+    gl.getExtension("WEBGL_lose_context")?.loseContext();
+    return (
+      typeof renderer === "string" && SOFTWARE_WEBGL_RENDERER.test(renderer)
+    );
+  } catch {
+    return false;
+  }
+}
+
 interface KawarpWrapperProps {
   src?: string;
   onLoad?: () => void;
@@ -21,6 +57,10 @@ export function KawarpWrapper({ src, onLoad, onError }: KawarpWrapperProps) {
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
+    // Software-rendered WebGL (no hardware acceleration): never start
+    // the continuous render loop — it would run 8 full-screen blur
+    // passes per frame on the CPU. The static blurred cover stays up.
+    if (isSoftwareRenderedWebGL()) return;
 
     let engine: KawarpEngine | null = null;
     try {

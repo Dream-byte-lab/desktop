@@ -103,15 +103,23 @@ process.on("unhandledRejection", (reason) => {
   console.error("\x1b[41;37m main error \x1b[0m unhandled rejection:", reason);
 });
 
-// LINERAVE DIAGNOSTIC (temporary): upstream forced aggressive GPU
-// switches here (enable-gpu-rasterization, enable-zero-copy,
-// ignore-gpu-blocklist, enable-native-gpu-memory-buffers). On some
-// ARM/Qualcomm graphics stacks those produce a window that never
-// presents. This build turns GPU acceleration off entirely and keeps
-// a startup log, so a silent launch failure leaves evidence behind.
+// LINERAVE: hardware acceleration is ON (Chromium defaults). The
+// diagnostic build ran with app.disableHardwareAcceleration() here,
+// which forced every repaint — including the app's backdrop-blur
+// surfaces — onto the CPU; on the ARM Surface that was the lag
+// multiplier (investigation Note 1). Upstream's own aggressive GPU
+// forcing switches (enable-gpu-rasterization, enable-zero-copy,
+// ignore-gpu-blocklist, enable-native-gpu-memory-buffers) are
+// deliberately NOT reinstated: they were the original "window never
+// presents" suspects on ARM/Qualcomm stacks, and the proven launch
+// root cause was the packaged frontend's asset base (fixed in the
+// vite config), not GPU selection. The startup log stays: it is the
+// flight recorder and costs nothing at use time (startup/event-only
+// call sites), so a silent launch failure still leaves evidence.
 initStartupLog();
-slog("diagnostic build: GPU acceleration disabled, embedded frontend forced");
-app.disableHardwareAcceleration();
+slog(
+  "startup: GPU acceleration enabled (Chromium defaults), startup log active",
+);
 process.on("uncaughtException", (error) =>
   slog(`uncaught exception: ${String(error)}`),
 );
@@ -474,14 +482,6 @@ function createWindow() {
       slog(
         `renderer: render-process-gone reason=${details.reason} exit=${details.exitCode}`,
       ),
-    );
-    const heartbeatWin = mainWindow;
-    setTimeout(
-      () =>
-        slog(
-          `heartbeat 20s: window destroyed=${heartbeatWin.isDestroyed()} visible=${heartbeatWin.isVisible()}`,
-        ),
-      20_000,
     );
     void mainWindow
       .loadFile(embeddedIndex)

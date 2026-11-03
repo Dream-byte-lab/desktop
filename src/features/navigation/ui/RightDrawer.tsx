@@ -377,7 +377,7 @@ function RightDrawer({ onClose }: RightDrawerProps) {
   }, [player.currentTrack?.id, scrollQueueToCurrent]);
 
   return (
-    <div className="relative flex flex-col h-full w-full overflow-hidden rounded-[14px] select-none bg-bg-glass backdrop-blur-[48px]">
+    <div className="relative flex flex-col h-full w-full overflow-hidden rounded-[14px] select-none bg-bg-glass backdrop-blur-[20px]">
       <RightDrawerHeader
         trackCount={player.queue.length}
         shuffle={player.shuffle}

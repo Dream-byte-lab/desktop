@@ -392,8 +392,12 @@ img {
     --glass-pill-bg,
     linear-gradient(135deg, rgba(0, 0, 0, 0.45) 0%, rgba(0, 0, 0, 0.35) 100%)
   ) !important;
-  backdrop-filter: blur(var(--glass-blur, 20px)) saturate(160%) !important;
-  -webkit-backdrop-filter: blur(var(--glass-blur, 20px)) saturate(160%) !important;
+  /* Blur budget (Step 2, Note 1): 12px/140% keeps the frosted-glass
+     read at a fraction of the old 20px/160% paint cost — backdrop
+     blur is the app's most expensive effect on ARM. --glass-blur is
+     never defined anywhere, so this fallback IS the rendered value. */
+  backdrop-filter: blur(var(--glass-blur, 12px)) saturate(140%) !important;
+  -webkit-backdrop-filter: blur(var(--glass-blur, 12px)) saturate(140%) !important;
   border: none !important;
   color: #ffffff !important;
   box-shadow: none !important;

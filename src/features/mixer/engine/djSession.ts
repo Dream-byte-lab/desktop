@@ -18,12 +18,15 @@ import { TwoDeckMixer, type DeckIndex } from "./twoDeckMixer";
 // - everything the interface shows — current track, queue, position,
 //   duration, playing/paused — is written into the player's own store
 //   through its public setters, so the existing UI simply follows;
-// - tracks are prepared (downloaded, decoded, analysed) one ahead of
-//   the playing track; when the next track is ready, a transition is
-//   planned against the live position and scheduled on the audio clock;
+// - tracks are prepared (downloaded, decoded, analysed) ahead of
+//   the playing track, walking past any that cannot be prepared;
+//   when the next preparable track is ready, a transition is planned
+//   against the live position and scheduled on the audio clock;
 // - a track that cannot be prepared, or a pair with no honest blend,
 //   falls back to a plain cut at the end of the current track instead
-//   of stalling the session.
+//   of stalling the session — preparation failing or running late
+//   never ends the session; only a queue with nothing playable left
+//   in it does.
 //
 // Positions are tracked as rate segments against the audio clock, so
 // pausing (which freezes the clock) freezes the position for free.
@@ -65,6 +68,14 @@ export class DjSession {
   private index = -1;
   private current: PreparedTrack | null = null;
   private next: PreparedTrack | null = null;
+  /** Queue index of `next` — not always index + 1: preparation walks past unpreparable tracks. */
+  private nextIndex = -1;
+  /** Tracks that failed preparation in this session; never retried, only walked past. */
+  private readonly unpreparable = new Set<string>();
+  /** Bumped whenever the queue is replaced, so in-flight preparation can tell it is stale. */
+  private queueGeneration = 0;
+  /** True while the end-of-track plain-cut advance is looking for a playable track. */
+  private endAdvanceInFlight = false;
   private segments: RateSegment[] = [];
   private ticker: ReturnType<typeof setInterval> | null = null;
   private timers = new Set<ReturnType<typeof setTimeout>>();
@@ -118,7 +129,9 @@ export class DjSession {
 
     this.context = new AudioContext();
     this.mixer = new TwoDeckMixer(this.context);
+    this.unpreparable.clear();
     this.queue = queue;
+    this.queueGeneration += 1;
     const store = usePlayerStore.getState();
     store.setQueue(queue);
     store.setStatus("loading", null);
@@ -183,14 +196,17 @@ export class DjSession {
     const newTail = order
       .map((id) => byId.get(id)?.track)
       .filter((track) => track !== undefined);
-    const unpreparable = tail.filter((track) => !byId.has(track.id));
+    const failedTail = tail.filter((track) => !byId.has(track.id));
+    for (const track of failedTail) this.unpreparable.add(track.id);
     this.queue = [
       ...this.queue.slice(0, this.index + 1),
       ...newTail,
-      ...unpreparable,
+      ...failedTail,
     ];
+    this.queueGeneration += 1;
     usePlayerStore.getState().setQueue(this.queue);
     this.next = null;
+    this.nextIndex = -1;
     void this.prepareNext();
     return true;
   }
@@ -282,6 +298,9 @@ export class DjSession {
         "Waiting — the next blend is already locked",
       ).decisions;
     }
+    preparedTail.forEach((prepared, i) => {
+      if (!prepared) this.unpreparable.add(tail[i].id);
+    });
     if (preparedTail.some((prepared) => !prepared)) {
       return this.liveRaveQueue.evaluate(
         [],
@@ -297,8 +316,10 @@ export class DjSession {
         ...this.queue.slice(0, this.index + 1),
         ...result.upcoming.map((entry) => entry.track),
       ];
+      this.queueGeneration += 1;
       usePlayerStore.getState().setQueue(this.queue);
       this.next = null;
+      this.nextIndex = -1;
       void this.prepareNext();
     }
     return result.decisions;
@@ -309,18 +330,22 @@ export class DjSession {
     if (!this.mixer || !this.current) return;
     if (this.next) {
       const next = this.next;
+      const nextIdx = this.nextIndex;
       this.clearTimers();
       this.mixer.stopAll();
-      this.beginTrack(next, this.index + 1);
+      this.beginTrack(next, nextIdx);
       return;
     }
-    const nextTrack = this.queue[this.index + 1];
-    if (!nextTrack) return;
-    void loadTrackForMixing(nextTrack).then((prepared) => {
-      if (!prepared || !this.mixer) return;
+    // Nothing prepared yet: walk forward to the first track that can
+    // be prepared at all, stepping over unpreparable ones, instead of
+    // betting the skip on the single next track.
+    const anchorIndex = this.index;
+    void this.findNextPlayable(anchorIndex + 1).then((found) => {
+      if (!found || !this.mixer || !this.current) return;
+      if (this.index !== anchorIndex) return;
       this.clearTimers();
       this.mixer.stopAll();
-      this.beginTrack(prepared, this.index + 1);
+      this.beginTrack(found.prepared, found.index);
     });
   }
 
@@ -391,9 +416,12 @@ export class DjSession {
       this.context = null;
     }
     this.queue = [];
+    this.queueGeneration += 1;
     this.index = -1;
     this.current = null;
     this.next = null;
+    this.nextIndex = -1;
+    this.endAdvanceInFlight = false;
     this.segments = [];
     this.transitionPlanned = false;
     this.blendingNow = false;
@@ -436,6 +464,7 @@ export class DjSession {
     this.current = prepared;
     this.liveRavePlayedTrackIds.add(prepared.track.id);
     this.next = null;
+    this.nextIndex = -1;
     this.index = index;
     this.transitionPlanned = false;
     this.blendingNow = false;
@@ -469,21 +498,94 @@ export class DjSession {
   private cutToNextAtEntry(entrySec: number): void {
     if (!this.mixer || !this.next) return;
     const next = this.next;
+    const nextIdx = this.nextIndex;
     this.clearTimers();
     this.mixer.stopAll();
-    this.beginTrack(next, this.index + 1, entrySec);
+    this.beginTrack(next, nextIdx, entrySec);
+  }
+
+  /**
+   * Walks forward from `fromIndex` to the first track that can be
+   * prepared, stepping over unpreparable ones — each failure is
+   * remembered for the rest of the session, so a dead track is paid
+   * for once, never once per song. Returns null when nothing ahead
+   * can be prepared, or when the session moved on while a track was
+   * downloading (a fresher walk owns the answer then).
+   */
+  private async findNextPlayable(
+    fromIndex: number,
+  ): Promise<{ prepared: PreparedTrack; index: number } | null> {
+    const anchorIndex = this.index;
+    const generation = this.queueGeneration;
+    for (
+      let candidate = Math.max(fromIndex, anchorIndex + 1);
+      candidate < this.queue.length;
+      candidate += 1
+    ) {
+      const track = this.queue[candidate];
+      if (this.unpreparable.has(track.id)) continue;
+      const prepared = await loadTrackForMixing(track);
+      // The session may have moved on while this was downloading.
+      if (this.index !== anchorIndex || this.queueGeneration !== generation) {
+        return null;
+      }
+      if (!prepared) {
+        this.unpreparable.add(track.id);
+        continue;
+      }
+      return { prepared, index: candidate };
+    }
+    return null;
   }
 
   private async prepareNext(): Promise<void> {
-    const nextTrack = this.queue[this.index + 1];
-    if (!nextTrack) {
-      this.next = null;
+    const anchorIndex = this.index;
+    const generation = this.queueGeneration;
+    const found = await this.findNextPlayable(anchorIndex + 1);
+    if (!found) {
+      // Clear the slot only if this walk still owns it — a session
+      // that moved on (or re-queued) has its own preparation running.
+      if (
+        this.index === anchorIndex &&
+        this.queueGeneration === generation &&
+        !this.next
+      ) {
+        this.next = null;
+        this.nextIndex = -1;
+      }
       return;
     }
-    const prepared = await loadTrackForMixing(nextTrack);
-    // The session may have moved on while this was downloading.
-    if (!prepared || this.queue[this.index + 1]?.id !== nextTrack.id) return;
-    this.next = prepared;
+    if (this.index !== anchorIndex || this.queueGeneration !== generation) {
+      return;
+    }
+    this.next = found.prepared;
+    this.nextIndex = found.index;
+  }
+
+  /**
+   * The current track has ended and nothing mix-ready is waiting:
+   * the fallback the module header promises. Walk forward to the
+   * next track that can be prepared at all and cut straight to it —
+   * a plain cut, no blend — rather than letting one dead or slow
+   * track end the whole session. Only a queue with nothing playable
+   * left in it ends the session here.
+   */
+  private advancePastTrackEnd(): void {
+    if (this.endAdvanceInFlight) return;
+    this.endAdvanceInFlight = true;
+    const anchorIndex = this.index;
+    void this.findNextPlayable(anchorIndex + 1).then((found) => {
+      this.endAdvanceInFlight = false;
+      if (!this.mixer || !this.current || this.index !== anchorIndex) return;
+      if (!found) {
+        usePlayerStore.getState().setStatus("idle");
+        this.stop();
+        return;
+      }
+      this.clearTimers();
+      this.mixer.stopAll();
+      this.beginTrack(found.prepared, found.index);
+    });
   }
 
   private positionNow(): number {
@@ -516,8 +618,11 @@ export class DjSession {
       if (this.next) {
         this.skipNext();
       } else {
-        store.setStatus("idle");
-        this.stop();
+        // No mix-ready track is waiting — but that is a reason to
+        // cut plainly to the next playable track, not to end the
+        // session. One dead or merely slow track must never kill
+        // the night; only an exhausted queue does.
+        this.advancePastTrackEnd();
       }
       return;
     }
@@ -556,6 +661,7 @@ export class DjSession {
   private executeTransition(plan: TransitionPlan): void {
     if (!this.mixer || !this.next || !this.context) return;
     const incoming = this.next;
+    const landedIndex = this.nextIndex;
     this.blendingNow = true;
     this.onBlendChange?.(true);
     const times = this.mixer.transitionTo(
@@ -593,7 +699,8 @@ export class DjSession {
       this.current = incoming;
       this.liveRavePlayedTrackIds.add(incoming.track.id);
       this.next = null;
-      this.index += 1;
+      this.nextIndex = -1;
+      this.index = landedIndex;
       this.transitionPlanned = false;
       this.blendingNow = false;
       this.onBlendChange?.(false);

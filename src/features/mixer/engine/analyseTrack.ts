@@ -293,11 +293,8 @@ export function analyseTrack(
   };
 }
 
-/** Mixes an AudioBuffer down to mono samples and analyses them. */
-export function analyseAudioBuffer(
-  buffer: AudioBuffer,
-  options: AnalyseOptions = {},
-): TrackAnalysis | null {
+/** Mixes an AudioBuffer down to mono samples. */
+export function mixdownToMono(buffer: AudioBuffer): Float32Array {
   const mono = new Float32Array(buffer.length);
   for (let c = 0; c < buffer.numberOfChannels; c += 1) {
     const data = buffer.getChannelData(c);
@@ -308,5 +305,13 @@ export function analyseAudioBuffer(
       mono[i] /= buffer.numberOfChannels;
     }
   }
-  return analyseTrack(mono, buffer.sampleRate, options);
+  return mono;
+}
+
+/** Mixes an AudioBuffer down to mono samples and analyses them. */
+export function analyseAudioBuffer(
+  buffer: AudioBuffer,
+  options: AnalyseOptions = {},
+): TrackAnalysis | null {
+  return analyseTrack(mixdownToMono(buffer), buffer.sampleRate, options);
 }

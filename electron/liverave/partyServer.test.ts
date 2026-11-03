@@ -243,4 +243,35 @@ describe("PartyServer", () => {
     };
     expect(viaHeader.myRequests).toHaveLength(1);
   });
+
+  it("stop wipes the published state, so a restarted party serves nothing of the last one", async () => {
+    const { base } = await startOpenServer();
+    // Tonight's contents are being served.
+    const before = (await (await fetch(`${base}/api/catalogue`)).json()) as {
+      tracks: unknown[];
+    };
+    expect(before.tracks).toHaveLength(5);
+
+    await server?.stop();
+
+    // Restart before the host publishes anything new: a guest who
+    // arrives in that window must see a closed, empty party — not
+    // the previous party's now-playing or catalogue.
+    const info = await server!.start(0);
+    const restartedBase = `http://127.0.0.1:${info.port}`;
+    const catalogue = (await (
+      await fetch(`${restartedBase}/api/catalogue`)
+    ).json()) as { tracks: unknown[] };
+    expect(catalogue.tracks).toEqual([]);
+    const state = (await (
+      await getState(restartedBase, "any-token")
+    ).json()) as {
+      open: boolean;
+      nowPlaying: unknown;
+      upNext: unknown[];
+    };
+    expect(state.open).toBe(false);
+    expect(state.nowPlaying).toBeNull();
+    expect(state.upNext).toEqual([]);
+  });
 });

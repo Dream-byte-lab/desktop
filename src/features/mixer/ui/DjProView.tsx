@@ -42,8 +42,10 @@ export function DjProToggle({ className, activeClassName }: DjProToggleProps) {
       onClick={() => setProOpen(!proOpen)}
       style={{
         cursor: "pointer",
-        width: "auto",
-        padding: "0 8px",
+        // No width/padding overrides: like the DJ button beside it,
+        // this toggle accepts the player bar's shared 30px icon-button
+        // class so the toolbox geometry budget holds with DJ on
+        // (Step 2, slice C).
         fontSize: 11,
         fontWeight: 700,
         letterSpacing: "0.08em",

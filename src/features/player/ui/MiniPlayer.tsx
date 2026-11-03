@@ -648,7 +648,7 @@ function MiniPlayer({
             : embedded
               ? `rounded-item ${
                   hasPageBackdrop
-                    ? "bg-bg-glass backdrop-blur-[48px] backdrop-saturate-150"
+                    ? "bg-bg-glass backdrop-blur-[20px] backdrop-saturate-150"
                     : "bg-bg-primary"
                 }`
               : "rounded-3xl border-[0.5px] border-border-tertiary bg-bg-primary"
@@ -744,7 +744,14 @@ function MiniPlayer({
         <div
           className={`relative grid h-full pointer-events-none ${
             embedded
-              ? "grid-cols-[280px_minmax(0,1fr)_260px]"
+              ? // Fluid tracks, not fixed numbers: the track-info column
+                // may yield down to 200px and the toolbox column takes
+                // exactly the width its controls need. The old fixed
+                // 260px toolbox track was already full with upstream's
+                // buttons alone, so the added DJ/PRO toggles overflowed
+                // it and the card clipped the queue/expand buttons at
+                // every window size (Step 2, slice C).
+                "grid-cols-[minmax(200px,280px)_minmax(0,1fr)_auto]"
               : "grid-cols-[286px_minmax(0,1fr)]"
           } ${!usesRoundedStyle && !embedded ? "pb-[4px]" : ""}`}
         >

@@ -13,6 +13,10 @@ export interface PageCoverBackdropProps {
 const FILL_DARKEN = 0.38;
 const FADE_MS = 380;
 const HIDDEN_LAYER_ID = -1;
+/** Blur budget (Step 2, Note 1): this full-window backdrop is the single
+ * most expensive layer in the app, and callers historically asked for
+ * 56px. The cap keeps the soft-cover look at ≤24px whatever is requested. */
+const MAX_BLUR_PX = 24;
 
 const COVER_FADE =
   "linear-gradient(to bottom, rgba(0, 0, 0, 1) 0%, rgba(0, 0, 0, 0.9) 45%, rgba(0, 0, 0, 0) 100%)";
@@ -68,7 +72,7 @@ function PageCoverBackdropComponent({
   coverSrc,
   coverCrossOrigin = "anonymous",
   isDark = true,
-  blur = 56,
+  blur = 24,
   dim = 0.22,
 }: PageCoverBackdropProps) {
   const [layers, setLayers] = useState<Layer[]>(() =>
@@ -89,6 +93,7 @@ function PageCoverBackdropComponent({
   const loadedIdsRef = useRef(loadedIds);
   loadedIdsRef.current = loadedIds;
   const opacity = isDark ? 0.6 : 0.45;
+  const effectiveBlur = Math.min(blur, MAX_BLUR_PX);
 
   // a new cover pushes a layer on top; at most two layers live at once
   useEffect(() => {
@@ -187,7 +192,7 @@ function PageCoverBackdropComponent({
             }
             className="absolute inset-0 h-full w-full object-cover select-none ease-out"
             style={{
-              filter: `blur(${blur}px) saturate(130%)`,
+              filter: `blur(${effectiveBlur}px) saturate(130%)`,
               transform: "scale(1.1)",
               opacity:
                 loadedIds.has(layer.id) &&
