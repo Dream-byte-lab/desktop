@@ -115,6 +115,24 @@ function analyseInWorker(
 }
 
 /**
+ * Analyses mono samples off the UI thread when a worker is
+ * available, inline when it is not — the result is identical either
+ * way, only the thread differs. This is the same worker protocol as
+ * `analyseBufferOffThread`; it exists for callers that already hold
+ * the mono samples (the analysis cache fingerprints them before
+ * deciding whether an analysis is needed at all).
+ */
+export async function analyseSamplesOffThread(
+  samples: Float32Array,
+  sampleRate: number,
+  options: AnalyseOptions = {},
+): Promise<TrackAnalysis | null> {
+  const fromWorker = analyseInWorker(samples, sampleRate, options);
+  if (fromWorker) return fromWorker;
+  return runInline({ samples, sampleRate, options });
+}
+
+/**
  * Analyses a decoded track off the UI thread when a worker is
  * available, inline when it is not — the result is identical either
  * way, only the thread differs.
@@ -124,7 +142,5 @@ export async function analyseBufferOffThread(
   options: AnalyseOptions = {},
 ): Promise<TrackAnalysis | null> {
   const samples = mixdownToMono(buffer);
-  const fromWorker = analyseInWorker(samples, buffer.sampleRate, options);
-  if (fromWorker) return fromWorker;
-  return runInline({ samples, sampleRate: buffer.sampleRate, options });
+  return analyseSamplesOffThread(samples, buffer.sampleRate, options);
 }

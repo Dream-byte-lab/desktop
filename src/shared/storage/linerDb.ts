@@ -59,14 +59,32 @@ export interface CachedArtistRecord {
   lastCheckedAt: number;
 }
 
+/**
+ * A persisted track analysis (Step 5 analysis v2). The record is keyed
+ * by track id and trusted only when BOTH the audio fingerprint and the
+ * analysis version match what the caller computed for the audio it
+ * actually decoded — the fingerprint discipline lives in the analysis
+ * cache module, which is this store's only reader/writer.
+ */
+export interface CachedAnalysisRecord {
+  trackId: string;
+  audioHash: string;
+  analysisVersion: number;
+  /** "fast" | "deep" — the depth the stored analysis was computed at. */
+  depth: string;
+  analysis: unknown;
+  savedAt: number;
+}
+
 const DB_NAME = "liner_db_v1";
-const DB_VERSION = 4;
+const DB_VERSION = 5;
 
 const MEM_AUDIO_LIMIT = 3;
 // the memory maps only sit in front of indexeddb: cap them so a long session doesn't keep every record it saw
 const MEM_TRACK_LIMIT = 500;
 const MEM_LYRICS_LIMIT = 100;
 const MEM_ARTIST_LIMIT = 100;
+const MEM_ANALYSIS_LIMIT = 50;
 
 // keeps the most recently written entries; maps iterate in insertion order, so the first key is the oldest
 function rememberLimited<T>(
@@ -92,6 +110,7 @@ class LinerDb {
   private memAudio = new Map<string, CachedAudioRecord>();
   private memLyrics = new Map<string, CachedLyricsRecord>();
   private memArtists = new Map<string, CachedArtistRecord>();
+  private memAnalyses = new Map<string, CachedAnalysisRecord>();
 
   private handleDbError() {
     this.dbPromise = null;
@@ -163,6 +182,13 @@ class LinerDb {
             unique: false,
           });
         }
+
+        if (!db.objectStoreNames.contains("analyses")) {
+          const analysisStore = db.createObjectStore("analyses", {
+            keyPath: "trackId",
+          });
+          analysisStore.createIndex("savedAt", "savedAt", { unique: false });
+        }
       };
 
       request.onsuccess = () => {
@@ -197,7 +223,7 @@ class LinerDb {
 
   // executes indexeddb transaction with one auto-reconnect retry and zero unhandled rejections
   private async runTransaction<T>(
-    storeName: "tracks" | "audio" | "lyrics" | "artists",
+    storeName: "tracks" | "audio" | "lyrics" | "artists" | "analyses",
     mode: IDBTransactionMode,
     operation: (store: IDBObjectStore) => Promise<T>,
   ): Promise<T | null> {
@@ -672,6 +698,58 @@ class LinerDb {
     await this.putArtist(existing);
   }
 
+  async getAnalysis(trackId: string): Promise<CachedAnalysisRecord | null> {
+    const mem = this.memAnalyses.get(trackId);
+    if (mem) return mem;
+
+    const result = await this.runTransaction(
+      "analyses",
+      "readonly",
+      (store) => {
+        return new Promise<CachedAnalysisRecord | null>((resolve) => {
+          const req = store.get(trackId);
+          req.onsuccess = () => resolve(req.result || null);
+          req.onerror = () => resolve(null);
+        });
+      },
+    );
+
+    if (result) {
+      rememberLimited(this.memAnalyses, trackId, result, MEM_ANALYSIS_LIMIT);
+      return result;
+    }
+    return this.memAnalyses.get(trackId) || null;
+  }
+
+  async putAnalysis(record: CachedAnalysisRecord): Promise<void> {
+    rememberLimited(
+      this.memAnalyses,
+      record.trackId,
+      record,
+      MEM_ANALYSIS_LIMIT,
+    );
+
+    await this.runTransaction("analyses", "readwrite", (store) => {
+      return new Promise<void>((resolve, reject) => {
+        const req = store.put(record);
+        req.onsuccess = () => resolve();
+        req.onerror = () => reject(req.error);
+      });
+    });
+  }
+
+  async deleteAnalysis(trackId: string): Promise<void> {
+    this.memAnalyses.delete(trackId);
+
+    await this.runTransaction("analyses", "readwrite", (store) => {
+      return new Promise<void>((resolve) => {
+        const req = store.delete(trackId);
+        req.onsuccess = () => resolve();
+        req.onerror = () => resolve();
+      });
+    });
+  }
+
   async getTotalArtistBytes(): Promise<number> {
     const result = await this.runTransaction("artists", "readonly", (store) => {
       return new Promise<number>((resolve) => {
@@ -703,12 +781,13 @@ class LinerDb {
   }
 
   async clearStore(
-    storeName: "tracks" | "audio" | "lyrics" | "artists",
+    storeName: "tracks" | "audio" | "lyrics" | "artists" | "analyses",
   ): Promise<void> {
     if (storeName === "tracks") this.memTracks.clear();
     if (storeName === "audio") this.memAudio.clear();
     if (storeName === "lyrics") this.memLyrics.clear();
     if (storeName === "artists") this.memArtists.clear();
+    if (storeName === "analyses") this.memAnalyses.clear();
 
     await this.runTransaction(storeName, "readwrite", (store) => {
       return new Promise<void>((resolve) => {
@@ -734,10 +813,12 @@ class LinerDb {
     this.memAudio.clear();
     this.memLyrics.clear();
     this.memArtists.clear();
+    this.memAnalyses.clear();
     await this.clearStore("audio");
     await this.clearStore("tracks");
     await this.clearStore("lyrics");
     await this.clearStore("artists");
+    await this.clearStore("analyses");
   }
 }
 
