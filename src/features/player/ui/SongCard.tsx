@@ -125,7 +125,7 @@ function SongCard({
 
   return (
     <div
-      className={`group w-full flex items-center justify-between rounded-control ${paddingClass} outline-none transition-colors duration-150 ease-out ${
+      className={`group w-full flex items-center justify-between rounded-item ${paddingClass} outline-none transition-colors duration-150 ease-out ${
         className ?? ""
       } ${onPlay ? "cursor-pointer" : ""} ${onPlay && !className?.includes("hover:bg-") ? "hover:bg-border-alpha-14" : ""}`}
       onClick={handleClick}
@@ -161,7 +161,7 @@ function SongCard({
       <div className={`flex items-center ${gapClass} min-w-0`}>
         {trackNumber !== undefined ? (
           <div
-            className={`flex ${imageSizeClass} shrink-0 items-center justify-center ${titleSizeClass} text-text-tertiary`}
+            className={`flex ${imageSizeClass} shrink-0 items-center justify-center ${titleSizeClass} text-text-tertiary tabular-nums`}
             style={{
               fontWeight: 400,
             }}
@@ -171,7 +171,7 @@ function SongCard({
         ) : (
           <div
             className={`relative ${imageSizeClass} shrink-0 overflow-hidden bg-bg-panel flex items-center justify-center ${
-              imageShape === "circle" ? "rounded-full" : "rounded-control"
+              imageShape === "circle" ? "rounded-full" : "rounded-catalogue"
             }`}
           >
             {icon ? (
@@ -261,7 +261,7 @@ function SongCard({
         )}
         {duration && (
           <span
-            className="text-label text-text-tertiary"
+            className="text-label text-text-tertiary tabular-nums"
             style={{
               fontWeight: 400,
             }}
@@ -275,7 +275,7 @@ function SongCard({
               <button
                 type="button"
                 aria-label={t("common.more_options")}
-                className="rounded-control bg-transparent border-0 p-0 text-text-primary transition-all duration-200 active:scale-[0.96] flex items-center justify-center cursor-pointer"
+                className="rounded-control bg-transparent border-0 p-0 text-text-primary transition-all duration-150 active:scale-[0.96] flex items-center justify-center cursor-pointer"
               >
                 <More2Fill size={22} />
               </button>

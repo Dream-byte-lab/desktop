@@ -304,7 +304,7 @@ const QueueList = memo(function QueueList({
               (draggedItem as { cover_url?: string }).cover_url ??
               ""
             }
-            className="p-[8px] rounded-[10px] bg-bg-elevated border border-white/10"
+            className="p-[8px] rounded-item bg-bg-elevated border border-rim"
             imageShape="square"
           />
         </FloatingDragCard>
@@ -377,7 +377,7 @@ function RightDrawer({ onClose }: RightDrawerProps) {
   }, [player.currentTrack?.id, scrollQueueToCurrent]);
 
   return (
-    <div className="relative flex flex-col h-full w-full overflow-hidden rounded-[14px] select-none bg-bg-glass backdrop-blur-[20px]">
+    <div className="relative flex flex-col h-full w-full overflow-hidden rounded-panel select-none bg-bg-glass backdrop-blur-[16px] backdrop-saturate-150 ring-1 ring-inset ring-rim">
       <RightDrawerHeader
         trackCount={player.queue.length}
         shuffle={player.shuffle}

@@ -61,15 +61,18 @@ export function SidebarNavItems({
                   type="button"
                   aria-pressed={searchOpen}
                   onClick={onSearchToggle}
-                  className="group relative inline-flex items-center justify-center bg-transparent border-0 p-0 cursor-pointer active:scale-[0.96] transition-transform duration-100"
+                  className={cn(
+                    "group relative inline-flex h-[38px] w-[38px] items-center justify-center rounded-full border-0 p-0 cursor-pointer active:scale-[0.96] transition-all duration-150 motion-reduce:transition-none",
+                    active ? "bg-accent-primary/15" : "hover:bg-fill",
+                  )}
                 >
                   <Icon
                     size={26}
                     className={cn(
-                      "relative z-10 text-text-primary transition-opacity duration-150 ease-out",
+                      "relative z-10 transition-opacity duration-150 ease-out",
                       active
-                        ? "opacity-100"
-                        : "opacity-55 group-hover:opacity-90",
+                        ? "text-accent-primary opacity-100"
+                        : "text-text-primary opacity-55 group-hover:opacity-90",
                     )}
                   />
                 </button>
@@ -95,15 +98,18 @@ export function SidebarNavItems({
                   if (event.buttons & 1) setPendingHref(null);
                 }}
                 onPointerCancel={() => setPendingHref(null)}
-                className="group relative inline-flex items-center justify-center cursor-pointer active:scale-[0.96] transition-transform duration-100"
+                className={cn(
+                  "group relative inline-flex h-[38px] w-[38px] items-center justify-center rounded-full cursor-pointer active:scale-[0.96] transition-all duration-150 motion-reduce:transition-none",
+                  active ? "bg-accent-primary/15" : "hover:bg-fill",
+                )}
               >
                 <Icon
                   size={26}
                   className={cn(
-                    "relative z-10 text-text-primary",
+                    "relative z-10",
                     active
-                      ? "opacity-100"
-                      : "opacity-55 transition-opacity duration-150 ease-out group-hover:opacity-90",
+                      ? "text-accent-primary opacity-100"
+                      : "text-text-primary opacity-55 transition-opacity duration-150 ease-out group-hover:opacity-90",
                   )}
                 />
               </Link>

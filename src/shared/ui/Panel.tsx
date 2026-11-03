@@ -1,9 +1,12 @@
 import type { CSSProperties, HTMLAttributes } from "react";
 import { cn } from "@/shared/lib";
 
-/** Top-level glass container: dialogs, popovers, floating sheets. */
+/** Top-level glass container: dialogs, popovers, floating sheets.
+ *  Panel-dose glass per the design read's budget: restrained blur (16px,
+ *  not 2xl — blur is the app's most expensive paint on ARM) and the rim
+ *  light hairline that defines glass edges in both modes. */
 export const PANEL_GLASS_CLASS =
-  "rounded-panel bg-surface-glass backdrop-blur-2xl backdrop-saturate-150";
+  "rounded-panel bg-surface-glass backdrop-blur-[16px] backdrop-saturate-150 ring-1 ring-inset ring-rim";
 
 /** Quiet inset block inside a surface: bio text, grouped rows, empty states. */
 export const PANEL_FILL_CLASS = "rounded-item bg-fill";

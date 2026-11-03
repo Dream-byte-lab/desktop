@@ -151,8 +151,8 @@ export default function DropdownMenu({
           initial={{ opacity: 0, scale: 0.96, y: side === "top" ? 2 : -2 }}
           animate={{ opacity: 1, scale: 1, y: 0 }}
           exit={{ opacity: 0, scale: 0.96, y: side === "top" ? 2 : -2 }}
-          transition={{ duration: 0.1, ease: "easeOut" }}
-          className={`overflow-y-auto overscroll-contain rounded-[11px] p-[4px] min-w-[160px] border-0 bg-fill backdrop-blur-2xl backdrop-saturate-150 ${
+          transition={{ duration: 0.18, ease: "easeOut" }}
+          className={`overflow-y-auto overscroll-contain rounded-item p-[4px] min-w-[160px] border-0 bg-surface-glass backdrop-blur-[16px] backdrop-saturate-150 ring-1 ring-inset ring-rim ${
             isFixed
               ? "fixed z-[99999]"
               : side === "top"
@@ -175,7 +175,7 @@ export default function DropdownMenu({
                 }}
                 className={`group flex w-full h-[30px] items-center gap-[8px] rounded-control px-[9px] text-body font-normal transition-colors border-none bg-transparent text-left cursor-pointer select-none outline-none ${
                   item.danger
-                    ? "text-red-400 hover:bg-red-500/10 hover:text-red-400"
+                    ? "text-danger hover:bg-danger/10 hover:text-danger"
                     : "text-text-primary hover:bg-fill"
                 } ${
                   item.active ? "bg-fill" : ""
@@ -186,7 +186,7 @@ export default function DropdownMenu({
                   <span
                     className={`shrink-0 flex items-center justify-center text-title ${
                       item.danger
-                        ? "text-red-400"
+                        ? "text-danger"
                         : "text-text-secondary group-hover:text-text-primary"
                     } transition-colors`}
                   >

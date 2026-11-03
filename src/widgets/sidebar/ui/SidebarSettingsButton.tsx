@@ -21,13 +21,18 @@ export function SidebarSettingsButton() {
         type="button"
         aria-pressed={settingsOpen}
         onClick={toggleSettings}
-        className="group relative inline-flex items-center justify-center bg-transparent border-0 p-0 cursor-pointer active:scale-[0.96] transition-transform duration-100"
+        className={cn(
+          "group relative inline-flex h-[38px] w-[38px] items-center justify-center rounded-full border-0 p-0 cursor-pointer active:scale-[0.96] transition-all duration-150 motion-reduce:transition-none",
+          settingsOpen ? "bg-accent-primary/15" : "hover:bg-fill",
+        )}
       >
         <Icon
           size={26}
           className={cn(
-            "relative z-10 text-text-primary transition-opacity duration-150 ease-out",
-            settingsOpen ? "opacity-100" : "opacity-55 group-hover:opacity-90",
+            "relative z-10 transition-opacity duration-150 ease-out",
+            settingsOpen
+              ? "text-accent-primary opacity-100"
+              : "text-text-primary opacity-55 group-hover:opacity-90",
           )}
         />
       </button>

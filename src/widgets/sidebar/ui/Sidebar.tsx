@@ -12,7 +12,7 @@ function Sidebar({ searchOpen, onSearchToggle }: SidebarProps) {
   return (
     <div
       className={cn(
-        "h-full w-[58px] rounded-item flex flex-col overflow-hidden border-none bg-bg-glass backdrop-blur-[20px]",
+        "h-full w-[58px] rounded-panel flex flex-col overflow-hidden border border-rim bg-bg-glass backdrop-blur-[16px] backdrop-saturate-150 shadow-[0_8px_28px_rgba(36,27,77,0.14)] dark:shadow-[0_8px_28px_rgba(8,4,28,0.35)]",
       )}
     >
       <nav className="relative flex-1 flex flex-col items-center gap-[20px] pt-[16px]">

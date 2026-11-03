@@ -89,10 +89,10 @@ function LikesPlaylistCard({
     return (
       <div
         onClick={onClick}
-        className="w-full flex items-center justify-between rounded-control p-[8px] outline-none transition-colors duration-150 ease-out cursor-pointer hover:bg-border-alpha-14 select-none"
+        className="w-full flex items-center justify-between rounded-item p-[8px] outline-none transition-colors duration-150 ease-out cursor-pointer hover:bg-border-alpha-14 select-none"
       >
         <div className="flex items-center gap-[16px] min-w-0">
-          <div className="relative h-[48px] w-[48px] shrink-0 overflow-hidden rounded-control">
+          <div className="relative h-[48px] w-[48px] shrink-0 overflow-hidden rounded-catalogue">
             <img
               src={likesCover}
               alt=""
@@ -134,7 +134,7 @@ function LikesPlaylistCard({
       className="group flex flex-col gap-[8px] cursor-pointer"
       draggable={false}
     >
-      <div className="relative aspect-square w-full overflow-hidden rounded-control">
+      <div className="relative aspect-square w-full overflow-hidden rounded-catalogue">
         <img
           src={likesCover}
           alt=""
@@ -185,10 +185,10 @@ function FailedPlaylistCard({
     return (
       <div
         onClick={openFailedImports}
-        className="w-full flex items-center justify-between rounded-control p-[8px] outline-none transition-colors duration-150 ease-out cursor-pointer hover:bg-border-alpha-14 select-none"
+        className="w-full flex items-center justify-between rounded-item p-[8px] outline-none transition-colors duration-150 ease-out cursor-pointer hover:bg-border-alpha-14 select-none"
       >
         <div className="flex items-center gap-[16px] min-w-0">
-          <div className="relative h-[48px] w-[48px] shrink-0 overflow-hidden rounded-control bg-fill flex items-center justify-center text-text-tertiary">
+          <div className="relative h-[48px] w-[48px] shrink-0 overflow-hidden rounded-catalogue bg-fill flex items-center justify-center text-text-tertiary">
             <PlaylistFill size={20} />
           </div>
           <div className="min-w-0 flex flex-col gap-[2px]">
@@ -216,7 +216,7 @@ function FailedPlaylistCard({
       className="group flex flex-col gap-[8px] cursor-pointer"
       draggable={false}
     >
-      <div className="relative aspect-square w-full overflow-hidden rounded-control bg-fill flex items-center justify-center text-text-tertiary select-none">
+      <div className="relative aspect-square w-full overflow-hidden rounded-catalogue bg-fill flex items-center justify-center text-text-tertiary select-none">
         <PlaylistFill size={40} />
       </div>
       <div className="flex flex-col gap-[4px]">

@@ -397,13 +397,15 @@ function MiniPlayer({
   }, [player.repeat]);
   const repeatLabel = t(`player.repeat_${player.repeat}`);
 
-  // "on" state for the shuffle / repeat toggles: the hover tint, but opaque, so the
-  // progress fill sliding underneath never changes it. Values are the hover tint
-  // pre-composited over the toolbox on bg-primary (dark #0a0a0a, light #f5f5f7).
-  // The toolbox pill itself is the opaque bg-toolbox equivalent for the same reason.
+  // "on" state for the shuffle / repeat toggles: the accent tint, but opaque, so
+  // the progress fill sliding underneath never changes it. The opaque values are
+  // the accent pre-composited at 20% over the toolbox's opaque bg-elevated
+  // (dark #2F2364, light #FFFFFF); over the glass backdrop the translucent
+  // accent reads directly. The toolbox pill itself stays opaque off-backdrop
+  // for the same reason.
   const activeToggleClass = hasPageBackdrop
-    ? "!bg-black/[0.08] dark:!bg-white/[0.14] !text-text-primary"
-    : "!bg-[#dfdfe1] dark:!bg-[#292929] !text-text-primary";
+    ? "!bg-accent-primary/25 !text-accent-primary"
+    : "!bg-[#D0EBE2] dark:!bg-[#32476D] !text-accent-primary";
 
   const iconButtonClass =
     "inline-flex h-[30px] w-[30px] items-center justify-center rounded-control text-text-secondary transition-colors duration-150 hover:bg-black/[0.05] dark:hover:bg-white/[0.09] hover:text-text-primary active:scale-[0.96] border-none bg-transparent cursor-pointer";
@@ -592,7 +594,7 @@ function MiniPlayer({
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 6, scale: 0.96, pointerEvents: "none" }}
             transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
-            className="absolute bottom-[52px] z-[99] w-[46px] rounded-[11px] p-[4px] bg-fill backdrop-blur-2xl backdrop-saturate-150 prevent-seek"
+            className="absolute bottom-[52px] z-[99] w-[46px] rounded-item p-[4px] bg-surface-glass backdrop-blur-[16px] backdrop-saturate-150 ring-1 ring-inset ring-rim prevent-seek"
             style={volumePopupStyle}
             onPointerDown={(e) => e.stopPropagation()}
             onMouseEnter={clearVolumeHoverTimer}
@@ -614,7 +616,7 @@ function MiniPlayer({
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 10, scale: 0.985 }}
             transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}
-            className="absolute bottom-[74px] z-[92] w-[300px] rounded-[14px] p-[16px] bg-fill backdrop-blur-2xl backdrop-saturate-150 prevent-seek"
+            className="absolute bottom-[74px] z-[92] w-[300px] rounded-item p-[16px] bg-surface-glass backdrop-blur-[16px] backdrop-saturate-150 ring-1 ring-inset ring-rim prevent-seek"
             style={speedPopupStyle}
             onPointerDown={(e) => e.stopPropagation()}
           >
@@ -632,7 +634,7 @@ function MiniPlayer({
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 10, scale: 0.985 }}
             transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}
-            className="absolute bottom-[74px] z-[92] w-[300px] rounded-[14px] p-[16px] bg-fill backdrop-blur-2xl backdrop-saturate-150 prevent-seek"
+            className="absolute bottom-[74px] z-[92] w-[300px] rounded-item p-[16px] bg-surface-glass backdrop-blur-[16px] backdrop-saturate-150 ring-1 ring-inset ring-rim prevent-seek"
             style={eqPopupStyle}
             onPointerDown={(e) => e.stopPropagation()}
           >
@@ -646,9 +648,9 @@ function MiniPlayer({
           usesRoundedStyle
             ? "rounded-full border-[0.5px] border-border-tertiary bg-bg-primary"
             : embedded
-              ? `rounded-item ${
+              ? `rounded-full ring-1 ring-inset ring-rim ${
                   hasPageBackdrop
-                    ? "bg-bg-glass backdrop-blur-[20px] backdrop-saturate-150"
+                    ? "bg-bg-glass backdrop-blur-[16px] backdrop-saturate-150"
                     : "bg-bg-primary"
                 }`
               : "rounded-3xl border-[0.5px] border-border-tertiary bg-bg-primary"
@@ -874,10 +876,8 @@ function MiniPlayer({
             }`}
           >
             <div
-              className={`ml-auto flex items-center gap-[2px] rounded-lg p-[3px] pointer-events-auto prevent-seek cursor-default ${
-                hasPageBackdrop
-                  ? "bg-fill-subtle"
-                  : "bg-[#ebebed] dark:bg-[#141414]"
+              className={`ml-auto flex items-center gap-[2px] rounded-item p-[3px] pointer-events-auto prevent-seek cursor-default ${
+                hasPageBackdrop ? "bg-fill-subtle" : "bg-bg-elevated"
               }`}
               onPointerDown={(e) => e.stopPropagation()}
             >

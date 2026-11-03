@@ -113,7 +113,7 @@ function PlaylistCard({
     <>
       <div
         className={`relative aspect-square w-full overflow-hidden bg-border-alpha-14 ${
-          variant === "artist" ? "rounded-full" : "rounded-control"
+          variant === "artist" ? "rounded-full" : "rounded-catalogue"
         } flex items-center justify-center`}
       >
         {effectiveUrls.length > 0 ? (

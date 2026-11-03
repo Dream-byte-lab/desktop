@@ -25,15 +25,13 @@ export function ToggleSwitch({
         "group relative inline-flex h-[22px] w-[38px] shrink-0 items-center rounded-full border-0 p-0 select-none outline-none",
         "transition-colors duration-200 ease-out",
         "focus-visible:ring-2 focus-visible:ring-text-primary/25 focus-visible:ring-offset-2 focus-visible:ring-offset-bg-primary",
-        checked
-          ? "bg-black/[0.35] dark:bg-white/[0.35]"
-          : "bg-black/[0.1] dark:bg-white/[0.1]",
+        checked ? "bg-accent-primary" : "bg-black/[0.1] dark:bg-white/[0.1]",
         disabled
           ? "cursor-not-allowed opacity-40"
           : cn(
               "cursor-pointer",
               checked
-                ? "hover:bg-black/[0.42] dark:hover:bg-white/[0.42]"
+                ? "hover:bg-accent-primary/85"
                 : "hover:bg-black/[0.14] dark:hover:bg-white/[0.14]",
             ),
       )}

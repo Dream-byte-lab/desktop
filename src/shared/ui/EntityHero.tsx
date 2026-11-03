@@ -62,7 +62,7 @@ export function EntityHero({
     >
       <div
         className={cn(
-          "relative flex h-[168px] w-[168px] shrink-0 items-center justify-center overflow-hidden rounded-[10px]",
+          "relative flex h-[168px] w-[168px] shrink-0 items-center justify-center overflow-hidden rounded-hero",
           coverClassName || "bg-border-alpha-14",
         )}
       >

@@ -76,7 +76,7 @@ function AlbumCard({
         onPointerDown={() => prefetchCollection("album", id)}
         className={`group flex flex-col gap-[8px] no-underline cursor-pointer ${className}`}
       >
-        <div className="relative aspect-square w-full overflow-hidden rounded-control bg-border-alpha-14">
+        <div className="relative aspect-square w-full overflow-hidden rounded-catalogue bg-border-alpha-14">
           {coverUrl && (
             <CoverImage
               src={coverUrl}
