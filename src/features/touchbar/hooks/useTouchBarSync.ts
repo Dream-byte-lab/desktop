@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { playerEngine } from "@/features/player/engine/playerEngine";
 import { usePlayerStore } from "@/features/player/store/playerStore";
+import { useDjModeStore } from "@/features/mixer/store/djModeStore";
 import { useLyricsStore } from "@/features/lyrics";
 import {
   useIsTrackLiked,
@@ -137,6 +138,10 @@ export function useTouchBarSync() {
   const location = useLocation();
   const isMac = window.linerElectron?.platform === "darwin";
   const status = usePlayerStore((s) => s.status);
+  const djSessionActive = useDjModeStore((s) => s.active);
+  const keepPlayingWhenScreenOff = usePlayerStore(
+    (s) => s.keepPlayingWhenScreenOff,
+  );
   const currentTrack = usePlayerStore((s) => s.currentTrack);
   const durationMs = usePlayerStore((s) => s.durationMs);
   const volume = usePlayerStore((s) => s.volume);
@@ -285,11 +290,28 @@ export function useTouchBarSync() {
   useEffect(() => {
     if (isMac || !window.linerElectron?.touchbarUpdateState) return;
     const track = toTrackInfo(currentTrack);
-    const key = JSON.stringify([status, track]);
+    const key = JSON.stringify([
+      status,
+      track,
+      djSessionActive,
+      keepPlayingWhenScreenOff,
+    ]);
     if (key === lastStateSentRef.current) return;
     lastStateSentRef.current = key;
-    window.linerElectron.touchbarUpdateState({ status, track });
-  }, [isMac, status, currentTrack, syncRequestTick]);
+    window.linerElectron.touchbarUpdateState({
+      status,
+      track,
+      djSessionActive,
+      keepPlayingWhenScreenOff,
+    });
+  }, [
+    isMac,
+    status,
+    currentTrack,
+    syncRequestTick,
+    djSessionActive,
+    keepPlayingWhenScreenOff,
+  ]);
 
   useEffect(() => {
     if (!isMac || !window.linerElectron?.touchbarUpdateState) return;
@@ -365,6 +387,8 @@ export function useTouchBarSync() {
       isFullscreen,
       hasSyncedLyrics,
       activeIndex: lineIndex,
+      djSessionActive,
+      keepPlayingWhenScreenOff,
     };
 
     const serialized = JSON.stringify({
@@ -381,6 +405,8 @@ export function useTouchBarSync() {
       fs: payload.isFullscreen,
       sl: payload.hasSyncedLyrics,
       r: payload.currentRoute,
+      dj: payload.djSessionActive,
+      kp: payload.keepPlayingWhenScreenOff,
     });
 
     const linesChanged = lastLinesSentRef.current !== syncedLines;
@@ -420,5 +446,7 @@ export function useTouchBarSync() {
     activeIndex,
     location.pathname,
     syncRequestTick,
+    djSessionActive,
+    keepPlayingWhenScreenOff,
   ]);
 }

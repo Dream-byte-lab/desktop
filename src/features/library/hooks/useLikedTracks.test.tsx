@@ -3,16 +3,26 @@ import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createRoot, Root } from "react-dom/client";
 import { act } from "react";
-import { useLikedTracks, applyOptimisticLike } from "./useLikedTracks";
+import {
+  useLikedTracks,
+  applyOptimisticLike,
+  beginOptimisticLike,
+  reloadLikedTracks,
+  likedTracksSnapshot,
+} from "./useLikedTracks";
 import { api } from "@/shared/api";
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+
+const hoisted = vi.hoisted(() => ({
+  session: { accessToken: "test-token", user: { id: "u1" } } as any,
+}));
 
 vi.mock("@/shared/api", () => ({
   api: {
     listLikedTracks: vi.fn(),
   },
-  getAuthSession: () => ({ accessToken: "test-token", user: { id: "u1" } }),
+  getAuthSession: () => hoisted.session,
   toClientTrack: (track: any) => ({
     id: track.id,
     title: track.title,
@@ -23,6 +33,24 @@ vi.mock("@/shared/api", () => ({
   }),
 }));
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (err: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+const pageWith = (...ids: string[]) => ({
+  items: ids.map((id) => ({
+    track: { id, title: `Song ${id}`, artists: "Artist" },
+    likedAt: "2026-01-01T00:00:00.000Z",
+  })),
+  nextCursor: null,
+});
+
 describe("useLikedTracks", () => {
   let container: HTMLDivElement;
   let root: Root;
@@ -32,6 +60,7 @@ describe("useLikedTracks", () => {
     document.body.appendChild(container);
     root = createRoot(container);
     vi.clearAllMocks();
+    hoisted.session = { accessToken: "test-token", user: { id: "u1" } };
   });
 
   afterEach(() => {
@@ -105,5 +134,131 @@ describe("useLikedTracks", () => {
 
     expect(hookResult?.isLoading).toBe(false);
     expect(hookResult?.data.tracks).toHaveLength(2);
+  });
+
+  it("keeps a settled override created after a load started when that load completes", async () => {
+    const first = deferred<any>();
+    (api.listLikedTracks as any).mockImplementation(() => first.promise);
+
+    let pending!: Promise<void>;
+    await act(async () => {
+      pending = reloadLikedTracks();
+    });
+    expect(api.listLikedTracks).toHaveBeenCalledTimes(1);
+
+    // Intent lands (and its mutation settles) while the fetch is out:
+    // the fetched page cannot speak for it, so it must survive.
+    act(() => {
+      const handle = beginOptimisticLike("track-new");
+      handle.settleSucceeded();
+    });
+
+    await act(async () => {
+      first.resolve(pageWith("track-1"));
+      await pending;
+    });
+
+    const ids = likedTracksSnapshot().tracks.map((t) => t.id);
+    expect(ids).toContain("track-new");
+    expect(ids).toContain("track-1");
+
+    // Cleanup: a load that starts after the override settled may drop it.
+    (api.listLikedTracks as any).mockResolvedValue(pageWith("track-1"));
+    await act(async () => {
+      await reloadLikedTracks();
+    });
+    expect(likedTracksSnapshot().tracks.map((t) => t.id)).not.toContain(
+      "track-new",
+    );
+  });
+
+  it("queues exactly one follow-up when a forced reload lands during a fetch", async () => {
+    const pages: ReturnType<typeof deferred<any>>[] = [];
+    (api.listLikedTracks as any).mockImplementation(() => {
+      const d = deferred<any>();
+      pages.push(d);
+      return d.promise;
+    });
+
+    let first!: Promise<void>;
+    let second!: Promise<void>;
+    await act(async () => {
+      first = reloadLikedTracks();
+    });
+    expect(api.listLikedTracks).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      second = reloadLikedTracks();
+      void reloadLikedTracks();
+    });
+    // Still only the in-flight fetch: the forced reloads coalesce.
+    expect(api.listLikedTracks).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      pages[0].resolve(pageWith("track-1"));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(api.listLikedTracks).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      pages[1].resolve(pageWith("track-1", "track-3"));
+      await second;
+      await first;
+    });
+    expect(api.listLikedTracks).toHaveBeenCalledTimes(2);
+    expect(likedTracksSnapshot().tracks.map((t) => t.id)).toContain("track-3");
+  });
+
+  it("discards an in-flight load and clears overrides when the account switches", async () => {
+    const pages: ReturnType<typeof deferred<any>>[] = [];
+    (api.listLikedTracks as any).mockImplementation(() => {
+      const d = deferred<any>();
+      pages.push(d);
+      return d.promise;
+    });
+
+    await act(async () => {
+      void reloadLikedTracks();
+    });
+    expect(api.listLikedTracks).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      applyOptimisticLike("u1-only-track");
+    });
+    expect(likedTracksSnapshot().tracks.map((t) => t.id)).toContain(
+      "u1-only-track",
+    );
+
+    // Direct A -> B switch while A's fetch is still out.
+    hoisted.session = { accessToken: "token-b", user: { id: "u2" } };
+    await act(async () => {
+      window.dispatchEvent(new Event("auth:changed"));
+    });
+    // A's optimistic intent is gone with A's session.
+    expect(likedTracksSnapshot().tracks.map((t) => t.id)).not.toContain(
+      "u1-only-track",
+    );
+
+    await act(async () => {
+      pages[0].resolve(pageWith("track-from-a"));
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    // A's page was discarded; a fresh fetch for B was queued instead.
+    expect(likedTracksSnapshot().tracks.map((t) => t.id)).not.toContain(
+      "track-from-a",
+    );
+    expect(api.listLikedTracks).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      pages[1].resolve(pageWith("track-from-b"));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(likedTracksSnapshot().tracks.map((t) => t.id)).toEqual([
+      "track-from-b",
+    ]);
   });
 });

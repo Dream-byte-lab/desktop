@@ -119,6 +119,7 @@ export const useImportStore = create<ActiveImportState>((set, get) => ({
           title: outcome.title,
           description: outcome.description,
           result: outcome.result,
+          ...(outcome.partial ? { partial: outcome.partial } : {}),
         };
 
         if (outcome.reviewItems.length > 0) {
@@ -170,6 +171,7 @@ export const useImportStore = create<ActiveImportState>((set, get) => ({
           outcome.title,
           outcome.description,
           outcome.failedTracks,
+          outcome.partial,
         );
         set({ isPolling: false });
         notifyLibraryChanged();
@@ -223,6 +225,7 @@ export const useImportStore = create<ActiveImportState>((set, get) => ({
           outcome.title,
           outcome.description,
           outcome.failedTracks,
+          outcome.partial,
         );
         imported += outcome.result.imported;
         kept += outcome.failedTracks.length + needsDecision.length;

@@ -48,6 +48,7 @@ import {
   usePlayerStore,
   useGlassBlur,
 } from "@/features/player";
+import { NOW_PLAYING_MORPH_DURATION_S } from "@/features/player/ui/nowPlayingMorph";
 import { WelcomeGreeting } from "@/features/greeting/ui/WelcomeGreeting";
 import { DjPartyPanel } from "@/features/mixer/ui/DjPartyPanel";
 import { DjProView } from "@/features/mixer/ui/DjProView";
@@ -76,6 +77,7 @@ import {
 import { UpdateModal, UpdateToastBridge } from "@/features/updater";
 import { YoutubeSignInNotice } from "@/features/youtube-auth";
 import { useOfflineModeStore } from "@/features/connectivity";
+import { useSidebarStore } from "@/widgets/sidebar/model/useSidebarStore";
 
 interface AppFrameProps {
   children: React.ReactNode;
@@ -83,6 +85,7 @@ interface AppFrameProps {
 
 const RIGHT_DRAWER_WIDTH = 440;
 const SIDEBAR_WIDTH = 58;
+const SIDEBAR_EXPANDED_WIDTH = 232;
 const SHELL_EDGE_GAP = 6;
 const SEARCH_QUERY_CACHE_TTL_MS = 60_000;
 const LEGACY_LAYOUT_STORAGE_KEYS = [
@@ -126,6 +129,7 @@ export default function AppFrame({ children }: AppFrameProps) {
   const toggleSearch = useModalStore((state) => state.toggleSearch);
   const openSettings = useModalStore((state) => state.openSettings);
   const offline = useOfflineModeStore((state) => state.offline);
+  const sidebarCollapsed = useSidebarStore((state) => state.collapsed);
 
   const [searchQuery, setSearchQuery] = useState("");
   const [queuePopupOpen, setQueuePopupOpen] = useState(false);
@@ -286,6 +290,24 @@ export default function AppFrame({ children }: AppFrameProps) {
       handleCloseFullscreen();
     }
   }, [isFullscreenPlayer, hasCurrentTrack, handleCloseFullscreen]);
+
+  // The overlay below mounts statically — its y-slide has retired so
+  // the pill→card morph reads as one motion — so the effects-ready
+  // flip its slide's onAnimationComplete used to deliver is now
+  // timed to the morph itself: a 380 ms timeout keyed to
+  // fullscreenPlayerOpen (NOW_PLAYING_MORPH_DURATION_S). Opening:
+  // the flip lands as the morph completes, and until it does the
+  // shell stays mounted and measurable under the overlay, which is
+  // what lets the pill's artwork travel. Closing: the flag holds
+  // through the exit crossfade and the artwork's journey home, then
+  // resets so the next open starts unset.
+  useEffect(() => {
+    const timeoutId = setTimeout(
+      () => setFullscreenEffectsReady(fullscreenPlayerOpen),
+      NOW_PLAYING_MORPH_DURATION_S * 1000,
+    );
+    return () => clearTimeout(timeoutId);
+  }, [fullscreenPlayerOpen]);
 
   const openRightPanel = useCallback(() => setQueuePopupOpen(true), []);
   const closeRightPanel = useCallback(() => setQueuePopupOpen(false), []);
@@ -768,7 +790,10 @@ export default function AppFrame({ children }: AppFrameProps) {
       >
         <aside
           ref={sidebarRef}
-          className="w-[58px] mt-[56px] shrink-0 z-[45] relative flex flex-col"
+          className="mt-[56px] shrink-0 z-[45] relative flex flex-col transition-[width] duration-[210ms] ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none"
+          style={{
+            width: sidebarCollapsed ? SIDEBAR_WIDTH : SIDEBAR_EXPANDED_WIDTH,
+          }}
         >
           <Sidebar
             searchOpen={searchOpen}
@@ -852,13 +877,6 @@ export default function AppFrame({ children }: AppFrameProps) {
           <motion.div
             key="fullscreen-player-overlay"
             data-theme="dark"
-            initial={{ y: "100%" }}
-            animate={{ y: 0 }}
-            exit={{ y: "100%" }}
-            transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
-            onAnimationComplete={() =>
-              setFullscreenEffectsReady(fullscreenPlayerOpen)
-            }
             className={`dark absolute inset-0 z-[70] overflow-hidden rounded-[inherit] bg-black ${
               fullscreenEffectsReady ? "" : "will-change-transform"
             }`}
@@ -906,7 +924,9 @@ export default function AppFrame({ children }: AppFrameProps) {
             transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
             className={`absolute right-0 z-[60] flex flex-col items-center pointer-events-none pt-[54px]`}
             style={{
-              left: SIDEBAR_WIDTH + SHELL_EDGE_GAP,
+              left:
+                (sidebarCollapsed ? SIDEBAR_WIDTH : SIDEBAR_EXPANDED_WIDTH) +
+                SHELL_EDGE_GAP,
               right: SHELL_EDGE_GAP,
               top: 6,
             }}

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api, ApiError } from "@/shared/api";
-import type { ImportReview, Track } from "@/shared/contracts";
+import type { ImportJob, ImportReview, Track } from "@/shared/contracts";
 import {
   FailedImportsStore,
   failedImports,
@@ -198,6 +198,54 @@ describe("imports saving into the one playlist", () => {
     // job completing — the songs were already in the playlist.
     expect(countWhenCompleted).toBe(1);
     expect(failedImports.list()).toHaveLength(1);
+  });
+
+  it("marks a partial import completed-with-partial, never a clean complete", async () => {
+    mockPlaylistApi();
+    const job = createLocalImportJob(
+      "soundcloud",
+      "https://soundcloud.com/listener/likes",
+    );
+    updateLocalImportJob(job.id, {
+      result: { total: 603, imported: 0, skipped: 0 },
+    });
+    let completed: ImportJob | undefined;
+    const unsubscribe = onLocalImportJobChange((updated) => {
+      if (updated.id === job.id && updated.status === "completed") {
+        completed = updated;
+      }
+    });
+    try {
+      await finalizeLocalImport(
+        job.id,
+        [track("sc:1", "One")],
+        "listener — Likes",
+        undefined,
+        [],
+        {
+          reason: "page_fetch_failed",
+          missing: 601,
+          expectedTotal: 603,
+          resumable: true,
+        },
+      );
+    } finally {
+      unsubscribe();
+    }
+    expect(completed?.status).toBe("completed");
+    expect(completed?.partial).toMatchObject({
+      reason: "page_fetch_failed",
+      missing: 601,
+      expectedTotal: 603,
+      resumable: true,
+    });
+    // The shortfall rides the result counts too: 603 expected,
+    // 1 saved, the rest visibly unaccounted-for — not re-based.
+    expect(completed?.result).toEqual({
+      total: 603,
+      imported: 1,
+      skipped: 602,
+    });
   });
 
   it("keeps a single entry when the same song fails in two imports", async () => {

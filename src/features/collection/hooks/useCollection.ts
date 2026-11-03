@@ -4,6 +4,10 @@ import { queryCache } from "@/shared/cache/queryCache";
 import type { Track } from "@/shared/types";
 import { YOUTUBE_THUMBNAIL_HOST } from "@/shared/youtube";
 import { getDailyMixArtists } from "@/features/home/hooks/useDailyMixes";
+import {
+  isLocalMixId,
+  resolveLocalMixCollection,
+} from "../lib/localMixResolver";
 
 export interface CollectionPageData {
   type?: "playlist" | "album";
@@ -19,11 +23,21 @@ export interface CollectionPageData {
 
 const COLLECTION_STALE_MS = 5 * 60 * 1000;
 
-async function loadCollection(
+// Exported for tests; the hook and the prefetcher below are the
+// only production callers.
+export async function loadCollection(
   type: string,
   id: string,
 ): Promise<CollectionPageData> {
   const decodedId = id ? decodeURIComponent(id) : "";
+
+  // Local For You mixes (`mix:…`) exist only on-device: resolve
+  // them from the day's snapshot and the local universe, never
+  // from the server (see lib/localMixResolver).
+  if (type === "playlist" && isLocalMixId(decodedId)) {
+    return resolveLocalMixCollection(decodedId);
+  }
+
   const isDailyMix =
     decodedId.startsWith("daily-mix") ||
     decodedId.startsWith("mix-") ||

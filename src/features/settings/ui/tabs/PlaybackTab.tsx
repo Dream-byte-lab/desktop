@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { useTranslation } from "@/languages";
 import { usePlayerStore } from "@/features/player";
+import { useLyricsStore } from "@/features/lyrics";
 import { ToggleSwitch } from "@/shared/ui";
 import { SettingRow, SettingSection, SegmentedControl } from "../controls";
 
@@ -23,11 +24,23 @@ export function PlaybackTab({ searchQuery }: { searchQuery?: string }) {
   const setDefaultPlaybackContext = usePlayerStore(
     (state) => state.setDefaultPlaybackContext,
   );
+  const lrclibFallbackEnabled = useLyricsStore(
+    (state) => state.lrclibFallbackEnabled,
+  );
+  const setLrclibFallbackEnabled = useLyricsStore(
+    (state) => state.setLrclibFallbackEnabled,
+  );
   const pauseOnDeviceChange = usePlayerStore(
     (state) => state.pauseOnDeviceChange,
   );
   const setPauseOnDeviceChange = usePlayerStore(
     (state) => state.setPauseOnDeviceChange,
+  );
+  const keepPlayingWhenScreenOff = usePlayerStore(
+    (state) => state.keepPlayingWhenScreenOff,
+  );
+  const setKeepPlayingWhenScreenOff = usePlayerStore(
+    (state) => state.setKeepPlayingWhenScreenOff,
   );
 
   useEffect(() => {
@@ -110,6 +123,25 @@ export function PlaybackTab({ searchQuery }: { searchQuery?: string }) {
       />
 
       <SettingRow
+        title={
+          t("settings.playback.lrclib_fallback.title") || "LRCLIB fallback"
+        }
+        description={
+          t("settings.playback.lrclib_fallback.description") ||
+          "When the built-in sources have no lyrics for a track, Linerave can ask LRCLIB (lrclib.net), sending the track's title, artist and duration. Lyrics found this way are labelled LRCLIB."
+        }
+        titleKey="settings.playback.lrclib_fallback.title"
+        descKey="settings.playback.lrclib_fallback.description"
+        searchQuery={searchQuery}
+        control={
+          <ToggleSwitch
+            checked={lrclibFallbackEnabled}
+            onChange={setLrclibFallbackEnabled}
+          />
+        }
+      />
+
+      <SettingRow
         title={t("settings.audio.pause_on_device_change.title")}
         description={t("settings.audio.pause_on_device_change.description")}
         titleKey="settings.audio.pause_on_device_change.title"
@@ -119,6 +151,26 @@ export function PlaybackTab({ searchQuery }: { searchQuery?: string }) {
           <ToggleSwitch
             checked={pauseOnDeviceChange}
             onChange={setPauseOnDeviceChange}
+          />
+        }
+      />
+
+      <SettingRow
+        title={
+          t("settings.playback.keep_playing_screen_off.title") ||
+          "Keep playing when the screen turns off"
+        }
+        description={
+          t("settings.playback.keep_playing_screen_off.description") ||
+          "While music is playing or a DJ session is running, Linerave asks the system not to suspend the app, so playback continues after the screen turns off. This cannot override sleep you start yourself, or a lid-close set to sleep in your system's power settings."
+        }
+        titleKey="settings.playback.keep_playing_screen_off.title"
+        descKey="settings.playback.keep_playing_screen_off.description"
+        searchQuery={searchQuery}
+        control={
+          <ToggleSwitch
+            checked={keepPlayingWhenScreenOff}
+            onChange={setKeepPlayingWhenScreenOff}
           />
         }
       />

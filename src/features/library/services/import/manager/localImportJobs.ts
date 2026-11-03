@@ -4,6 +4,7 @@ import {
 } from "@/shared/api/localImports";
 import type {
   ImportJob,
+  ImportPartialInfo,
   ImportReview,
   ImportSource,
   Track,
@@ -72,6 +73,7 @@ export async function finalizeLocalImport(
   title?: string,
   description?: string,
   matchingFailures: FailedImportTrack[] = [],
+  partial?: ImportPartialInfo,
 ): Promise<{ finalized: boolean }> {
   const record = records.get(jobId);
   if (!record) throw new Error("Import was not found.");
@@ -140,6 +142,12 @@ export async function finalizeLocalImport(
         requiresDecision: false,
         playlistId,
         result: { total, imported: saved, skipped: Math.max(0, total - saved) },
+        // A partial import completes WITH its shortfall attached —
+        // "completed-with-partial", never presented as a clean
+        // complete. (A partial recorded earlier, e.g. at parse time
+        // on an awaiting-decision job, survives untouched when no
+        // newer one is passed.)
+        ...(partial ? { partial } : {}),
         finishedAt: new Date().toISOString(),
       },
       [],

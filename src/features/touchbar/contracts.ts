@@ -39,6 +39,10 @@ export interface TouchBarStatePayload {
   hasSyncedLyrics?: boolean;
   syncedLines?: TouchBarActiveLine[];
   activeIndex?: number;
+  /** True while a DJ session is running (the session is the playback). */
+  djSessionActive?: boolean;
+  /** The user's "Keep playing when the screen turns off" setting. */
+  keepPlayingWhenScreenOff?: boolean;
 }
 
 export interface TouchBarAction {

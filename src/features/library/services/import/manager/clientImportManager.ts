@@ -1,4 +1,5 @@
 import type {
+  ImportPartialInfo,
   ImportResult,
   ImportReview,
   ImportSource,
@@ -42,6 +43,8 @@ export interface ClientImportOutcome {
   /** Every song that failed to match, named — the import still completes. */
   failedTracks: FailedImportTrack[];
   result: ImportResult;
+  /** Set when the source provably holds more tracks than landed. */
+  partial?: ImportPartialInfo;
 }
 
 export interface RunImportOptions {
@@ -215,6 +218,45 @@ export async function runClientImportFromPlaylist(
   return importParsedPlaylist(playlist, options);
 }
 
+/**
+ * A source that knows it landed fewer tracks than it holds (a failed
+ * page, an early end, records that never resolved) says so on the
+ * playlist; the outcome must carry that truth: unresolved records
+ * become named failures bound for "Could not import", and `total`
+ * stays what the source expected — it is never quietly re-based to
+ * the landed subset.
+ */
+function applyPartialAccounting(
+  playlist: ClientImportedPlaylist,
+  outcome: ClientImportOutcome,
+): ClientImportOutcome {
+  const unresolved = playlist.unresolvedTracks ?? [];
+  if (!playlist.partial && unresolved.length === 0) return outcome;
+  const failedTracks = [
+    ...outcome.failedTracks,
+    ...unresolved.map((sourceTrack) => ({
+      sourceTrack,
+      reason: "unresolved_track",
+    })),
+  ];
+  const expectedTotal = playlist.partial?.expectedTotal;
+  const total = Math.max(outcome.result.total, expectedTotal ?? 0);
+  const result =
+    total === outcome.result.total
+      ? outcome.result
+      : {
+          total,
+          imported: outcome.result.imported,
+          skipped: Math.max(0, total - outcome.result.imported),
+        };
+  return {
+    ...outcome,
+    failedTracks,
+    result,
+    ...(playlist.partial ? { partial: playlist.partial } : {}),
+  };
+}
+
 async function importParsedPlaylist(
   playlist: ClientImportedPlaylist,
   options: RunImportOptions,
@@ -226,7 +268,7 @@ async function importParsedPlaylist(
   }
   if (playlist.canonicalTrackIds) {
     const total = playlist.tracks.length;
-    return {
+    return applyPartialAccounting(playlist, {
       source: playlist.source,
       title: playlist.title,
       description: playlist.description,
@@ -236,7 +278,7 @@ async function importParsedPlaylist(
       reviewItems: [],
       failedTracks: [],
       result: { total, imported: total, skipped: 0 },
-    };
+    });
   }
   options.onProgress?.({
     phase: "matching",
@@ -244,5 +286,8 @@ async function importParsedPlaylist(
     description: playlist.description,
     result: { total: playlist.tracks.length, imported: 0, skipped: 0 },
   });
-  return matchPlaylist(playlist, options);
+  return applyPartialAccounting(
+    playlist,
+    await matchPlaylist(playlist, options),
+  );
 }

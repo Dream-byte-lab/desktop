@@ -1,10 +1,10 @@
-import { useEffect } from "react";
-import { api, toClientTrack, mediaUrl } from "@/shared/api";
+import { useEffect, useMemo } from "react";
+import { useTranslation, type TFunction } from "@/languages";
 import { queryCache } from "@/shared/cache/queryCache";
 import type { Track } from "@/shared/types";
 import type { CollectionPageData } from "@/features/collection/hooks/useCollection";
-import { loadWithRetry, useSessionOwner } from "./sessionAwareLoad";
-import { freshFor, useCachedResource } from "@/shared/cache/useCachedResource";
+import { buildMixes, type ForYouMix } from "../lib/forYouFeed";
+import { useDailyMixSnapshot, useForYouCandidates } from "./useForYouFeed";
 
 export interface DailyMix {
   id: string;
@@ -70,24 +70,50 @@ export function getDailyMixArtists(
 
 const EMPTY_MIXES: DailyMix[] = [];
 
-function toDailyMixes(
-  items: Awaited<ReturnType<typeof api.getDailyMixes>>["items"],
-): DailyMix[] {
-  return (items || []).map((mix) => {
-    const clientTracks = (mix.tracks || []).map((t) => toClientTrack(t));
-    const primaryCover = mix.cover?.url
-      ? mediaUrl(mix.cover.url)
-      : clientTracks[0]?.coverUrl || clientTracks[1]?.coverUrl;
-    return {
-      id: mix.id,
-      title: mix.title,
-      description: mix.description,
-      clusterArtists: getDailyMixArtists(mix.clusterArtists, clientTracks, 4),
-      coverUrl: primaryCover,
-      trackCount: mix.trackCount || clientTracks.length,
-      tracks: clientTracks,
-    };
-  });
+function mixTitle(mix: ForYouMix, t: TFunction): string {
+  switch (mix.basis.kind) {
+    case "playlistGenre":
+      return t("forYou.mixGenreTitle", { label: mix.basis.label });
+    case "artistFamily":
+      return t("forYou.mixArtistTitle", { artist: mix.basis.label });
+    case "era":
+      return t("forYou.mixEraTitle", { era: mix.basis.label });
+    case "derivedEnergy":
+      return mix.basis.label === "high"
+        ? t("forYou.mixEnergyHighTitle")
+        : t("forYou.mixEnergyLowTitle");
+    case "derivedTempo":
+      return mix.basis.label === "slow"
+        ? t("forYou.mixTempoSlowTitle")
+        : t("forYou.mixTempoDrivingTitle");
+  }
+}
+
+function mixDescription(mix: ForYouMix, t: TFunction): string {
+  switch (mix.basis.kind) {
+    case "playlistGenre":
+      return t("forYou.mixGenreSubtitle");
+    case "artistFamily":
+      return t("forYou.mixFamilySubtitle");
+    case "era":
+      return t("forYou.mixEraSubtitle");
+    case "derivedEnergy":
+      return t("forYou.moodsDerived");
+    case "derivedTempo":
+      return t("forYou.moodsDerived");
+  }
+}
+
+function toDailyMix(mix: ForYouMix, t: TFunction): DailyMix {
+  return {
+    id: mix.id,
+    title: mixTitle(mix, t),
+    description: mixDescription(mix, t),
+    clusterArtists: getDailyMixArtists(undefined, mix.tracks, 4),
+    coverUrl: mix.tracks[0]?.coverUrl || undefined,
+    trackCount: mix.tracks.length,
+    tracks: mix.tracks,
+  };
 }
 
 function primeMixCollections(mixes: DailyMix[]): void {
@@ -111,31 +137,37 @@ export function dailyMixesCacheKey(owner: string): string {
   return `home:daily-mixes:${owner}`;
 }
 
-const DAILY_MIXES_POLICY = {
-  isFresh: freshFor(10 * 60_000),
-  revalidateOnFocus: true,
-  sessionOnly: true,
-};
-
+// The Home daily-mix rail runs on the same local engine as the
+// For You feed: candidates are assembled from the listener's own
+// evidence, mixes are built by the pure builder and frozen through
+// the shared daily snapshot, so the rail and the feed page always
+// show the same mixes. There is no server daily-mixes call any
+// more. Guests assemble an empty universe (history is skipped and
+// nothing is liked), so they get no mixes and the rail hides —
+// the same outcome the server era produced.
 export function useDailyMixes() {
-  const owner = useSessionOwner();
-  const { data, isLoading } = useCachedResource(
-    dailyMixesCacheKey(owner),
-    // Daily mixes are personalised per account; guests skip the call and
-    // the section simply stays hidden.
-    () =>
-      owner
-        ? loadWithRetry(
-            () => api.getDailyMixes(),
-            () => true,
-          ).then((res) => toDailyMixes(res.items))
-        : Promise.resolve(EMPTY_MIXES),
-    DAILY_MIXES_POLICY,
+  const { t } = useTranslation();
+  const candidatesData = useForYouCandidates();
+
+  const generated = buildMixes(candidatesData.candidates, {
+    seedKey: candidatesData.seedKey,
+    topArtists: candidatesData.topArtists,
+  });
+  const mixes = useDailyMixSnapshot(
+    generated,
+    candidatesData.byId,
+    candidatesData.dateKey,
+    candidatesData.settled,
+  );
+
+  const data = useMemo<DailyMix[]>(
+    () => mixes.map((mix) => toDailyMix(mix, t)),
+    [mixes, t],
   );
 
   useEffect(() => {
     if (data) primeMixCollections(data);
   }, [data]);
 
-  return { data: data ?? EMPTY_MIXES, isLoading };
+  return { data: data ?? EMPTY_MIXES, isLoading: candidatesData.isLoading };
 }

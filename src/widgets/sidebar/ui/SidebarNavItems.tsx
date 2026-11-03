@@ -1,10 +1,16 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Link, useLocation } from "react-router-dom";
-import { sidebarNavItems } from "@/features/navigation/data/navigation";
+import { motion, useReducedMotion } from "framer-motion";
+import {
+  sidebarSections,
+  getSidebarItem,
+  type NavItem,
+} from "@/features/navigation/data/navigation";
 import { useTranslation } from "@/languages";
 import { Tooltip } from "@/shared/ui";
 import { cn } from "@/shared/lib";
 import { useOfflineModeStore } from "@/features/connectivity";
+import { useSidebarStore } from "../model/useSidebarStore";
 
 export interface SidebarNavItemsProps {
   searchOpen: boolean;
@@ -19,103 +25,233 @@ export function SidebarNavItems({
   const { t } = useTranslation();
   const [pendingHref, setPendingHref] = useState<string | null>(null);
   const offline = useOfflineModeStore((state) => state.offline);
+  const collapsed = useSidebarStore((state) => state.collapsed);
+  const reduceMotion = useReducedMotion();
 
   useEffect(() => {
     setPendingHref(null);
   }, [pathname]);
 
-  const isRouteActive = (href: string) => {
+  const isRouteActive = (item: NavItem) => {
+    const href = item.href;
+    if (!href) return false;
     if (pendingHref) return href === pendingHref;
-    if (href === "/") {
-      return pathname === "/" || pathname === "/home";
+    switch (item.id) {
+      case "home":
+        return pathname === "/" || pathname === "/home";
+      case "favorites":
+        return (
+          pathname === "/library/saved" ||
+          pathname?.startsWith("/library/saved/")
+        );
+      case "downloads":
+        return (
+          pathname === "/library/cached" ||
+          pathname?.startsWith("/library/cached/")
+        );
+      case "library": {
+        if (
+          pathname === "/library/saved" ||
+          pathname?.startsWith("/library/saved/") ||
+          pathname === "/library/cached" ||
+          pathname?.startsWith("/library/cached/")
+        ) {
+          return false;
+        }
+        return pathname === href || pathname?.startsWith(`${href}/`);
+      }
+      default:
+        return pathname === href || pathname?.startsWith(`${href}/`);
     }
-    return pathname === href || pathname?.startsWith(`${href}/`);
   };
 
-  const isItemActive = (id: string, href?: string) => {
-    if (id === "search") {
-      return searchOpen;
-    }
-    return href ? isRouteActive(href) : false;
+  const isItemActive = (item: NavItem) => {
+    if (item.id === "search") return searchOpen;
+    return isRouteActive(item);
   };
+
+  const renderPill = (active: boolean): ReactNode => {
+    if (!active) return null;
+    if (reduceMotion) {
+      return (
+        <span className="absolute inset-0 rounded-full bg-accent-primary/15" />
+      );
+    }
+    return (
+      <motion.span
+        layoutId="sidebar-active-pill"
+        className="absolute inset-0 rounded-full bg-accent-primary/15"
+        transition={{ duration: 0.21, ease: [0.22, 1, 0.36, 1] }}
+      />
+    );
+  };
+
+  const renderItem = (item: NavItem) => {
+    const active = isItemActive(item);
+    const Icon = item.Icon;
+    const label = t(`common.sidebar.${item.id}`) || item.label;
+
+    if (!collapsed) {
+      // Expanded row
+      const rowClass = cn(
+        "group relative flex h-[38px] w-full items-center gap-[10px] rounded-full px-[11px] cursor-pointer active:scale-[0.98] transition-all duration-150 motion-reduce:transition-none",
+        !active && "hover:bg-fill",
+      );
+      const iconClass = cn(
+        "relative z-10 shrink-0 transition-opacity duration-150 ease-out",
+        active
+          ? "text-accent-primary opacity-100"
+          : "text-text-primary opacity-55 group-hover:opacity-90",
+      );
+      const labelEl = (
+        <span
+          className={cn(
+            "relative z-10 truncate text-[13px] font-medium",
+            active ? "text-accent-primary" : "text-text-primary",
+          )}
+        >
+          {label}
+        </span>
+      );
+
+      if (item.id === "search") {
+        return (
+          <button
+            key={item.id}
+            type="button"
+            aria-pressed={searchOpen}
+            onClick={onSearchToggle}
+            className={cn(rowClass, "border-0 bg-transparent text-left")}
+          >
+            {renderPill(active)}
+            <Icon size={22} className={iconClass} />
+            {labelEl}
+          </button>
+        );
+      }
+
+      return (
+        <Link
+          key={item.id}
+          to={item.href!}
+          aria-current={active ? "page" : undefined}
+          onPointerDown={(event) => {
+            if (event.button === 0) setPendingHref(item.href!);
+          }}
+          onPointerLeave={(event) => {
+            if (event.buttons & 1) setPendingHref(null);
+          }}
+          onPointerCancel={() => setPendingHref(null)}
+          className={rowClass}
+        >
+          {renderPill(active)}
+          <Icon size={22} className={iconClass} />
+          {labelEl}
+        </Link>
+      );
+    }
+
+    // Rail (collapsed) capsule — today's rendering
+    if (item.id === "search") {
+      return (
+        <Tooltip key={item.id} content={label} side="right" sideOffset={12}>
+          <button
+            type="button"
+            aria-pressed={searchOpen}
+            aria-label={label}
+            onClick={onSearchToggle}
+            className={cn(
+              "group relative inline-flex h-[38px] w-[38px] items-center justify-center rounded-full border-0 p-0 cursor-pointer active:scale-[0.96] transition-all duration-150 motion-reduce:transition-none",
+              !active && "hover:bg-fill",
+            )}
+          >
+            {renderPill(active)}
+            <Icon
+              size={26}
+              className={cn(
+                "relative z-10 transition-opacity duration-150 ease-out",
+                active
+                  ? "text-accent-primary opacity-100"
+                  : "text-text-primary opacity-55 group-hover:opacity-90",
+              )}
+            />
+          </button>
+        </Tooltip>
+      );
+    }
+
+    return (
+      <Tooltip key={item.id} content={label} side="right" sideOffset={12}>
+        <Link
+          to={item.href!}
+          aria-current={active ? "page" : undefined}
+          aria-label={label}
+          onPointerDown={(event) => {
+            if (event.button === 0) setPendingHref(item.href!);
+          }}
+          onPointerLeave={(event) => {
+            if (event.buttons & 1) setPendingHref(null);
+          }}
+          onPointerCancel={() => setPendingHref(null)}
+          className={cn(
+            "group relative inline-flex h-[38px] w-[38px] items-center justify-center rounded-full cursor-pointer active:scale-[0.96] transition-all duration-150 motion-reduce:transition-none",
+            !active && "hover:bg-fill",
+          )}
+        >
+          {renderPill(active)}
+          <Icon
+            size={26}
+            className={cn(
+              "relative z-10",
+              active
+                ? "text-accent-primary opacity-100"
+                : "text-text-primary opacity-55 transition-opacity duration-150 ease-out group-hover:opacity-90",
+            )}
+          />
+        </Link>
+      </Tooltip>
+    );
+  };
+
+  const visibleSections = sidebarSections
+    .map((section) => {
+      const items = section.itemIds
+        .map((id) => getSidebarItem(id))
+        .filter((item): item is NavItem => Boolean(item))
+        .filter((item) => !offline || item.id === "library");
+      return { section, items };
+    })
+    .filter(({ items }) => items.length > 0);
+
+  if (!collapsed) {
+    return (
+      <div className="flex flex-col">
+        {visibleSections.map(({ section, items }) => (
+          <div key={section.id}>
+            <div className="px-[21px] pt-[18px] pb-[6px] text-[11px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">
+              {t(`common.sidebar.section_${section.id}`) || section.label}
+            </div>
+            <div className="mx-[10px] flex flex-col gap-[2px]">
+              {items.map((item) => renderItem(item))}
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  }
 
   return (
-    <>
-      {sidebarNavItems
-        .filter((item) => item.id !== "settings")
-        .filter((item) => !offline || item.id === "library")
-        .map((item) => {
-          const active = isItemActive(item.id, item.href);
-          const Icon = item.Icon;
-          const tooltipLabel = t(`common.sidebar.${item.id}`) || item.label;
-
-          if (item.id === "search") {
-            return (
-              <Tooltip
-                key={item.id}
-                content={tooltipLabel}
-                side="right"
-                sideOffset={12}
-              >
-                <button
-                  type="button"
-                  aria-pressed={searchOpen}
-                  onClick={onSearchToggle}
-                  className={cn(
-                    "group relative inline-flex h-[38px] w-[38px] items-center justify-center rounded-full border-0 p-0 cursor-pointer active:scale-[0.96] transition-all duration-150 motion-reduce:transition-none",
-                    active ? "bg-accent-primary/15" : "hover:bg-fill",
-                  )}
-                >
-                  <Icon
-                    size={26}
-                    className={cn(
-                      "relative z-10 transition-opacity duration-150 ease-out",
-                      active
-                        ? "text-accent-primary opacity-100"
-                        : "text-text-primary opacity-55 group-hover:opacity-90",
-                    )}
-                  />
-                </button>
-              </Tooltip>
-            );
-          }
-
-          return (
-            <Tooltip
-              key={item.id}
-              content={tooltipLabel}
-              side="right"
-              sideOffset={12}
-            >
-              <Link
-                key={item.id}
-                to={item.href!}
-                aria-current={active ? "page" : undefined}
-                onPointerDown={(event) => {
-                  if (event.button === 0) setPendingHref(item.href!);
-                }}
-                onPointerLeave={(event) => {
-                  if (event.buttons & 1) setPendingHref(null);
-                }}
-                onPointerCancel={() => setPendingHref(null)}
-                className={cn(
-                  "group relative inline-flex h-[38px] w-[38px] items-center justify-center rounded-full cursor-pointer active:scale-[0.96] transition-all duration-150 motion-reduce:transition-none",
-                  active ? "bg-accent-primary/15" : "hover:bg-fill",
-                )}
-              >
-                <Icon
-                  size={26}
-                  className={cn(
-                    "relative z-10",
-                    active
-                      ? "text-accent-primary opacity-100"
-                      : "text-text-primary opacity-55 transition-opacity duration-150 ease-out group-hover:opacity-90",
-                  )}
-                />
-              </Link>
-            </Tooltip>
-          );
-        })}
-    </>
+    <div className="flex flex-col items-center gap-[20px] pt-[16px]">
+      {visibleSections.map(({ section, items }, index) => (
+        <div key={section.id} className="flex flex-col items-center gap-[20px]">
+          {index > 0 && (
+            <div className="flex justify-center">
+              <div className="w-[24px] border-t border-border-primary/50" />
+            </div>
+          )}
+          {items.map((item) => renderItem(item))}
+        </div>
+      ))}
+    </div>
   );
 }

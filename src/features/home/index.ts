@@ -1,4 +1,6 @@
 export { default as HomePage } from "./ui/HomePage";
+export { default as ForYouPage } from "./ui/ForYouPage";
+export { useForYouFeed } from "./hooks/useForYouFeed";
 export { default as HomePageSkeleton } from "./ui/HomePageSkeleton";
 export {
   default as PopularTracksSection,

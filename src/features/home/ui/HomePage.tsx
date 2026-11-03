@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
 import PopularTracksSection from "./PopularTracksSection";
 import DailyMixesSection from "./DailyMixesSection";
+import ForYouDoor from "./ForYouDoor";
 import YourPlaylistsSection from "./YourPlaylistsSection";
 import YourSavedAlbumsSection from "./YourSavedAlbumsSection";
 import HomePageSkeleton, { MixesSectionSkeleton } from "./HomePageSkeleton";
@@ -135,6 +136,7 @@ function HomeFeed({ onRetry }: { onRetry: () => void }) {
     if (shown) above = true;
     return margin;
   };
+  const doorMargin = takeMargin(true);
   const recentMargin = takeMargin(showRecent);
   const heavyMargin = takeMargin(showHeavy);
   const playlistsMargin = takeMargin(showPlaylists);
@@ -195,6 +197,8 @@ function HomeFeed({ onRetry }: { onRetry: () => void }) {
                 </div>
               )
             )}
+
+            <ForYouDoor marginTop={doorMargin} />
 
             {showRecent && (
               <PopularTracksSection

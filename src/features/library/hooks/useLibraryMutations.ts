@@ -1,7 +1,11 @@
 import { useCallback, useState } from "react";
 import { api } from "@/shared/api";
 import { notifyLibraryChanged, evictPlaylistFromCache } from "./usePlaylists";
-import { applyOptimisticLike, applyOptimisticUnlike } from "./useLikedTracks";
+import {
+  beginOptimisticLike,
+  beginOptimisticUnlike,
+  currentLikedAccountKey,
+} from "./useLikedTracks";
 
 type Options = {
   onSuccess?: (...args: any[]) => void;
@@ -137,24 +141,87 @@ type TrackMutationInput = string | { trackId: string; [key: string]: unknown };
 const trackIdFrom = (input: TrackMutationInput) =>
   typeof input === "string" ? input : input.trackId;
 
-export function useLikeTrack() {
+/**
+ * Per-track serial queue: like/unlike calls for one track reach the
+ * server strictly in user-intent order, while different tracks still
+ * proceed concurrently. Each caller keeps its own result/error; the
+ * chain itself never rejects, so one failure cannot stall later intent.
+ */
+const trackMutationTails = new Map<string, Promise<void>>();
+
+function enqueueTrackMutation<T>(
+  trackId: string,
+  task: () => Promise<T>,
+): Promise<T> {
+  const tail = trackMutationTails.get(trackId) ?? Promise.resolve();
+  const result = tail.then(task);
+  const nextTail = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  trackMutationTails.set(trackId, nextTail);
+  void nextTail.then(() => {
+    if (trackMutationTails.get(trackId) === nextTail) {
+      trackMutationTails.delete(trackId);
+    }
+  });
+  return result;
+}
+
+/**
+ * Like/unlike successes reload the liked list through one shared
+ * trailing debounce: a burst of toggles produces a single
+ * library:changed (and therefore a single refetch), not one per toggle.
+ * Other mutation types keep notifying immediately via useMutation.
+ */
+const LIKE_NOTIFY_DEBOUNCE_MS = 300;
+let likeNotifyTimer: ReturnType<typeof setTimeout> | null = null;
+
+export function notifyLikeLibraryChangedDebounced() {
+  if (likeNotifyTimer) clearTimeout(likeNotifyTimer);
+  likeNotifyTimer = setTimeout(() => {
+    likeNotifyTimer = null;
+    notifyLibraryChanged();
+  }, LIKE_NOTIFY_DEBOUNCE_MS);
+}
+
+function useTrackLikeMutation(kind: "like" | "unlike") {
   const [isPending, setIsPending] = useState(false);
 
-  const mutateAsync = useCallback(async (input: TrackMutationInput) => {
-    const trackId = trackIdFrom(input);
-    setIsPending(true);
-    const rollback = applyOptimisticLike(trackId);
-    try {
-      const result = await api.likeTrack(trackId);
-      notifyLibraryChanged();
-      return result;
-    } catch (err) {
-      rollback();
-      throw err;
-    } finally {
-      setIsPending(false);
-    }
-  }, []);
+  const mutateAsync = useCallback(
+    async (input: TrackMutationInput) => {
+      const trackId = trackIdFrom(input);
+      const accountKey = currentLikedAccountKey();
+      setIsPending(true);
+      // Optimistic intent applies immediately, in call order, even
+      // though the API call may wait behind an earlier intent.
+      const handle =
+        kind === "like"
+          ? beginOptimisticLike(trackId)
+          : beginOptimisticUnlike(trackId);
+      try {
+        const result = await enqueueTrackMutation(trackId, async () => {
+          // Re-check immediately before the call: work queued under a
+          // previous account is dropped, never sent in its name.
+          if (currentLikedAccountKey() !== accountKey) {
+            throw new Error("Account changed before this change was sent");
+          }
+          return kind === "like"
+            ? api.likeTrack(trackId)
+            : api.unlikeTrack(trackId);
+        });
+        handle.settleSucceeded();
+        notifyLikeLibraryChangedDebounced();
+        return result;
+      } catch (err) {
+        handle.settleFailed();
+        throw err;
+      } finally {
+        setIsPending(false);
+      }
+    },
+    [kind],
+  );
 
   const mutate = useCallback(
     (input: TrackMutationInput, options?: Options) => {
@@ -169,34 +236,10 @@ export function useLikeTrack() {
   return { mutate, mutateAsync, isPending };
 }
 
+export function useLikeTrack() {
+  return useTrackLikeMutation("like");
+}
+
 export function useUnlikeTrack() {
-  const [isPending, setIsPending] = useState(false);
-
-  const mutateAsync = useCallback(async (input: TrackMutationInput) => {
-    const trackId = trackIdFrom(input);
-    setIsPending(true);
-    const rollback = applyOptimisticUnlike(trackId);
-    try {
-      const result = await api.unlikeTrack(trackId);
-      notifyLibraryChanged();
-      return result;
-    } catch (err) {
-      rollback();
-      throw err;
-    } finally {
-      setIsPending(false);
-    }
-  }, []);
-
-  const mutate = useCallback(
-    (input: TrackMutationInput, options?: Options) => {
-      void mutateAsync(input)
-        .then((value) => options?.onSuccess?.(value))
-        .catch((error) => options?.onError?.(error))
-        .finally(() => options?.onSettled?.());
-    },
-    [mutateAsync],
-  );
-
-  return { mutate, mutateAsync, isPending };
+  return useTrackLikeMutation("unlike");
 }

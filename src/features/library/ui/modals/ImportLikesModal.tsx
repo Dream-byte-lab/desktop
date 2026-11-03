@@ -92,6 +92,11 @@ export default function ImportLikesModal() {
           </p>
         )}
 
+        <p className="text-text-tertiary text-caption m-0 font-[350]">
+          {t("common.import_soundcloud_ceiling") ||
+            "SoundCloud imports are capped at 25,000 tracks. If a page fails midway, the import says so — and running it again resumes where it stopped."}
+        </p>
+
         <DialogActions>
           <DialogButton
             type="button"

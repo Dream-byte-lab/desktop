@@ -114,6 +114,104 @@ describe("importSoundCloud", () => {
     expect(fetchMock).toHaveBeenCalledTimes(34);
   });
 
+  it("reports a partial likes import when a late page fails, and a retry resumes it (upstream #288 shape)", async () => {
+    rememberSoundCloudClientId(FRESH_ID);
+    let failLatePage = true;
+    const likesCalls: number[] = [];
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      const url = new URL(input.toString());
+      if (url.pathname !== "/users/7/likes") {
+        return new Response(JSON.stringify(respond(url)));
+      }
+      const pageNo = Number(url.searchParams.get("offset") ?? 0);
+      likesCalls.push(pageNo);
+      if (failLatePage && pageNo === 19)
+        return new Response("", { status: 500 });
+      const collection = Array.from({ length: 50 }, (_, i) => ({
+        track: {
+          id: pageNo * 50 + i + 1,
+          title: `Song ${pageNo * 50 + i + 1}`,
+          user: { username: "u" },
+        },
+      }));
+      return new Response(
+        JSON.stringify({
+          collection,
+          next_href:
+            pageNo < 32
+              ? `https://api-v2.soundcloud.com/users/7/likes?offset=${pageNo + 1}&limit=50`
+              : null,
+        }),
+      );
+    });
+
+    // 1,650 likes; the page carrying tracks 951–1000 fails. Before
+    // this fix the import landed 950 tracks and reported a clean
+    // success — the shortfall existed only in a log line.
+    const first = await importSoundCloud(
+      "https://soundcloud.com/listener/likes",
+    );
+    expect(first.tracks).toHaveLength(950);
+    expect(first.partial).toMatchObject({
+      reason: "page_fetch_failed",
+      resumable: true,
+    });
+
+    failLatePage = false;
+    likesCalls.length = 0;
+    const second = await importSoundCloud(
+      "https://soundcloud.com/listener/likes",
+    );
+    expect(second.tracks).toHaveLength(1650);
+    expect(second.partial).toBeUndefined();
+    // Resumed at the failed page, not restarted from the first one.
+    expect(likesCalls[0]).toBe(19);
+    expect(likesCalls).not.toContain(0);
+  });
+
+  it("keeps unresolved tracks visible instead of dropping them silently", async () => {
+    rememberSoundCloudClientId(FRESH_ID);
+    const hydration = [
+      {
+        hydratable: "playlist",
+        data: {
+          title: "SC PL",
+          tracks: [
+            {
+              id: 11,
+              title: "Song",
+              duration: 5000,
+              user: { id: 3, username: "uploader" },
+            },
+            { id: 12 },
+          ],
+        },
+      },
+    ];
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      const url = new URL(input.toString());
+      if (url.origin === "https://soundcloud.com") {
+        return new Response(
+          `<script>window.__sc_hydration = ${JSON.stringify(hydration)};</script>`,
+        );
+      }
+      if (url.pathname === "/tracks") return new Response(JSON.stringify([]));
+      return new Response("", { status: 404 });
+    });
+
+    const playlist = await importSoundCloud(
+      "https://soundcloud.com/user/sets/pl",
+    );
+
+    expect(playlist.tracks.map((track) => track.title)).toEqual(["Song"]);
+    expect(playlist.unresolvedTracks).toHaveLength(1);
+    expect(playlist.unresolvedTracks?.[0]).toMatchObject({ sourceId: "12" });
+    expect(playlist.partial).toMatchObject({
+      reason: "unresolved_tracks",
+      missing: 1,
+    });
+  });
+
   it("resolves likes through the shared api client and refreshes a rejected client id", async () => {
     rememberSoundCloudClientId(STALE_ID);
     const playlist = await importSoundCloud(

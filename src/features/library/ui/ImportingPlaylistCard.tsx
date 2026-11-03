@@ -21,6 +21,11 @@ export default function ImportingPlaylistCard({
   const isRunning = job.status === "running";
   const isQueued = job.status === "queued";
   const isFinalizing = job.status === "finalizing";
+  // A completed import that landed fewer tracks than the source
+  // holds: it must read as partial — with counts and, when the
+  // source can resume, a way to continue — never as a clean complete.
+  const isPartial = job.status === "completed" && Boolean(job.partial);
+  const canResume = isPartial && job.partial?.resumable === true;
 
   const displayTitle = job.title || t("import.active_import");
   const total = job.result?.total ?? 0;
@@ -30,6 +35,15 @@ export default function ImportingPlaylistCard({
   const showProgress = isRunning && total > 0;
 
   const getSubtitle = () => {
+    if (isPartial) {
+      const expected = job.partial?.expectedTotal ?? total;
+      const missing = job.partial?.missing ?? Math.max(0, expected - imported);
+      return t("import.status_partial_sub", {
+        imported,
+        total: expected,
+        missing,
+      });
+    }
     if (isQueued) {
       return t("import.status_queued");
     }
@@ -59,6 +73,12 @@ export default function ImportingPlaylistCard({
           reviewItems ?? undefined,
           approvedTracks ?? undefined,
         );
+      return;
+    }
+    if (canResume) {
+      // Re-running the same source resumes the remainder from the
+      // checkpoint the failed attempt left behind.
+      void useImportStore.getState().startImport(job.sourceUrl);
     }
   };
 
@@ -67,14 +87,14 @@ export default function ImportingPlaylistCard({
       <div
         onClick={handleClick}
         className={`w-full flex items-center justify-between rounded-control p-[8px] select-none transition-all duration-150 ${
-          isAwaiting
+          isAwaiting || canResume
             ? "cursor-pointer hover:bg-fill opacity-90"
             : "cursor-default opacity-70"
         }`}
       >
         <div className="flex items-center gap-[16px] min-w-0 flex-1">
           <div className="relative h-[48px] w-[48px] shrink-0 overflow-hidden rounded-control bg-fill flex items-center justify-center">
-            {isAwaiting ? (
+            {isAwaiting || isPartial ? (
               <PlaylistFill size={22} className="text-text-tertiary/60" />
             ) : (
               <div className="h-[20px] w-[20px] animate-spin rounded-full border-[2px] border-text-tertiary/20 border-t-text-primary" />
@@ -98,7 +118,7 @@ export default function ImportingPlaylistCard({
             >
               <span
                 className={`inline-block h-[6px] w-[6px] rounded-full bg-text-primary shrink-0 ${
-                  isAwaiting ? "" : "animate-pulse"
+                  isAwaiting || isPartial ? "" : "animate-pulse"
                 }`}
               />
               <span className="truncate">{displaySubtitle}</span>
@@ -111,6 +131,11 @@ export default function ImportingPlaylistCard({
             {t("import.review_action")}
           </span>
         )}
+        {canResume && (
+          <span className="shrink-0 text-[11px] px-[8px] py-[3px] rounded-full bg-fill-hover text-text-primary font-[500]">
+            {t("import.resume_action")}
+          </span>
+        )}
       </div>
     );
   }
@@ -119,14 +144,14 @@ export default function ImportingPlaylistCard({
     <div
       onClick={handleClick}
       className={`group flex flex-col gap-[8px] select-none transition-all ${
-        isAwaiting
+        isAwaiting || canResume
           ? "cursor-pointer opacity-90 hover:opacity-100"
           : "cursor-default opacity-70"
       }`}
       draggable={false}
     >
       <div className="relative aspect-square w-full overflow-hidden rounded-control flex flex-col items-center justify-center bg-fill">
-        {isAwaiting ? (
+        {isAwaiting || isPartial ? (
           <PlaylistFill size={44} className="text-text-tertiary/50" />
         ) : showProgress ? null : (
           <div className="h-[28px] w-[28px] animate-spin rounded-full border-[2px] border-text-tertiary/20 border-t-text-primary" />
@@ -167,6 +192,11 @@ export default function ImportingPlaylistCard({
             {t("import.status_awaiting_decision")}
           </span>
         )}
+        {canResume && (
+          <span className="absolute top-[8px] right-[8px] text-[10px] px-[6px] py-[2px] rounded-full bg-fill-hover text-text-primary font-[500]">
+            {t("import.resume_action")}
+          </span>
+        )}
       </div>
 
       <div className="flex flex-col gap-[4px] min-w-0">
@@ -176,7 +206,7 @@ export default function ImportingPlaylistCard({
         <span className="truncate text-body text-text-tertiary flex items-center gap-[5px]">
           <span
             className={`inline-block h-[6px] w-[6px] rounded-full bg-text-primary shrink-0 ${
-              isAwaiting ? "" : "animate-pulse"
+              isAwaiting || isPartial ? "" : "animate-pulse"
             }`}
           />
           <span className="truncate">{displaySubtitle}</span>

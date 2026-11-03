@@ -134,6 +134,50 @@ describe("runClientImport", () => {
     });
   });
 
+  it("surfaces a partial canonical import: unresolved tracks are named failures and the shortfall rides the result", async () => {
+    mocks.parseImportSource.mockResolvedValue({
+      source: "soundcloud",
+      sourceUrl: "https://soundcloud.com/listener/likes",
+      title: "listener — Likes",
+      canonicalTrackIds: ["sc:1", "sc:2"],
+      tracks: [
+        { sourceId: "1", title: "One", artists: ["u"], durationMs: 1000 },
+        { sourceId: "2", title: "Two", artists: ["u"], durationMs: 1000 },
+      ],
+      unresolvedTracks: [
+        { sourceId: "99", title: "Gone Song", artists: ["u"] },
+      ],
+      partial: {
+        reason: "page_fetch_failed",
+        missing: 601,
+        expectedTotal: 603,
+        resumable: true,
+      },
+    });
+
+    const outcome = await runClientImport(
+      "https://soundcloud.com/listener/likes",
+    );
+
+    expect(mocks.searchRaw).not.toHaveBeenCalled();
+    expect(outcome.approvedTracks).toHaveLength(2);
+    // total is what the source expected, not what happened to land:
+    // the missing 601 stay visible in the count instead of the
+    // import quietly re-basing "total" to the landed subset.
+    expect(outcome.result).toEqual({ total: 603, imported: 2, skipped: 601 });
+    expect(outcome.failedTracks).toEqual([
+      {
+        sourceTrack: expect.objectContaining({ sourceId: "99" }),
+        reason: "unresolved_track",
+      },
+    ]);
+    expect(outcome.partial).toMatchObject({
+      reason: "page_fetch_failed",
+      missing: 601,
+      resumable: true,
+    });
+  });
+
   it("uses youtube ids directly without searching", async () => {
     mocks.parseImportSource.mockResolvedValue({
       source: "youtube",

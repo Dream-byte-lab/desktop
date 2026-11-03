@@ -69,6 +69,8 @@ export interface LyricsState {
   offsetMs: number;
   trackOffsets: Record<string, number>;
   activeLineIndex: number | null;
+  // client-side LRCLIB fallback when the server stream finds no lyrics
+  lrclibFallbackEnabled: boolean;
 
   setLyricsState: (
     state: Partial<
@@ -81,9 +83,11 @@ export interface LyricsState {
         | "adjustOffset"
         | "resetOffset"
         | "setActiveLineIndex"
+        | "setLrclibFallbackEnabled"
       >
     >,
   ) => void;
+  setLrclibFallbackEnabled: (enabled: boolean) => void;
   setActiveLineIndex: (index: number | null) => void;
   selectProvider: (providerName: string) => void;
   setOffset: (offsetMs: number) => void;
@@ -114,6 +118,10 @@ export const useLyricsStore = create<LyricsState>()(
       offsetMs: 0,
       trackOffsets: {},
       activeLineIndex: null,
+      lrclibFallbackEnabled: true,
+
+      setLrclibFallbackEnabled: (enabled) =>
+        set({ lrclibFallbackEnabled: enabled }),
 
       setActiveLineIndex: (index) => {
         if (get().activeLineIndex === index) return;
@@ -288,6 +296,7 @@ export const useLyricsStore = create<LyricsState>()(
       partialize: (state) => ({
         currentLyricsTrackId: state.currentLyricsTrackId,
         trackOffsets: state.trackOffsets,
+        lrclibFallbackEnabled: state.lrclibFallbackEnabled,
       }),
     },
   ),

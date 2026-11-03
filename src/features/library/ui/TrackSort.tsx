@@ -9,12 +9,20 @@ import {
 import { useTranslation } from "@/languages";
 
 export type TrackSortOption =
-  "default" | "added" | "title" | "duration" | "popularity";
+  | "default"
+  | "added"
+  | "title"
+  | "artist"
+  | "album"
+  | "duration"
+  | "popularity";
 
 export const TRACK_SORT_OPTIONS: TrackSortOption[] = [
   "default",
   "added",
   "title",
+  "artist",
+  "album",
   "duration",
   "popularity",
 ];
@@ -24,6 +32,17 @@ interface SortableTrack {
   durationMs: number;
   playCount: number;
   addedAt?: string;
+  /**
+   * Artist data as the track lists actually carry it: the client Track
+   * (`@/shared/types`) stores a joined display string in `artists`
+   * (e.g. "A, B") plus the structured list in `artistList`, while the
+   * contract Track (`@/shared/contracts`) stores `artists` as an array
+   * of `{ name }`. All optional so either shape satisfies this type.
+   */
+  artists?: string | readonly { name: string }[];
+  artistList?: readonly { name: string }[];
+  /** Album data as carried: an object with a title (or a bare title). */
+  album?: { title: string } | string;
 }
 
 function addedTime(track: SortableTrack): number {
@@ -31,11 +50,70 @@ function addedTime(track: SortableTrack): number {
   return Number.isNaN(time) ? -Infinity : time;
 }
 
+/**
+ * Sort key for "artist": the track's joined artist names (", "-joined),
+ * so a multi-artist track sorts under its full credit, first artist
+ * first. Falls back to `artistList` when the display string is empty.
+ * Undefined when the track carries no artist data.
+ */
+function artistKey(track: SortableTrack): string | undefined {
+  if (typeof track.artists === "string") {
+    const key = track.artists.trim();
+    if (key) return key;
+  } else if (Array.isArray(track.artists)) {
+    const key = track.artists
+      .map((artist) => artist?.name?.trim() ?? "")
+      .filter(Boolean)
+      .join(", ");
+    if (key) return key;
+  }
+  if (track.artistList?.length) {
+    const key = track.artistList
+      .map((artist) => artist?.name?.trim() ?? "")
+      .filter(Boolean)
+      .join(", ");
+    if (key) return key;
+  }
+  return undefined;
+}
+
+/** Sort key for "album": the album's title. Undefined when absent/blank. */
+function albumKey(track: SortableTrack): string | undefined {
+  if (!track.album) return undefined;
+  const title =
+    typeof track.album === "string" ? track.album : track.album.title;
+  const key = title?.trim();
+  return key ? key : undefined;
+}
+
+function compareTextKeys(
+  aKey: string | undefined,
+  bKey: string | undefined,
+): number {
+  if (aKey && bKey) {
+    return aKey.localeCompare(bKey, undefined, {
+      sensitivity: "base",
+      numeric: true,
+    });
+  }
+  // Tracks missing the field sort after tracks that have it.
+  if (aKey) return -1;
+  if (bKey) return 1;
+  return 0;
+}
+
 export function sortOptionsFor(tracks: SortableTrack[]): TrackSortOption[] {
   const hasDates = tracks.some(
     (track) => !Number.isNaN(Date.parse(track.addedAt ?? "")),
   );
-  return TRACK_SORT_OPTIONS.filter((option) => option !== "added" || hasDates);
+  const hasArtists = tracks.some((track) => artistKey(track) !== undefined);
+  const hasAlbums = tracks.some((track) => albumKey(track) !== undefined);
+  return TRACK_SORT_OPTIONS.filter(
+    (option) =>
+      (option !== "added" || hasDates) &&
+      (option !== "artist" || hasArtists) &&
+      (option !== "album" || hasAlbums),
+  );
 }
 
 /** Stable sort; "default" keeps the source order untouched. */
@@ -52,6 +130,10 @@ export function sortTracks<T extends SortableTrack>(
         sensitivity: "base",
         numeric: true,
       });
+    } else if (option === "artist") {
+      diff = compareTextKeys(artistKey(a.track), artistKey(b.track));
+    } else if (option === "album") {
+      diff = compareTextKeys(albumKey(a.track), albumKey(b.track));
     } else if (option === "duration") {
       diff = (a.track.durationMs || 0) - (b.track.durationMs || 0);
     } else if (option === "added") {
@@ -105,6 +187,8 @@ export const TrackSortMenu = memo(function TrackSortMenu({
     default: t("track_sort.default"),
     added: t("track_sort.added") || "By date added",
     title: t("track_sort.title"),
+    artist: t("track_sort.artist") || "By artist",
+    album: t("track_sort.album") || "By album",
     duration: t("track_sort.duration"),
     popularity: t("track_sort.popularity"),
   };

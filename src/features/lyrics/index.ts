@@ -27,6 +27,14 @@ export {
 } from "./hooks/useLyricsAnimator";
 export { LyricsProviderIsland } from "./ui/LyricsProviderIsland";
 export {
+  fetchLrclibCandidate,
+  shouldAttemptLrclibFallback,
+  hasAttemptedLrclibFallback,
+  markLrclibFallbackAttempted,
+  type LrclibTrackHint,
+  type LrclibFallbackDecision,
+} from "./services/lrclib";
+export {
   LyricsCanvasRenderer,
   type LyricsClock,
   type EdgesListener,

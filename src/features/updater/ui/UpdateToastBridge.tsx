@@ -12,6 +12,8 @@ export default function UpdateToastBridge() {
   const downloadProgress = useUpdaterStore((state) => state.downloadProgress);
   const error = useUpdaterStore((state) => state.error);
   const installUpdate = useUpdaterStore((state) => state.installUpdate);
+  const noticeVersion = useUpdaterStore((state) => state.noticeVersion);
+  const dismissNotice = useUpdaterStore((state) => state.dismissNotice);
   const reset = useUpdaterStore((state) => state.reset);
   const initUpdaterListeners = useUpdaterStore(
     (state) => state.initUpdaterListeners,
@@ -25,6 +27,29 @@ export default function UpdateToastBridge() {
 
   useEffect(() => {
     const TOAST_ID = "app-update-card";
+
+    if (noticeVersion != null) {
+      toast(t("updater.downloaded_title") || "Update downloaded", "checkmark", {
+        id: TOAST_ID,
+        description:
+          t("updater.downloaded_desc", { version: noticeVersion }) ||
+          `Restart Linerave to install version ${noticeVersion}.`,
+        duration: 999999,
+        action: {
+          label: t("updater.restart_button") || "Restart to update",
+          onClick: () => {
+            void installUpdate();
+          },
+        },
+        onDismiss: dismissNotice,
+      });
+      return;
+    }
+
+    if (status === "downloaded") {
+      dismiss(TOAST_ID);
+      return;
+    }
 
     if (status === "downloading") {
       const version = updateInfo?.version ? `v${updateInfo.version}` : "";
@@ -42,25 +67,6 @@ export default function UpdateToastBridge() {
         id: TOAST_ID,
         description: desc,
         duration: 999999,
-        onDismiss: reset,
-      });
-      return;
-    }
-
-    if (status === "downloaded") {
-      toast(t("updater.downloaded_title") || "Update downloaded", "checkmark", {
-        id: TOAST_ID,
-        description:
-          t("updater.downloaded_desc", {
-            version: updateInfo?.version || "",
-          }) || "Restart Linerave to complete installation.",
-        duration: 999999,
-        action: {
-          label: t("updater.install_button") || "Install",
-          onClick: () => {
-            void installUpdate();
-          },
-        },
         onDismiss: reset,
       });
       return;
@@ -89,6 +95,8 @@ export default function UpdateToastBridge() {
     t,
     installUpdate,
     reset,
+    noticeVersion,
+    dismissNotice,
   ]);
 
   return null;

@@ -24,6 +24,25 @@ export interface ImportResult {
   skipped: number;
 }
 
+export type ImportPartialReason =
+  | "page_fetch_failed"
+  | "count_shortfall"
+  | "page_cap_reached"
+  | "unresolved_tracks";
+
+/**
+ * An import that landed fewer tracks than the source holds. The
+ * shortfall is data, not a log line: how many are missing, out of
+ * how many expected, and whether re-running the import can resume
+ * where it stopped instead of starting over.
+ */
+export interface ImportPartialInfo {
+  reason: ImportPartialReason;
+  missing?: number;
+  expectedTotal?: number;
+  resumable: boolean;
+}
+
 export interface ImportJob {
   id: string;
   source: ImportSource;
@@ -34,6 +53,7 @@ export interface ImportJob {
   requiresDecision: boolean;
   playlistId?: string;
   result?: ImportResult;
+  partial?: ImportPartialInfo;
   error?: { code: string; message: string };
   createdAt: Date | string;
   startedAt?: Date | string;
