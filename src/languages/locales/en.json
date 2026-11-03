@@ -49,9 +49,18 @@
     },
     "sidebar": {
       "home": "Home",
+      "for_you": "For You",
       "search": "Search",
       "library": "Library",
-      "settings": "Settings"
+      "settings": "Settings",
+      "favorites": "Favorites",
+      "downloads": "Downloads",
+      "expand": "Expand",
+      "collapse": "Collapse",
+      "signed_in": "Signed in",
+      "guest": "Guest",
+      "section_discover": "Discover",
+      "section_collection": "Your Collection"
     },
     "minimize": "Minimize",
     "exitFullscreen": "Exit fullscreen",
@@ -88,6 +97,7 @@
     "delete": "Delete",
     "create": "Create",
     "import": "Import",
+    "import_soundcloud_ceiling": "SoundCloud imports are capped at 25,000 tracks. If a page fails midway, the import says so — and running it again resumes where it stopped.",
     "add": "Add",
     "remove": "Remove",
     "cancel": "Cancel",
@@ -220,6 +230,37 @@
     "emptyDesc": "What you play, like and save will live here. Nothing on this page comes from anyone else's listening.",
     "emptyLibraryAction": "Open your library",
     "load_failed": "Couldn't load your home feed"
+  },
+  "forYou": {
+    "title": "For You",
+    "subtitle": "Built only from your listening — your plays, your likes, your shelves. Nothing here comes from anyone else.",
+    "doorTitle": "For You",
+    "doorSubtitle": "Mixes and shelves made only from your listening",
+    "featuredLabel": "Featured mix",
+    "mixesTitle": "Made for you",
+    "mixGenreTitle": "Your {label} shelf",
+    "mixGenreSubtitle": "From a Playlist Genre you filed",
+    "mixArtistTitle": "Built around {artist}",
+    "mixArtistSubtitle": "Around an artist you play most",
+    "mixFamilySubtitle": "An artist you play most, and the family around them",
+    "mixEraTitle": "Your {era} shelf",
+    "mixEraSubtitle": "From the years your library holds",
+    "mixEnergyHighTitle": "Your high-energy mix",
+    "mixEnergyLowTitle": "Your softer mix",
+    "mixTempoSlowTitle": "Your slow-groove mix",
+    "mixTempoDrivingTitle": "Your driving-tempo mix",
+    "becausePlayed": "Because you played {title}",
+    "becauseArtist": "Because you play {artist}",
+    "becauseSubtitle": "Matched from your own library — by sound, shelf and artist",
+    "genreShelfSubtitle": "Your Playlist Genre shelf",
+    "genreBasicSubtitle": "Genre shelf",
+    "moodsDerived": "Derived from your library's own analysis",
+    "moodLowEnergy": "Low-energy evenings",
+    "moodHighEnergy": "High-energy",
+    "moodVocalLed": "Vocal-led",
+    "moodInstrumental": "Mostly instrumental",
+    "emptyTitle": "This feed is yours to grow",
+    "emptyDesc": "For You is built only from what you play, like and file. As your listening grows, mixes and shelves made from it will live here — never anyone else's charts."
   },
   "library": {
     "title": "Library",
@@ -622,7 +663,15 @@
       "privacy": "Privacy"
     },
     "playback": {
-      "description": "Queue behavior, click actions and audio output."
+      "description": "Queue behavior, click actions and audio output.",
+      "keep_playing_screen_off": {
+        "title": "Keep playing when the screen turns off",
+        "description": "While music is playing or a DJ session is running, Linerave asks the system not to suspend the app, so playback continues after the screen turns off. This cannot override sleep you start yourself, or a lid-close set to sleep in your system's power settings."
+      },
+      "lrclib_fallback": {
+        "title": "LRCLIB fallback",
+        "description": "When the built-in sources have no lyrics for a track, Linerave can ask LRCLIB (lrclib.net), sending the track's title, artist and duration. Lyrics found this way are labelled LRCLIB."
+      }
     },
     "shortcuts": {
       "description": "Customize global system-wide and player keyboard shortcuts.",
@@ -1122,6 +1171,8 @@
     "status_searching_sub": "Analyzing playlist…",
     "status_running": "Matching tracks",
     "status_running_progress": "Matched {count} of {total} tracks",
+    "status_partial_sub": "Imported {imported} of {total} tracks — {missing} missing",
+    "resume_action": "Resume",
     "status_awaiting_decision": "Review required",
     "status_awaiting_sub": "Review track matches before creating",
     "status_finalizing": "Creating playlist…",
@@ -1211,6 +1262,7 @@
     "downloaded_title": "Update downloaded",
     "downloaded_desc": "Restart Linerave to install version {version}.",
     "install_button": "Install",
+    "restart_button": "Restart to update",
     "error_title": "Update failed"
   },
   "track_search": {
@@ -1226,7 +1278,9 @@
     "added": "By date added",
     "title": "By title (A–Z)",
     "duration": "By duration",
-    "popularity": "By popularity"
+    "popularity": "By popularity",
+    "artist": "By artist",
+    "album": "By album"
   },
   "youtube_auth": {
     "title": "Sign in to YouTube to keep listening",

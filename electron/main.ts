@@ -12,6 +12,8 @@ import {
 } from "electron";
 import type { Display, Rectangle } from "electron";
 import { autoUpdater } from "electron-updater";
+import { RELEASE_UPDATE_CHECK_INTERVAL_MS } from "./updater-schedule.js";
+import { resolveLinuxPasswordStoreSync } from "./password-store.js";
 import path from "node:path";
 import fs from "node:fs";
 import os from "node:os";
@@ -62,11 +64,13 @@ import {
 import { LineraveBundleChannel } from "./linerave-bundle-channel.js";
 import { createBundleErrorStamp } from "./bundle-stamp.js";
 import { createSleepBlocker } from "./sleep-blocker.js";
+import { createKeepPlayingController } from "./keep-playing.js";
 import { keepsOwnCors, needsOpenCors, withOpenCors } from "./cors.js";
 import { createShutdown } from "./shutdown.js";
 import {
   clampResizeToArea,
   computeDragBounds,
+  ensureVisibleBounds,
   isInTopSnapZone,
   minimumSizeFor,
   restoreUnderCursor,
@@ -129,6 +133,10 @@ process.on("unhandledRejection", (reason) =>
 );
 // forces resilient http/1.1 to prevent chromium err_http2_ping_failed on dropped network frames
 app.commandLine.appendSwitch("disable-http2");
+const linuxPasswordStore = resolveLinuxPasswordStoreSync();
+if (linuxPasswordStore) {
+  app.commandLine.appendSwitch("password-store", linuxPasswordStore);
+}
 if (detectCompositor() !== "none") {
   app.commandLine.appendSwitch("enable-features", "GlobalShortcutsPortal");
 }
@@ -149,6 +157,7 @@ let mainWindow: BrowserWindow | null = null;
 let touchBarManager: TouchBarManager | null = null;
 let overlayManager: OverlayManager | null = null;
 let thumbar: ThumbarController | null = null;
+let keepPlaying: ReturnType<typeof createKeepPlayingController> | null = null;
 let bundleManager: BundleManager | null = null;
 let lineraveBundles: LineraveBundleChannel | null = null;
 let discordRpcManager: DiscordRpcManager | null = null;
@@ -355,15 +364,53 @@ function createWindow() {
     }
   };
 
+  // off-screen recovery (#356): keepInsideWorkArea cannot rescue a window
+  // whose bounds no longer intersect any display (clampResizeToArea keeps a
+  // no-intersection rect as-is), e.g. restored from the overlay to stale
+  // bounds or parked on a display that has since gone away. this runs ONLY
+  // at recovery points (restore, display removal / metrics change), never
+  // on the drag or resize paths. it is idempotent — a window showing at
+  // least the minimum sliver comes back unchanged and setBounds is never
+  // called — so these events cannot loop: a recovered window is fully
+  // visible, and every later pass is a no-op.
+  const ensureWindowVisible = () => {
+    if (
+      !mainWindow ||
+      mainWindow.isDestroyed() ||
+      !mainWindow.isVisible() ||
+      mainWindow.isMinimized() ||
+      mainWindow.isMaximized() ||
+      mainWindow.isFullScreen()
+    ) {
+      return;
+    }
+    const bounds = mainWindow.getBounds();
+    const areas = screen.getAllDisplays().map((display) => display.workArea);
+    const next = ensureVisibleBounds(bounds, areas);
+    if (
+      next.x !== bounds.x ||
+      next.y !== bounds.y ||
+      next.width !== bounds.width ||
+      next.height !== bounds.height
+    ) {
+      mainWindow.setBounds(next);
+    }
+  };
+
+  const onDisplayGeometryChanged = () => {
+    fitMinimumToDisplay();
+    ensureWindowVisible();
+  };
+
   mainWindow.on("resized", keepInsideWorkArea);
   mainWindow.on("moved", fitMinimumToDisplay);
-  screen.on("display-metrics-changed", fitMinimumToDisplay);
+  screen.on("display-metrics-changed", onDisplayGeometryChanged);
   screen.on("display-added", fitMinimumToDisplay);
-  screen.on("display-removed", fitMinimumToDisplay);
+  screen.on("display-removed", onDisplayGeometryChanged);
   mainWindow.once("closed", () => {
-    screen.off("display-metrics-changed", fitMinimumToDisplay);
+    screen.off("display-metrics-changed", onDisplayGeometryChanged);
     screen.off("display-added", fitMinimumToDisplay);
-    screen.off("display-removed", fitMinimumToDisplay);
+    screen.off("display-removed", onDisplayGeometryChanged);
   });
   keepInsideWorkArea();
   mainWindow.on("minimize", () => {
@@ -375,6 +422,10 @@ function createWindow() {
     broadcastWindowState();
     if (!mainWindow || mainWindow.isDestroyed()) return;
     mainWindow.webContents.send("window:restored");
+    // a restore can land on bounds no display shows anymore (#356: the
+    // window comes back from the overlay invisible, process alive) —
+    // pull it back onto a connected display if so
+    ensureWindowVisible();
   });
   mainWindow.on("hide", broadcastWindowState);
   mainWindow.on("show", broadcastWindowState);
@@ -616,6 +667,7 @@ if (!gotTheLock) {
     touchBarManager.registerShortcut();
 
     const updateSleepBlocker = createSleepBlocker(powerSaveBlocker);
+    keepPlaying = createKeepPlayingController(powerSaveBlocker);
     thumbar = new ThumbarController(
       () => mainWindow,
       (type) => {
@@ -625,8 +677,24 @@ if (!gotTheLock) {
     );
     ipcMain.on(
       "touchbar:update-state",
-      (_event, state: { status: string; track?: unknown }) => {
+      (
+        _event,
+        state: {
+          status: string;
+          track?: unknown;
+          djSessionActive?: boolean;
+          keepPlayingWhenScreenOff?: boolean;
+        },
+      ) => {
         updateSleepBlocker(state.status);
+        keepPlaying?.update({
+          status: state.status,
+          djSessionActive: state.djSessionActive === true,
+          // The controller defaults to enabled and the renderer
+          // always syncs the persisted value; `!== false` only
+          // guards a hypothetical sync that lacks the field.
+          keepPlayingEnabled: state.keepPlayingWhenScreenOff !== false,
+        });
         thumbar?.update(state);
       },
     );
@@ -2080,13 +2148,11 @@ if (!gotTheLock) {
       }, 4000);
 
       // re-check for installer updates while the app stays open, so a
-      // release published during a long session is still picked up
-      setInterval(
-        () => {
-          autoUpdater.checkForUpdates().catch(() => {});
-        },
-        6 * 60 * 60 * 1000,
-      );
+      // release published during a long session is still picked up —
+      // every 20 minutes (user ruling, 2026-11-03)
+      setInterval(() => {
+        autoUpdater.checkForUpdates().catch(() => {});
+      }, RELEASE_UPDATE_CHECK_INTERVAL_MS);
 
       // LINERAVE STEP 3: our own signed bundle channel checks quietly on
       // the same cadence as the installer updater — shortly after launch,
@@ -2135,4 +2201,5 @@ app.on("window-all-closed", () => {
 
 // covers every other way out: cmd+q, the updater's quitAndInstall, os shutdown
 app.on("before-quit", () => shutdown.begin());
+app.on("before-quit", () => keepPlaying?.release());
 app.on("will-quit", () => shutdown.begin());

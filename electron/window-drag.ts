@@ -158,3 +158,55 @@ export function clampResizeToArea(rect: Rect, area: Rect): Rect {
   if (right <= left || bottom <= top) return rect;
   return { x: left, y: top, width: right - left, height: bottom - top };
 }
+
+// ---- off-screen recovery (issue #356) ----
+
+/**
+ * smallest on-screen sliver that still counts as reachable: 64px wide is
+ * enough of the title bar to grab and drag by, 48px tall covers the title
+ * bar plus a strip of content. anything less is a window the user can see
+ * a sliver of but cannot realistically rescue, so it counts as lost.
+ */
+export const MIN_VISIBLE_WIDTH = 64;
+export const MIN_VISIBLE_HEIGHT = 48;
+
+/**
+ * bounds recovery for a window that ended up where no display can show it
+ * (restored from the overlay to stale bounds, or its display went away
+ * while it was minimized / parked). clampResizeToArea cannot do this job:
+ * it preserves a rect with no intersection as-is by design.
+ *
+ * if the rect shows at least the minimum sliver on ANY work area it is
+ * returned unchanged. otherwise it is moved onto the primary (first) work
+ * area, centered — deterministic, fully visible, and obvious to the user
+ * that the window moved — with its size clamped to that area. with no
+ * displays at all there is nowhere to put it, so the rect is returned
+ * unchanged rather than inventing a position.
+ */
+export function ensureVisibleBounds(rect: Rect, areas: Rect[]): Rect {
+  if (areas.length === 0) return rect;
+  const reachable = areas.some((area) => {
+    const visibleWidth =
+      Math.min(rect.x + rect.width, area.x + area.width) -
+      Math.max(rect.x, area.x);
+    const visibleHeight =
+      Math.min(rect.y + rect.height, area.y + area.height) -
+      Math.max(rect.y, area.y);
+    return (
+      visibleWidth >= MIN_VISIBLE_WIDTH && visibleHeight >= MIN_VISIBLE_HEIGHT
+    );
+  });
+  if (reachable) return rect;
+  const primary = areas[0]!;
+  const size = minimumSizeFor(
+    { width: rect.width, height: rect.height },
+    primary,
+  );
+  const centered: Rect = {
+    x: Math.round(primary.x + (primary.width - size.width) / 2),
+    y: Math.round(primary.y + (primary.height - size.height) / 2),
+    width: size.width,
+    height: size.height,
+  };
+  return clampResizeToArea(centered, primary);
+}

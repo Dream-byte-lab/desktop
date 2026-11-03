@@ -3,6 +3,7 @@ import {
   clampResizeToArea,
   computeDragBounds,
   cubicBezier,
+  ensureVisibleBounds,
   isInTopSnapZone,
   lerpEdges,
   minimumSizeFor,
@@ -152,5 +153,106 @@ describe("clampResizeToArea", () => {
   it("leaves a window that already fits alone", () => {
     const rect = { x: 120, y: 10, width: 1100, height: 705 };
     expect(clampResizeToArea(rect, area)).toEqual(rect);
+  });
+
+  it("cannot recover a rect fully outside the area (the #356 gap)", () => {
+    // keepInsideWorkArea() in main.ts clamps against the display matching the
+    // window's bounds; for a fully off-screen rect that clamp is a no-op, so
+    // nothing in the resize/moved path can ever bring the window back.
+    const offscreen = { x: 5000, y: 4000, width: 1100, height: 705 };
+    expect(clampResizeToArea(offscreen, area)).toEqual(offscreen);
+  });
+});
+
+describe("ensureVisibleBounds", () => {
+  const primary = { x: 0, y: 0, width: 1920, height: 1040 };
+  const second = { x: 1920, y: 0, width: 1920, height: 1040 };
+
+  it("returns the rect unchanged when there are no displays", () => {
+    const rect = { x: 5000, y: 4000, width: 1100, height: 705 };
+    expect(ensureVisibleBounds(rect, [])).toEqual(rect);
+  });
+
+  it("leaves a fully visible window alone", () => {
+    const rect = { x: 120, y: 10, width: 1100, height: 705 };
+    expect(ensureVisibleBounds(rect, [primary])).toEqual(rect);
+  });
+
+  it("leaves a window with exactly the minimum sliver visible alone", () => {
+    // 64px of width and 48px of height still on screen
+    const rect = { x: 1920 - 64, y: 1040 - 48, width: 1100, height: 705 };
+    expect(ensureVisibleBounds(rect, [primary])).toEqual(rect);
+  });
+
+  it.each([
+    ["right", { x: 5000, y: 100, width: 1100, height: 705 }],
+    ["bottom", { x: 100, y: 4000, width: 1100, height: 705 }],
+    ["left", { x: -3000, y: 100, width: 1100, height: 705 }],
+    ["top", { x: 100, y: -2000, width: 1100, height: 705 }],
+  ])(
+    "recovers a window fully off the %s, centered on the primary area",
+    (_side, rect) => {
+      expect(ensureVisibleBounds(rect, [primary])).toEqual({
+        x: 410,
+        y: 168,
+        width: 1100,
+        height: 705,
+      });
+    },
+  );
+
+  it("recovers a window left with less than the minimum sliver visible", () => {
+    const rect = { x: 1920 - 20, y: 100, width: 1100, height: 705 };
+    expect(ensureVisibleBounds(rect, [primary])).toEqual({
+      x: 410,
+      y: 168,
+      width: 1100,
+      height: 705,
+    });
+  });
+
+  it("leaves a window alone when a second display shows enough of it", () => {
+    // barely on the primary, but a healthy chunk lives on the second display
+    const rect = { x: 1900, y: 100, width: 1100, height: 705 };
+    expect(ensureVisibleBounds(rect, [primary, second])).toEqual(rect);
+  });
+
+  it("recovers onto the primary display when no display shows enough", () => {
+    const rect = { x: 3820, y: 100, width: 1100, height: 705 };
+    expect(ensureVisibleBounds(rect, [primary, second])).toEqual({
+      x: 410,
+      y: 168,
+      width: 1100,
+      height: 705,
+    });
+  });
+
+  it("clamps an oversized rect to the primary area when recovering", () => {
+    const rect = { x: 9000, y: 9000, width: 3000, height: 2000 };
+    expect(ensureVisibleBounds(rect, [primary])).toEqual({
+      x: 0,
+      y: 0,
+      width: 1920,
+      height: 1040,
+    });
+  });
+
+  it("respects a primary area with a non-zero origin", () => {
+    const shifted = { x: 100, y: 50, width: 1600, height: 900 };
+    const rect = { x: -5000, y: -5000, width: 1200, height: 700 };
+    expect(ensureVisibleBounds(rect, [shifted])).toEqual({
+      x: 300,
+      y: 150,
+      width: 1200,
+      height: 700,
+    });
+  });
+
+  it("is idempotent: a recovered rect is left alone", () => {
+    const once = ensureVisibleBounds(
+      { x: 5000, y: 4000, width: 1100, height: 705 },
+      [primary, second],
+    );
+    expect(ensureVisibleBounds(once, [primary, second])).toEqual(once);
   });
 });

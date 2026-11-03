@@ -72,6 +72,7 @@ describe("needsOpenCors", () => {
     );
     expect(needsOpenCors("https://api.tryliner.fun/v1/me")).toBe(true);
     expect(needsOpenCors("https://cf-hls-media.sndcdn.com/a.m3u8")).toBe(true);
+    expect(needsOpenCors("https://lrclib.net/api/get?track_name=x")).toBe(true);
   });
 
   it("leaves other hosts alone", () => {

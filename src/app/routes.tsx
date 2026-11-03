@@ -1,6 +1,7 @@
 import { Activity, useContext, useRef, type ReactElement } from "react";
 import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 import HomePage from "@/features/home/ui/HomePage";
+import ForYouPage from "@/features/home/ui/ForYouPage";
 import LibraryPage from "@/features/library/ui/LibraryPage";
 import PlaylistPage from "@/features/library/ui/PlaylistPage";
 import {
@@ -79,6 +80,7 @@ export function AppRoutes() {
             <Route path="/library/saved" element={<SavedLikesPage />} />
             <Route path="/artist" element={<ArtistPage />} />
             <Route path="/collection" element={<CollectionPage />} />
+            <Route path="/for-you" element={<ForYouPage />} />
             <Route path="/settings" element={<Navigate to="/" replace />} />
             <Route path={PLAYER_PATH} element={null} />
             <Route path="*" element={<Navigate to="/" replace />} />

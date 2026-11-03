@@ -36,6 +36,8 @@ const OPEN_CORS_DOMAINS = [
   "mzstatic.com",
   // artist avatars
   "genius.com",
+  // lrclib direct lyrics fallback (renderer fetch when the server has none)
+  "lrclib.net",
   // presigned liner audio urls
   "r2.cloudflarestorage.com",
   // google fonts from index.html
