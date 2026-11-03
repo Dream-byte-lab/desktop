@@ -11,15 +11,14 @@
 // is scoring.ts; performing is the executor's; this module only
 // answers "what COULD join these two tracks, honestly, from here?"
 //
-// Two deliberate omissions, both honesty rules, not oversights:
-//
-// - Spinback / vinyl-stop are NOT enumerated. The S5-2 executor does
-//   not perform them, so a candidate carrying one could win a scoring
-//   it could never cash. Their family costs exist in the profiles so
-//   the vocabulary is ready when the executor learns them.
+// One deliberate omission, an honesty rule, not an oversight:
 //
 // - A candidate whose recipe fails validateRecipe is dropped at the
 //   door. The set contains only performable joins.
+//
+// (Spinback / vinyl-stop were omitted under the same rule until the
+// revamp's R1 taught the executor to perform them; they are now
+// enumerated as heavily-gated rivals — see authorStopExit.)
 //
 // Deduplication: candidates are keyed on the plan itself (preset,
 // anchors, length, rate, loops, echo) — when two profiles author the
@@ -129,7 +128,10 @@ export interface Candidate {
 export function familyOfRecipe(recipe: TransitionRecipe): JoinFamily {
   for (const loop of recipe.loops) {
     if (loop.type === "spinback") return "spinback";
-    if (loop.type === "vinyl-stop") return "vinyl-stop";
+    // The stop family: a brake is the gradual telling of the same
+    // exit a vinyl-stop tells suddenly — one family, two techniques.
+    if (loop.type === "vinyl-stop" || loop.type === "brake")
+      return "vinyl-stop";
   }
   if (recipe.loops.some((l) => l.type === "loop")) {
     return "loop-extended-blend";
@@ -335,6 +337,7 @@ interface OwnJoinSpec {
   automation: TransitionRecipe["automation"];
   entryReason: string;
   exitReason: string;
+  loops?: TransitionRecipe["loops"];
 }
 
 function ownJoin(request: RecipeRequest, spec: OwnJoinSpec): TransitionRecipe {
@@ -381,7 +384,7 @@ function ownJoin(request: RecipeRequest, spec: OwnJoinSpec): TransitionRecipe {
     },
     leadInSec: Math.max(0, spec.startASec - request.outgoingPositionSec),
     automation: spec.automation,
-    loops: [],
+    loops: spec.loops ?? [],
     fx: {},
     fingerprints: fingerprintsOf(outgoing, incoming),
     fallback: { kind: "cut", note: FALLBACK_NOTE },
@@ -544,6 +547,167 @@ function authorSectionSwap(request: RecipeRequest): TransitionRecipe | null {
   });
 }
 
+/**
+ * The stop exits (the revamp's R1): the outgoing is stopped DEAD at
+ * its outro's first beat — spun back, braked, or vinyl-stopped —
+ * and the incoming lands its entry exactly as the stop completes.
+ * Theatre, and priced like it: these are rivals the scorer may
+ * refuse, authored only where every gate below passes. The gates
+ * are the spec's discipline (§2B: a technique fires when it makes
+ * MUSICAL sense, never on a counter):
+ *
+ * - The authoring profile must price the family within reach
+ *   (familyCosts ≤ STOP_AUTHOR_MAX_FAMILY_COST). The conservative
+ *   profile prices both stop families at 0.6 — it never authors
+ *   them; a profile pricing one at 1+ has priced it out entirely.
+ * - The exit must be an ENERGY-ENDING one: the outro's first beat,
+ *   with the outro audibly quieter than what precedes it (or, with
+ *   no section evidence at all, only a short outro tail counts).
+ *   A stop in the middle of a track still climbing is vandalism.
+ * - The incoming must offer a real landing — a drop, a section
+ *   start, or its intro's end — for the stop to hand over TO.
+ * - A spinback additionally needs runway behind the stop point:
+ *   the record runs backwards through several seconds of itself.
+ *
+ * The stop family's technique is chosen by the moment: a long
+ * falling outro earns a BRAKE (gradual, 4 beats); a short one a
+ * VINYL STOP (sudden, 1 beat). Both are the "vinyl-stop" family —
+ * the scorer prices the exit, the block names the technique.
+ */
+const STOP_AUTHOR_MAX_FAMILY_COST = 0.5;
+const VINYL_STOP_BEATS = 1;
+const BRAKE_BEATS = 4;
+const SPINBACK_BEATS = 2;
+const SPINBACK_PEAK_RATE = -3.5;
+/** With no section evidence, an outro longer than this is not a stop moment. */
+const UNWITNESSED_OUTRO_MAX_BEATS = 32;
+
+function authorStopExit(
+  request: RecipeRequest,
+  profile: DecisionProfile,
+  family: "spinback" | "vinyl-stop",
+): TransitionRecipe | null {
+  if (profile.familyCosts[family] > STOP_AUTHOR_MAX_FAMILY_COST) return null;
+  const { outgoing, incoming } = request;
+  const outMap = outgoing.beatMap;
+  const inMap = incoming.beatMap;
+  if (!outgoing.outro) return null;
+
+  const spbA = secondsPerBeat(outMap.bpm);
+  const exitBeat = outgoing.outro.startBeat;
+  const exitSec = timeAtBeat(outMap, exitBeat);
+  // The stop must not already be upon us.
+  if (exitSec < request.outgoingPositionSec + profile.minLeadBeats * spbA) {
+    return null;
+  }
+
+  // Energy must be falling into the exit.
+  const sections = outgoing.sections ?? [];
+  const outroSection =
+    sections.find((s) => s.kind === "outro") ??
+    sections.find((s) => exitSec >= s.startSec && exitSec < s.endSec);
+  const before = sections
+    .filter((s) => s.kind !== "outro" && s.endSec <= exitSec + 1e-6)
+    .pop();
+  if (outroSection && before) {
+    if (outroSection.meanRms > before.meanRms) return null;
+  } else if (!outroSection) {
+    const tailBeats = beatsAtTime(outMap, outMap.durationSec) - exitBeat;
+    if (tailBeats > UNWITNESSED_OUTRO_MAX_BEATS) return null;
+  }
+
+  // The incoming must offer a real landing for the stop to hand to.
+  const entry = chooseEntry(incoming, profile);
+  const entryIsDrop = incoming.drops.some(
+    (d) => Math.abs(d.beat - entry.beat) <= 0.5,
+  );
+  const entryIsSection = (incoming.sections ?? []).some(
+    (s) => Math.abs(s.startBeat - entry.beat) <= 0.5,
+  );
+  const entryIsIntroEnd = incoming.intro
+    ? Math.abs(incoming.intro.endBeat - entry.beat) <= 0.5
+    : false;
+  if (!entryIsDrop && !entryIsSection && !entryIsIntroEnd) return null;
+
+  const tailBeats = beatsAtTime(outMap, outMap.durationSec) - exitBeat;
+  const useBrake = family === "vinyl-stop" && tailBeats >= 24;
+  const beats =
+    family === "spinback"
+      ? SPINBACK_BEATS
+      : useBrake
+        ? BRAKE_BEATS
+        : VINYL_STOP_BEATS;
+  const durationMs = beats * spbA * 1000;
+  const durationSec = durationMs / 1000;
+
+  if (family === "spinback") {
+    // The record runs backwards at an average |rate| of ~2.5 over
+    // the spin: the stop point needs that much track behind it,
+    // plus a margin, or the spin would run off the track's start.
+    if (exitSec < durationSec * 2.5 + 2) return null;
+  }
+
+  // B starts early and silent, so its entry beat lands exactly as
+  // the stop completes.
+  const startBSec = timeAtBeat(inMap, entry.beat) - durationSec;
+  if (startBSec < 0) return null;
+
+  const block: TransitionRecipe["loops"][number] =
+    family === "spinback"
+      ? {
+          type: "spinback",
+          side: "A",
+          startMs: exitSec * 1000,
+          endMs: exitSec * 1000 + durationMs,
+          beats,
+          peakRate: SPINBACK_PEAK_RATE,
+        }
+      : {
+          type: useBrake ? "brake" : "vinyl-stop",
+          side: "A",
+          startMs: exitSec * 1000,
+          endMs: exitSec * 1000 + durationMs,
+          beats,
+        };
+
+  return ownJoin(request, {
+    preset: "cut",
+    startASec: exitSec,
+    startBSec,
+    durationMs,
+    automation: {
+      // A plays at full level THROUGH the stop — the rate fall is
+      // the sound — and is gone at its end; B is silent until the
+      // stop completes, then arrives whole.
+      volumeOut: curve("linear-gain", "linear", [
+        [0, 1],
+        [durationMs, 1],
+        [durationMs, 0],
+      ]),
+      volumeIn: curve("linear-gain", "linear", [
+        [0, 0],
+        [durationMs, 0],
+        [durationMs, 1],
+      ]),
+      eqOut: { low: flatEq(), mid: flatEq(), high: flatEq() },
+      eqIn: { low: flatEq(), mid: flatEq(), high: flatEq() },
+      filterOut: flatCurve("filter-cutoff", "hertz", OPEN_FILTER_HZ),
+      filterIn: flatCurve("filter-cutoff", "hertz", OPEN_FILTER_HZ),
+      rateB: flatCurve("rate", "ratio", 1),
+      echoSendOut: flatCurve("dry-wet", "percent", 0),
+      echoSendIn: flatCurve("dry-wet", "percent", 0),
+    },
+    loops: [block],
+    entryReason: entry.reason,
+    exitReason:
+      family === "spinback"
+        ? "the outgoing is spun back at its outro's first beat — a stop exit, handed to the incoming's entry"
+        : useBrake
+          ? "the outgoing brakes to a stop across its falling outro — a stop exit, handed to the incoming's entry"
+          : "the outgoing is vinyl-stopped at its outro's first beat — a stop exit, handed to the incoming's entry",
+  });
+}
+
 // ---------------------------------------------------------------------
 // Enumeration
 // ---------------------------------------------------------------------
@@ -651,6 +815,24 @@ export function candidatesForPair(
     "variant:filter-fade",
     STANDARD_PROFILE.id,
   );
+
+  // The stop exits (R1): authored under every profile that prices
+  // them within reach — the gates inside authorStopExit decide;
+  // identical tellings under several profiles collapse by signature.
+  for (const profile of profiles) {
+    push(
+      authorStopExit(request, profile, "spinback"),
+      `family:spinback:${profile.id}`,
+      profile.id,
+      "spinback",
+    );
+    push(
+      authorStopExit(request, profile, "vinyl-stop"),
+      `family:vinyl-stop:${profile.id}`,
+      profile.id,
+      "vinyl-stop",
+    );
+  }
 
   // The restraint and structure families the author never picks alone.
   push(

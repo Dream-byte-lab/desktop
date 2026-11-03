@@ -97,16 +97,51 @@ export interface RecipeOverlap {
   bpmB: number;
 }
 
-export type RecipeLoopType = "loop" | "spinback" | "vinyl-stop";
+export type RecipeLoopType =
+  "loop" | "spinback" | "vinyl-stop" | "brake" | "nudge";
 
+/**
+ * A block of performed motion on one deck: a loop region, or — since
+ * the liveRave revamp's R1 — a JOG MOVE. The jog moves are the
+ * virtual REV7's foundation vocabulary (spec §2B): the deck's
+ * playback rate (and, for a spinback, its direction) is driven as
+ * written, at a moment the recipe names.
+ *
+ * Timing semantics differ by kind, and the executor honours them
+ * exactly:
+ *
+ * - `loop`: [startMs, endMs] is a region of the side's track time;
+ *   playback repeats it. `beats` is the region's length in beats.
+ * - `vinyl-stop` / `brake` (the stop family): the deck's rate falls
+ *   from its playing rate to silence, beginning at startMs (the
+ *   side's track time) and lasting `beats` beats of that side's
+ *   tempo. A vinyl stop falls fast — most of the pitch drop lands
+ *   early, like a hand killing a record; a brake falls gradually
+ *   over the whole span, like a turntable spinning down. The two
+ *   are one scored family ("vinyl-stop"); the block names the
+ *   technique. [startMs, endMs] is the nominal window (startMs +
+ *   beats), recorded for the audit trail — a stopping deck does not
+ *   actually traverse it.
+ * - `spinback`: the deck's rate drives NEGATIVE to `peakRate`,
+ *   beginning at startMs and lasting `beats` beats — the track
+ *   audibly runs backwards, faster and faster, then the deck stops.
+ * - `nudge`: a temporary rate bend that RETURNS — the deck's rate
+ *   multiplies by `bend` at the move's midpoint and is back to its
+ *   written rate by the move's end. The beat-alignment primitive: a
+ *   push (bend > 1) or a pull (bend < 1), never a new tempo.
+ */
 export interface RecipeLoopBlock {
   type: RecipeLoopType;
   side: "A" | "B";
-  /** Loop region, in the side's own track time. */
+  /** Region (loop) or start (jog move), in the side's own track time. */
   startMs: number;
   endMs: number;
-  /** Length of the region in beats of that side. */
+  /** Length of the region/move in beats of that side. */
   beats: number;
+  /** Spinback only: the negative playback rate at the spin's peak. */
+  peakRate?: number;
+  /** Nudge only: the rate multiplier at the bend's midpoint (≠ 1). */
+  bend?: number;
 }
 
 export interface RecipeEcho {
@@ -316,6 +351,36 @@ export function validateRecipe(recipe: TransitionRecipe): string[] {
     }
     if (!(loop.beats > 0))
       errors.push(`loop on ${loop.side}: beats must be > 0`);
+    if (loop.type === "spinback") {
+      // A spinback without its negative peak is not a spinback —
+      // and a peak outside the sane band is not a record spinning
+      // back, it's damage.
+      if (
+        loop.peakRate === undefined ||
+        !Number.isFinite(loop.peakRate) ||
+        loop.peakRate < -6 ||
+        loop.peakRate > -1
+      ) {
+        errors.push(
+          `spinback on ${loop.side}: peakRate ${loop.peakRate} outside [-6, -1]`,
+        );
+      }
+    }
+    if (loop.type === "nudge") {
+      // A nudge is a bend that returns, not a tempo change: its
+      // multiplier hugs 1, and a multiplier OF 1 is no move at all.
+      if (
+        loop.bend === undefined ||
+        !Number.isFinite(loop.bend) ||
+        loop.bend < 0.9 ||
+        loop.bend > 1.1 ||
+        loop.bend === 1
+      ) {
+        errors.push(
+          `nudge on ${loop.side}: bend ${loop.bend} outside [0.9, 1.1] or equal to 1`,
+        );
+      }
+    }
   }
   if (recipe.fx.echo) {
     const e = recipe.fx.echo;

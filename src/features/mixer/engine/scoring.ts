@@ -112,11 +112,10 @@ function vetoesFor(candidate: Candidate, profile: DecisionProfile): string[] {
   const e = candidate.evidence;
   const reasons: string[] = [];
 
-  if (candidate.family === "spinback" || candidate.family === "vinyl-stop") {
-    reasons.push(
-      `${candidate.family} is not performable by the decks yet — a candidate that cannot be performed cannot win`,
-    );
-  }
+  // (Until the revamp's R1, spinback / vinyl-stop were vetoed here
+  // as unperformable. The executor performs them now, so they stand
+  // or fall on the same evidence and family costs as every other
+  // family — no veto, and no favour.)
   if (e.beatmatched) {
     // The reach a candidate is judged against is the one it was
     // performed in: a rate beatmatch answers to the rate cap; a

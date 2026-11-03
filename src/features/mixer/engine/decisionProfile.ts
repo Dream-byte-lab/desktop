@@ -39,10 +39,11 @@ export const DECISION_PROFILE_VERSION = 2;
 /**
  * The join families — the blueprint §3.3 vocabulary. Two of them are
  * "do less" (let-it-play, early-cut): a varied decider must be able
- * to choose restraint, not only technique. spinback / vinyl-stop are
- * in the vocabulary (and priced) but are NOT enumerated as candidates
- * yet: the S5-2 executor does not perform them, and a candidate the
- * decks cannot perform would be a lie in the set.
+ * to choose restraint, not only technique. spinback / vinyl-stop
+ * spent S5-3 priced-but-unenumerated (the S5-2 executor could not
+ * perform them, and a candidate the decks cannot perform would be
+ * a lie in the set); since the revamp's R1 the executor performs
+ * them, and candidates.ts enumerates them as heavily-gated rivals.
  */
 export type JoinFamily =
   | "long-blend"

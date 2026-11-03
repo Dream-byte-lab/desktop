@@ -5,6 +5,7 @@ import {
   recipeFromPlan,
   validateRecipe,
   type AutomationCurve,
+  type RecipeLoopBlock,
   type TransitionRecipe,
 } from "./recipe";
 import { applyVocalReferee, type TransitionPlan } from "./transitionPlanner";
@@ -35,6 +36,15 @@ import { applyVocalReferee, type TransitionPlan } from "./transitionPlanner";
 // recipe's fallback instead — a plain cut — rather than forcing the
 // blend or throwing into the session.
 //
+// Jog moves (the revamp's R1) are performed here too: a recipe's
+// spinback / vinyl-stop / brake / nudge blocks drive the named
+// deck's playback rate as written — a stop move's rate fall, a
+// spinback's run into negative rates, a nudge's bend that returns.
+// A's moves anchor in A's track time against the overlap's startAMs
+// (a recipe without that anchor cannot place one and falls back);
+// B's track time advances at rateB from startBMs, in rate mode and
+// rendition mode alike, so one formula places B's moves in both.
+//
 // One conversion lives here, and only here: a stretch recipe's
 // anchors are written in B's ORIGINAL track time (the same timeline
 // the author, the referee and the session's position model all
@@ -47,6 +57,96 @@ import { applyVocalReferee, type TransitionPlan } from "./transitionPlanner";
 
 /** Samples used when a volume curve is rendered for setValueCurveAtTime. */
 const VOLUME_SAMPLES = 256;
+/** Samples used when B's rate curve is rendered with nudge bends folded in. */
+const RATE_SAMPLES = 1024;
+/**
+ * The rate a stopping deck falls to: effectively silence, never
+ * exactly 0 — an exponential ramp cannot target 0, and a deck at
+ * 2% speed under a closed fader is a stopped record.
+ */
+const STOP_FLOOR_RATE = 0.02;
+
+/** The jog moves that END a deck's motion (as opposed to a nudge, which returns). */
+function isStopMove(move: RecipeLoopBlock): boolean {
+  return (
+    move.type === "vinyl-stop" ||
+    move.type === "brake" ||
+    move.type === "spinback"
+  );
+}
+
+/**
+ * Schedules a stop-family move on a deck's rate control, from its
+ * playing rate. The three techniques are three shapes of the same
+ * act — the rate leaves and does not come back:
+ *
+ * - vinyl-stop: an exponential fall — most of the pitch drop lands
+ *   in the first half, like a hand killing a record.
+ * - brake: a gradual linear fall to 30% over most of the span,
+ *   then the exponential settle — a turntable spinning down.
+ * - spinback: the rate drives negative to the move's peakRate
+ *   within the first 15% of the span, then eases slightly — the
+ *   track runs backwards, hard, until the deck stops it.
+ */
+function scheduleStopMove(
+  param: AudioParam,
+  move: RecipeLoopBlock,
+  startCtx: number,
+  durationSec: number,
+  baseRate: number,
+): void {
+  param.setValueAtTime(baseRate, startCtx);
+  if (move.type === "vinyl-stop") {
+    param.exponentialRampToValueAtTime(STOP_FLOOR_RATE, startCtx + durationSec);
+  } else if (move.type === "brake") {
+    param.linearRampToValueAtTime(baseRate * 0.3, startCtx + durationSec * 0.7);
+    param.exponentialRampToValueAtTime(STOP_FLOOR_RATE, startCtx + durationSec);
+  } else {
+    const peak = move.peakRate ?? -3;
+    param.linearRampToValueAtTime(peak, startCtx + durationSec * 0.15);
+    param.linearRampToValueAtTime(peak * 0.8, startCtx + durationSec);
+  }
+}
+
+/**
+ * Schedules a nudge: the rate bends away from its written value to
+ * base × bend at the move's midpoint and RETURNS by its end. A push
+ * or a pull — never a new tempo.
+ */
+function scheduleNudge(
+  param: AudioParam,
+  startCtx: number,
+  durationSec: number,
+  baseRate: number,
+  bend: number,
+): void {
+  param.setValueAtTime(baseRate, startCtx);
+  param.linearRampToValueAtTime(baseRate * bend, startCtx + durationSec / 2);
+  param.linearRampToValueAtTime(baseRate, startCtx + durationSec);
+}
+
+interface NudgeSpan {
+  startOffMs: number;
+  durMs: number;
+  bend: number;
+}
+
+/**
+ * The combined multiplier a set of nudge spans applies at a moment:
+ * each bend is a triangle over its span (0 at the edges, full at
+ * the midpoint), and simultaneous bends multiply.
+ */
+function nudgeFactorAt(spans: NudgeSpan[], atMs: number): number {
+  let factor = 1;
+  for (const span of spans) {
+    if (atMs <= span.startOffMs || atMs >= span.startOffMs + span.durMs)
+      continue;
+    const phase = (atMs - span.startOffMs) / span.durMs;
+    const tri = phase < 0.5 ? phase * 2 : 2 - phase * 2;
+    factor *= 1 + (span.bend - 1) * tri;
+  }
+  return factor;
+}
 /** Safety gap between "now" and the earliest scheduled event, in seconds. */
 const SCHEDULE_AHEAD_SEC = 0.1;
 /** The shared echo network's resting state (echoOutCurrent's sound). */
@@ -372,6 +472,20 @@ export class TwoDeckMixer {
         options.levelGain ?? 1,
       );
     }
+    // A jog move on the outgoing deck anchors in A's track time
+    // against the overlap's startAMs. The legacy relative form has
+    // no anchor, so a recipe carrying an A-side move without one
+    // cannot be placed — the fallback, never a guessed position.
+    if (
+      working.overlap.startAMs === null &&
+      working.loops.some((l) => l.type !== "loop" && l.side === "A")
+    ) {
+      return this.performFallbackCut(
+        nextBuffer,
+        bufferSecB(recipe.overlap.startBMs / 1000, recipe.overlap.stretchB),
+        options.levelGain ?? 1,
+      );
+    }
 
     const outgoing = this.currentDeck;
     const incoming = this.nextDeck;
@@ -404,12 +518,39 @@ export class TwoDeckMixer {
 
     // Loops, armed as written. A's loop engages when its playhead
     // reaches the region's end; B's is armed on its fresh source.
+    // (Jog moves in the same array are not loops — they are
+    // scheduled with the rate moves further down.)
     for (const loop of working.loops) {
-      if (loop.type !== "loop") continue; // spinback / vinyl-stop: S5-3 families, not performed yet
+      if (loop.type !== "loop") continue;
       if (loop.side === "A") {
         outgoing.setLoopRegion(loop.startMs / 1000, loop.endMs / 1000);
       }
     }
+
+    // Jog-move geometry. A move's wall-clock start: A's playhead
+    // left startAMs at blendStart and advances at rateA; B's track
+    // time advances at rateB from startBMs (in rendition mode B's
+    // ORIGINAL time also advances at rateB — the session's position
+    // model — so one formula places B's moves in both modes). A
+    // move's wall duration is its beats at its side's tempo, at its
+    // side's rate.
+    const jogMoves = working.loops.filter((l) => l.type !== "loop");
+    const movesOn = (side: "A" | "B"): RecipeLoopBlock[] =>
+      jogMoves.filter((l) => l.side === side);
+    const moveStartCtx = (move: RecipeLoopBlock): number =>
+      move.side === "A"
+        ? blendStart +
+          (move.startMs - (working.overlap.startAMs ?? 0)) /
+            1000 /
+            working.overlap.rateA
+        : blendStart +
+          (move.startMs - working.overlap.startBMs) /
+            1000 /
+            working.overlap.rateB;
+    const moveDurationSec = (move: RecipeLoopBlock): number =>
+      move.side === "A"
+        ? (move.beats * (60 / working.overlap.bpmA)) / working.overlap.rateA
+        : (move.beats * (60 / working.overlap.bpmB)) / working.overlap.rateB;
 
     // Incoming deck: start silent (or at the cut's full level), then
     // every curve the recipe wrote for it.
@@ -457,9 +598,104 @@ export class TwoDeckMixer {
     scheduleEvents(outgoing.filter.frequency, a.filterOut, blendStart);
     scheduleEvents(outgoing.echoSend.gain, a.echoSendOut, blendStart);
     const rate = incoming.rateControl;
-    if (rate) scheduleEvents(rate, a.rateB, blendStart);
+    if (rate) {
+      const bMoves = movesOn("B");
+      const bStops = bMoves.filter(isStopMove);
+      const bNudges = bMoves.filter((m) => m.type === "nudge");
+      if (bStops.length > 0) {
+        // A stop move on the incoming deck takes the rate control
+        // from its start: the written rate curve governs until
+        // then, the move governs after — and the deck stops when
+        // the last move ends. (Authoring never writes one — B is
+        // the deck ARRIVING — but a recipe carrying one is
+        // performed as written, not silently half-performed.)
+        scheduleEvents(rate, a.rateB, blendStart);
+        const first = Math.min(...bStops.map((m) => moveStartCtx(m)));
+        rate.cancelScheduledValues(first);
+        rate.setValueAtTime(
+          automationValueAt(a.rateB, (first - blendStart) * 1000),
+          first,
+        );
+        let lastEnd = first;
+        for (const move of bStops) {
+          scheduleStopMove(
+            rate,
+            move,
+            moveStartCtx(move),
+            moveDurationSec(move),
+            working.overlap.rateB,
+          );
+          lastEnd = Math.max(
+            lastEnd,
+            moveStartCtx(move) + moveDurationSec(move),
+          );
+        }
+        incoming.stop(lastEnd + 0.02);
+      } else if (bNudges.length > 0) {
+        // Nudge bends fold INTO B's written rate curve: the curve
+        // is rendered sampled, each sample multiplied by the bends
+        // in force at that moment — one writer on the parameter,
+        // so bend and curve can never fight.
+        const spans: NudgeSpan[] = bNudges.map((m) => ({
+          startOffMs: (moveStartCtx(m) - blendStart) * 1000,
+          durMs: moveDurationSec(m) * 1000,
+          bend: m.bend ?? 1,
+        }));
+        const lastCurveMs =
+          a.rateB.points.length > 0
+            ? a.rateB.points[a.rateB.points.length - 1].atMs
+            : 0;
+        const spanSec =
+          Math.max(
+            lastCurveMs,
+            ...spans.map((s) => s.startOffMs + s.durMs),
+            1,
+          ) / 1000;
+        const values = new Float32Array(RATE_SAMPLES);
+        for (let i = 0; i < RATE_SAMPLES; i += 1) {
+          const atMs = (i / (RATE_SAMPLES - 1)) * spanSec * 1000;
+          values[i] =
+            automationValueAt(a.rateB, atMs) * nudgeFactorAt(spans, atMs);
+        }
+        rate.setValueCurveAtTime(values, blendStart, spanSec);
+      } else {
+        scheduleEvents(rate, a.rateB, blendStart);
+      }
+    }
 
-    outgoing.stop(blendEnd + 0.05);
+    // The outgoing deck's jog moves, on its own rate control: a
+    // nudge bends and returns; a stop move falls and does not come
+    // back — and the deck's stop waits for the last stop move to
+    // finish sounding rather than cutting it off at the blend's
+    // written end.
+    let outgoingStopCtx = blendEnd;
+    const outRate = outgoing.rateControl;
+    if (outRate) {
+      for (const move of movesOn("A")) {
+        const startCtx = moveStartCtx(move);
+        const durSec = moveDurationSec(move);
+        if (move.type === "nudge") {
+          scheduleNudge(
+            outRate,
+            startCtx,
+            durSec,
+            working.overlap.rateA,
+            move.bend ?? 1,
+          );
+        } else if (isStopMove(move)) {
+          scheduleStopMove(
+            outRate,
+            move,
+            startCtx,
+            durSec,
+            working.overlap.rateA,
+          );
+          outgoingStopCtx = Math.max(outgoingStopCtx, startCtx + durSec);
+        }
+      }
+    }
+
+    outgoing.stop(outgoingStopCtx + 0.05);
 
     this.current = 1 - this.current;
     return { blendStartCtxTime: blendStart, blendEndCtxTime: blendEnd };
