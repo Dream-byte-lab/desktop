@@ -7,6 +7,8 @@ import {
   HeartFill,
   Download2Fill,
   CompassFill,
+  ChartPie2Fill,
+  HistoryFill,
 } from "@mingcute/react";
 
 export interface NavItem {
@@ -18,7 +20,7 @@ export interface NavItem {
 
 export const sidebarNavItems: NavItem[] = [
   { id: "home", label: "Home", href: "/", Icon: Home7Fill },
-  { id: "search", label: "Search", Icon: Search3Fill },
+  { id: "search", label: "Search", href: "/search", Icon: Search3Fill },
   { id: "library", label: "Library", href: "/library", Icon: BookmarksFill },
   { id: "settings", label: "Settings", Icon: Settings4Fill },
 ];
@@ -43,7 +45,6 @@ export const sidebarNavItems: NavItem[] = [
  *   - artists            (no standalone page)
  *   - playlists          (no standalone page)
  *   - your-mixes         (no page yet)
- *   - listening-history  (no page yet)
  *   - personal-playlists (no page yet)
  *   - profile            (no page yet; account lives in the settings modal,
  *                         surfaced via SidebarAccountStatus in the foot)
@@ -73,6 +74,20 @@ export const downloadsNavItem: NavItem = {
   Icon: Download2Fill,
 };
 
+export const yourSpaceNavItem: NavItem = {
+  id: "your_space",
+  label: "Your Space",
+  href: "/space",
+  Icon: ChartPie2Fill,
+};
+
+export const listeningHistoryNavItem: NavItem = {
+  id: "listening_history",
+  label: "Listening History",
+  href: "/space/history",
+  Icon: HistoryFill,
+};
+
 /** Every sidebar item by id, including the section-only entries. */
 const byId = (id: string): NavItem =>
   sidebarNavItems.find((item) => item.id === id)!;
@@ -85,6 +100,8 @@ export const sidebarAllItems: Record<string, NavItem> = {
   settings: byId("settings"),
   favorites: favoritesNavItem,
   downloads: downloadsNavItem,
+  your_space: yourSpaceNavItem,
+  listening_history: listeningHistoryNavItem,
 };
 
 export function getSidebarItem(id: string): NavItem | undefined {
@@ -107,6 +124,11 @@ export const sidebarSections: SidebarSection[] = [
     id: "collection",
     label: "Your Collection",
     itemIds: ["library", "favorites", "downloads"],
+  },
+  {
+    id: "space",
+    label: "Your Space",
+    itemIds: ["your_space", "listening_history"],
   },
 ];
 

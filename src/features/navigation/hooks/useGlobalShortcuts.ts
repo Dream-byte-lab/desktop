@@ -29,9 +29,9 @@ const REPEATABLE_CODES = new Set([
 
 export interface GlobalShortcutsOptions {
   enabled?: boolean;
-  searchOpen: boolean;
-  openSearch: () => void;
-  closeSearch: () => void;
+  // The search door (Interface S1): the overlay retired and the
+  // binding now navigates to the dedicated search page.
+  openSearchPage: () => void;
   rightPanelOpen: boolean;
   openRightPanel: () => void;
   closeRightPanel: () => void;
@@ -43,6 +43,16 @@ export interface GlobalShortcutsOptions {
   focusOpen?: boolean;
   enterFocus?: () => void;
   exitFocus?: () => void;
+  // The DJ stage's Escape slot (Note 26, named as owed in the
+  // stage-engine seams report): optional for the same reason as
+  // Focus; AppFrame always passes them. Ranked above
+  // onEscapeFallback — the stage is the frame's topmost standing
+  // surface and route-back is its floor — and below Focus, the
+  // right panel and the fullscreen player, which are transient
+  // layers that can sit over the stage and keep their first
+  // claim on the key.
+  stageOpen?: boolean;
+  closeStage?: () => void;
   onEscapeFallback?: () => boolean;
 }
 
@@ -83,12 +93,6 @@ export function useGlobalShortcuts(options: GlobalShortcutsOptions): void {
           opts.exitFocus();
           return;
         }
-        if (opts.searchOpen) {
-          event.preventDefault();
-          event.stopPropagation();
-          opts.closeSearch();
-          return;
-        }
         if (opts.rightPanelOpen) {
           event.preventDefault();
           event.stopPropagation();
@@ -99,6 +103,18 @@ export function useGlobalShortcuts(options: GlobalShortcutsOptions): void {
           event.preventDefault();
           event.stopPropagation();
           opts.closeFullscreen();
+          return;
+        }
+        // The DJ stage (Note 26): Escape is the guaranteed exit —
+        // it lands regardless of focus or pointer state, which is
+        // exactly what the stage's own Back pill cannot promise
+        // while its pointer path is in doubt. Closing the stage is
+        // a view act only (the mode store's proOpen); a running
+        // session keeps playing untouched.
+        if (opts.stageOpen && opts.closeStage) {
+          event.preventDefault();
+          event.stopPropagation();
+          opts.closeStage();
           return;
         }
         if (opts.onEscapeFallback?.()) {
@@ -184,7 +200,7 @@ export function useGlobalShortcuts(options: GlobalShortcutsOptions): void {
 
       if (matchesShortcut(event, mainApp.search)) {
         event.preventDefault();
-        opts.openSearch();
+        opts.openSearchPage();
         return;
       }
 

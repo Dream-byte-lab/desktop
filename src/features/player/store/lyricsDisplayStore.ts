@@ -24,10 +24,18 @@ export interface LyricsDisplayState {
   biggerText: boolean;
   highlightLyrics: boolean;
   textAlign: LyricsTextAlign;
+  /**
+   * Pronunciation sub-lines under lyric lines (source-provided or
+   * computed, letter-faithful). Default OFF — the user's
+   * romanization posture (name display ruling, 2026-11-03) applied
+   * to the lyrics surface too. Translations are never gated by it.
+   */
+  romanization: boolean;
   setGaussianBlur: (enabled: boolean) => void;
   setBiggerText: (enabled: boolean) => void;
   setHighlightLyrics: (enabled: boolean) => void;
   setTextAlign: (align: LyricsTextAlign) => void;
+  setRomanization: (enabled: boolean) => void;
 }
 
 export const useLyricsDisplayStore = create<LyricsDisplayState>()(
@@ -37,10 +45,12 @@ export const useLyricsDisplayStore = create<LyricsDisplayState>()(
       biggerText: false,
       highlightLyrics: true,
       textAlign: "center",
+      romanization: false,
       setGaussianBlur: (gaussianBlur) => set({ gaussianBlur }),
       setBiggerText: (biggerText) => set({ biggerText }),
       setHighlightLyrics: (highlightLyrics) => set({ highlightLyrics }),
       setTextAlign: (textAlign) => set({ textAlign }),
+      setRomanization: (romanization) => set({ romanization }),
     }),
     {
       name: "linerave_lyrics_display_v1",
@@ -50,6 +60,7 @@ export const useLyricsDisplayStore = create<LyricsDisplayState>()(
         biggerText: state.biggerText,
         highlightLyrics: state.highlightLyrics,
         textAlign: state.textAlign,
+        romanization: state.romanization,
       }),
     },
   ),
@@ -60,10 +71,17 @@ export function lyricsDisplayOptionsFor(state: {
   textAlign: LyricsTextAlign;
   highlightLyrics: boolean;
   biggerText: boolean;
+  romanization?: boolean;
 }): LyricsDisplayOptions {
   return {
     align: state.textAlign === "left" ? "start" : "center",
     highlight: state.highlightLyrics,
     textScale: state.biggerText ? LYRICS_BIGGER_TEXT_SCALE : 1,
+    // Included only when the caller supplies the preference, so a
+    // partial push (or an older caller) leaves the scene's current
+    // romanization state untouched rather than forcing it off.
+    ...(state.romanization === undefined
+      ? {}
+      : { romanization: state.romanization }),
   };
 }

@@ -259,7 +259,8 @@ export type StageDeckMove =
   | "baby"
   | "chirp"
   | "transformer"
-  | "flare";
+  | "flare"
+  | "crab";
 
 /** UI display range for the EQ knobs, in dB (centre 0 = flat). */
 export const STAGE_EQ_MIN_DB = -24;

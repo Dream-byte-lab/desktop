@@ -9,6 +9,13 @@ const WARP_SCALE = 0.25;
 const MAX_FPS = 30;
 const FRAME_MS = 1000 / MAX_FPS;
 const FRAME_SLACK_MS = 2;
+/**
+ * Paused cadence under the slow gate (user ruling, 2026-11-03): while
+ * playback is paused the loop renders once per second instead of at
+ * the 30 fps cap — the background keeps creeping, it does not freeze
+ * and does not keep burning GPU on a still scene.
+ */
+export const KAWARP_PAUSED_FRAME_MS = 1000;
 
 const VERTEX_SHADER = `
   attribute vec2 a_position;
@@ -213,6 +220,7 @@ export class KawarpEngine {
   private lastFrameTime = 0;
   private accumulatedTime = 0;
   private isPlaying = false;
+  private slowGate = false;
 
   private isTransitioning = false;
   private transitionStartTime = 0;
@@ -517,6 +525,20 @@ export class KawarpEngine {
     }
   }
 
+  /**
+   * Turn the paused slow gate on or off. The wrapper drives this from
+   * the player store's status: on while paused (renders slow to
+   * ~1 fps, see KAWARP_PAUSED_FRAME_MS), off otherwise (the usual
+   * 30 fps cap). Toggling re-anchors the frame clock so the first
+   * frame under the new cadence is one normal step away — never a
+   * catch-up burst, never a phase jump.
+   */
+  public setSlowGate(enabled: boolean) {
+    if (this.slowGate === enabled) return;
+    this.slowGate = enabled;
+    this.lastFrameTime = performance.now();
+  }
+
   private renderLoop = (timestamp: number) => {
     if (!this.isPlaying) return;
     if (!isWindowVisible()) {
@@ -524,9 +546,18 @@ export class KawarpEngine {
       return;
     }
     this.animationId = requestAnimationFrame(this.renderLoop);
-    if (timestamp - this.lastFrameTime < FRAME_MS - FRAME_SLACK_MS) return;
-    const dt = (timestamp - this.lastFrameTime) / 1000;
+    const frameMs = this.slowGate ? KAWARP_PAUSED_FRAME_MS : FRAME_MS;
+    if (timestamp - this.lastFrameTime < frameMs - FRAME_SLACK_MS) return;
+    const elapsedMs = timestamp - this.lastFrameTime;
     this.lastFrameTime = timestamp;
+    // The animation clock advances only here, from the elapsed time
+    // between rendered frames. While gated, one tick steps the clock
+    // by a single full-rate frame's worth, so the warp creeps at
+    // ~1/30 speed instead of leaping a whole second of phase per
+    // tick; on resume the clock continues from where it crept to.
+    const dt = this.slowGate
+      ? Math.min(elapsedMs, FRAME_MS) / 1000
+      : elapsedMs / 1000;
     this.accumulatedTime += dt * this.animationSpeed;
     this.render(this.accumulatedTime, timestamp);
   };

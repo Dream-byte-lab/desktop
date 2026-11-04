@@ -4,9 +4,12 @@ import { sidebarSections, sidebarAllItems, getSidebarItem } from "./navigation";
 const ALLOWED_HREFS = new Set([
   "/",
   "/for-you",
+  "/search",
   "/library",
   "/library/saved",
   "/library/cached",
+  "/space",
+  "/space/history",
 ]);
 
 const OMITTED_IDS = [
@@ -18,7 +21,6 @@ const OMITTED_IDS = [
   "artists",
   "playlists",
   "your-mixes",
-  "listening-history",
   "personal-playlists",
   "profile",
 ];
@@ -49,16 +51,17 @@ describe("navigation honesty", () => {
     }
   });
 
-  it("search has no href", () => {
+  it("search is an href item pointing at the search page (S1)", () => {
     const search = getSidebarItem("search");
     expect(search).toBeDefined();
-    expect(search!.href).toBeUndefined();
+    expect(search!.href).toBe("/search");
   });
 
-  it("sections are exactly discover + collection", () => {
+  it("sections are exactly discover + collection + space", () => {
     expect(sidebarSections.map((s) => s.id)).toEqual([
       "discover",
       "collection",
+      "space",
     ]);
     expect(sidebarSections[0].itemIds).toEqual(["home", "for_you", "search"]);
     expect(sidebarSections[1].itemIds).toEqual([
@@ -66,6 +69,14 @@ describe("navigation honesty", () => {
       "favorites",
       "downloads",
     ]);
+  });
+
+  it("the Your Space section renders exactly its two entries (S2)", () => {
+    const space = sidebarSections.find((s) => s.id === "space");
+    expect(space).toBeDefined();
+    expect(space!.itemIds).toEqual(["your_space", "listening_history"]);
+    expect(getSidebarItem("your_space")?.href).toBe("/space");
+    expect(getSidebarItem("listening_history")?.href).toBe("/space/history");
   });
 
   it("for you points at its real page", () => {

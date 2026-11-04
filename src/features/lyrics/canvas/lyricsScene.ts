@@ -27,6 +27,12 @@ export class LyricsScene {
   /** Presentation options (reference 27 controls); see types.ts. */
   display: LyricsDisplayOptions = { ...DEFAULT_LYRICS_DISPLAY_OPTIONS };
   private lyricsText = "";
+  /**
+   * The last source lyrics passed to `setLyrics`, retained so a
+   * romanization flip can rebuild the line model with the new flag
+   * at change time (never per frame).
+   */
+  private sourceLyrics: Lyric[] = [];
 
   constructor(
     private readonly ctx: CanvasRenderingContext2D,
@@ -51,15 +57,19 @@ export class LyricsScene {
    */
   setDisplayOptions(next: Partial<LyricsDisplayOptions>) {
     const merged = { ...this.display, ...next };
+    const romanizationChanged =
+      Boolean(merged.romanization) !== Boolean(this.display.romanization);
     if (
       merged.align === this.display.align &&
       merged.highlight === this.display.highlight &&
-      merged.textScale === this.display.textScale
+      merged.textScale === this.display.textScale &&
+      !romanizationChanged
     ) {
       return;
     }
     const scaleChanged = merged.textScale !== this.display.textScale;
     this.display = merged;
+    if (romanizationChanged) this.rebuildModel();
     if (!scaleChanged) {
       this.relayout();
       this.onFontsReady();
@@ -94,12 +104,20 @@ export class LyricsScene {
   }
 
   setLyrics(lyrics: Lyric[]) {
-    const model = buildLines(lyrics);
-    this.lines = model.lines;
-    this.shiftMs = model.shiftMs;
+    this.sourceLyrics = lyrics;
+    this.rebuildModel();
     this.relayout();
     this.lyricsText = lyrics.map((line) => line.words ?? "").join("\n");
     void loadLyricsFonts(this.typography, this.lyricsText);
+  }
+
+  /** Rebuilds the line model from the retained source lyrics. */
+  private rebuildModel() {
+    const model = buildLines(this.sourceLyrics, {
+      romanization: Boolean(this.display.romanization),
+    });
+    this.lines = model.lines;
+    this.shiftMs = model.shiftMs;
   }
 
   setSize(width: number, height: number) {

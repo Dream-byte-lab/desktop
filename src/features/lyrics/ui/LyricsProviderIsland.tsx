@@ -10,7 +10,11 @@ import {
   MinimizeLine,
   Refresh1Line,
 } from "@mingcute/react";
-import { useLyricsStore } from "../store/lyricsStore";
+import {
+  useLyricsStore,
+  type LyricsProviderOption,
+} from "../store/lyricsStore";
+import { lyricsCache } from "../store/lyricsCache";
 import { useTranslation } from "@/languages";
 import { cn } from "@/shared/lib";
 
@@ -36,7 +40,18 @@ export function LyricsProviderIsland() {
     setOffset,
     adjustOffset,
     resetOffset,
+    currentLyricsTrackId,
   } = useLyricsStore();
+
+  // Wave 4 (wrong-lyrics remedy): the wrong-source mark for the
+  // current track, read from the lyrics cache — its only home. It is
+  // refreshed when the track changes or the dropdown opens, and this
+  // island updates it directly when it writes a mark. Marking never
+  // changes what is on screen; it only steers later plays.
+  const [wrongProvider, setWrongProvider] = useState<{
+    provider: string;
+    markedAt: number;
+  } | null>(null);
 
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [offsetOpen, setOffsetOpen] = useState(false);
@@ -55,6 +70,14 @@ export function LyricsProviderIsland() {
       }
     }
   }, [offsetMs, unit]);
+
+  useEffect(() => {
+    setWrongProvider(
+      currentLyricsTrackId
+        ? (lyricsCache.get(currentLyricsTrackId)?.wrongProvider ?? null)
+        : null,
+    );
+  }, [currentLyricsTrackId, dropdownOpen]);
 
   useEffect(() => {
     if (!dropdownOpen && !offsetOpen) return;
@@ -115,6 +138,56 @@ export function LyricsProviderIsland() {
     availableProviders[currentIndex] ?? availableProviders[0];
   const hasMultiple = availableProviders.length > 1;
 
+  // Wave 4: an explicit pick switches now AND persists per track, so
+  // the next play of this track opens on the chosen source
+  const pickProvider = (provider: string) => {
+    selectProvider(provider);
+    if (currentLyricsTrackId) {
+      lyricsCache.rememberUserProvider(currentLyricsTrackId, provider);
+    }
+  };
+
+  const syncLabel = (option: LyricsProviderOption): string => {
+    const level = option.syncLevel ?? option.candidate?.syncLevel;
+    if (level === "word_level" || level === "syllable_level") {
+      return t("player.lyrics_source_word") || "Word-synced";
+    }
+    if (level === "line_level") {
+      return t("player.lyrics_source_line") || "Line-synced";
+    }
+    return t("player.lyrics_source_plain") || "Plain";
+  };
+
+  const activeMarked =
+    wrongProvider?.provider === currentProvider.provider.toLowerCase().trim();
+  const switchTarget = availableProviders.find(
+    (p) => p.provider !== currentProvider.provider,
+  );
+
+  const handleMarkWrong = () => {
+    if (!currentLyricsTrackId) return;
+    lyricsCache.markWrongProvider(
+      currentLyricsTrackId,
+      currentProvider.provider,
+    );
+    setWrongProvider({
+      provider: currentProvider.provider.toLowerCase().trim(),
+      markedAt: Date.now(),
+    });
+  };
+
+  const handleUnmark = () => {
+    if (!currentLyricsTrackId) return;
+    lyricsCache.clearWrongProvider(currentLyricsTrackId);
+    setWrongProvider(null);
+  };
+
+  const handleSwitchToTarget = () => {
+    if (!switchTarget) return;
+    pickProvider(switchTarget.provider);
+    setDropdownOpen(false);
+  };
+
   const handlePrev = (e: React.MouseEvent<HTMLButtonElement>) => {
     e.preventDefault();
     e.stopPropagation();
@@ -123,7 +196,7 @@ export function LyricsProviderIsland() {
     const nextIdx =
       (currentIndex - 1 + availableProviders.length) %
       availableProviders.length;
-    selectProvider(availableProviders[nextIdx].provider);
+    pickProvider(availableProviders[nextIdx].provider);
   };
 
   const handleNext = (e: React.MouseEvent<HTMLButtonElement>) => {
@@ -132,7 +205,7 @@ export function LyricsProviderIsland() {
     e.currentTarget?.blur();
     if (!hasMultiple) return;
     const nextIdx = (currentIndex + 1) % availableProviders.length;
-    selectProvider(availableProviders[nextIdx].provider);
+    pickProvider(availableProviders[nextIdx].provider);
   };
 
   return (
@@ -266,7 +339,7 @@ export function LyricsProviderIsland() {
                   key={option.provider}
                   type="button"
                   onClick={() => {
-                    selectProvider(option.provider);
+                    pickProvider(option.provider);
                     setDropdownOpen(false);
                   }}
                   className={`flex items-center justify-between gap-[8px] w-full px-[8px] py-[6px] rounded-control text-caption transition-colors border-none cursor-pointer text-left ${
@@ -276,16 +349,65 @@ export function LyricsProviderIsland() {
                   }`}
                 >
                   <span className="truncate">{option.provider}</span>
-                  {isActive ? (
-                    <CheckFill size={14} className="text-white shrink-0" />
-                  ) : (
-                    <span className="text-[10px] font-mono text-white/40 shrink-0">
-                      {idx + 1}
+                  <span className="flex items-center gap-[6px] shrink-0">
+                    <span className="text-[10px] font-[400] text-white/40">
+                      {syncLabel(option)}
                     </span>
-                  )}
+                    {isActive ? (
+                      <CheckFill size={14} className="text-white shrink-0" />
+                    ) : (
+                      <span className="text-[10px] font-mono text-white/40 shrink-0">
+                        {idx + 1}
+                      </span>
+                    )}
+                  </span>
                 </button>
               );
             })}
+
+            {/* Wave 4 footer: the wrong-source remedy for the active
+                source. Everything here is device-local — the mark is
+                recorded in the lyrics cache on this device only, and
+                nothing is sent anywhere. */}
+            <div className="h-[1px] bg-white/10 mx-[4px] my-[2px]" />
+            {activeMarked ? (
+              <>
+                <div className="px-[8px] py-[4px] text-[11px] font-[500] text-white/50">
+                  {t("player.lyrics_marked_wrong") || "Marked as wrong"}
+                </div>
+                {switchTarget ? (
+                  <button
+                    type="button"
+                    onClick={handleSwitchToTarget}
+                    className="flex items-center w-full px-[8px] py-[6px] rounded-control text-caption font-[400] text-white/70 hover:bg-white/10 hover:text-white transition-colors border-none bg-transparent cursor-pointer text-left"
+                  >
+                    {t("player.lyrics_switch_to", {
+                      provider: switchTarget.provider,
+                    }) || `Switch to ${switchTarget.provider}`}
+                  </button>
+                ) : (
+                  <div className="px-[8px] py-[4px] text-[11px] font-[400] text-white/50">
+                    {t("player.lyrics_no_alternative") ||
+                      "No other source was found for this track"}
+                  </div>
+                )}
+                <button
+                  type="button"
+                  onClick={handleUnmark}
+                  className="flex items-center w-full px-[8px] py-[6px] rounded-control text-caption font-[400] text-white/70 hover:bg-white/10 hover:text-white transition-colors border-none bg-transparent cursor-pointer text-left"
+                >
+                  {t("player.lyrics_unmark") || "Unmark"}
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                onClick={handleMarkWrong}
+                className="flex items-center w-full px-[8px] py-[6px] rounded-control text-caption font-[400] text-white/70 hover:bg-white/10 hover:text-white transition-colors border-none bg-transparent cursor-pointer text-left"
+              >
+                {t("player.lyrics_wrong") || "These lyrics are wrong"}
+              </button>
+            )}
           </motion.div>
         )}
 

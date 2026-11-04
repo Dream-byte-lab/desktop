@@ -283,6 +283,16 @@ export function usePlaylistsList() {
   return state;
 }
 
+/**
+ * Re-runs the playlists list load after a failure (the Library
+ * page's Retry). Resolves when the load settles either way; the
+ * outcome lands in the shared view state (fresh data, or the
+ * error again).
+ */
+export function retryPlaylistsLoad(): Promise<void> {
+  return load(true);
+}
+
 function toDetail(
   playlist: ApiUserPlaylist,
   items: ApiUserPlaylistItem[],

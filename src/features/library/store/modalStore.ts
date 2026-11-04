@@ -105,12 +105,6 @@ interface ModalState {
   openFailedImports: () => void;
   closeFailedImports: () => void;
 
-  // Search modal / panel
-  searchOpen: boolean;
-  openSearch: () => void;
-  closeSearch: () => void;
-  toggleSearch: () => void;
-
   // Settings modal
   settingsOpen: boolean;
   openSettings: () => void;
@@ -197,11 +191,6 @@ export const useModalStore = create<ModalState>((set) => ({
   failedImportsOpen: false,
   openFailedImports: () => set({ failedImportsOpen: true }),
   closeFailedImports: () => set({ failedImportsOpen: false }),
-
-  searchOpen: false,
-  openSearch: () => set({ searchOpen: true }),
-  closeSearch: () => set({ searchOpen: false }),
-  toggleSearch: () => set((state) => ({ searchOpen: !state.searchOpen })),
 
   settingsOpen: false,
   openSettings: () => set({ settingsOpen: true }),

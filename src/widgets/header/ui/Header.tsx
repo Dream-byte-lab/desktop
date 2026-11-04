@@ -10,8 +10,6 @@ import { cn } from "@/shared/lib";
 import { HistoryNavIsland } from "./HistoryNavIsland";
 
 export interface HeaderProps {
-  searchOpen?: boolean;
-  onSearchToggle?: () => void;
   className?: string;
 }
 

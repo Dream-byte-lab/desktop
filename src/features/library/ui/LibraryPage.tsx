@@ -11,6 +11,7 @@ import type {
 } from "../types";
 import {
   usePlaylistsList,
+  retryPlaylistsLoad,
   useExternalItems,
   useLikedTrackCount,
   useYoutubeLibraryItems,
@@ -284,6 +285,12 @@ function OnlineLibraryPage() {
     error: playlistsError,
     isLoading: playlistsLoading,
   } = usePlaylistsList();
+
+  const [playlistsRetrying, setPlaylistsRetrying] = useState(false);
+  const handleRetryPlaylists = useCallback(() => {
+    setPlaylistsRetrying(true);
+    void retryPlaylistsLoad().finally(() => setPlaylistsRetrying(false));
+  }, []);
 
   const { data: albumItems = [], isLoading: albumsLoading } =
     useExternalItems("album");
@@ -619,8 +626,20 @@ function OnlineLibraryPage() {
 
         <div className="px-[12px] pt-[4px] pb-[20px]">
           {activeTab === "playlists" && playlistsError ? (
-            <div className="mb-[10px] text-caption text-accent-secondary">
-              {t("playlist.error_loading")}
+            <div className="mb-[10px] flex flex-wrap items-center gap-[10px]">
+              <span className="text-caption text-text-secondary">
+                {t("playlist.error_loading")}
+              </span>
+              <button
+                type="button"
+                disabled={playlistsRetrying}
+                onClick={handleRetryPlaylists}
+                className="h-[28px] rounded-[9px] border-0 bg-fill-hover px-[12px] text-[12.5px] font-[500] text-text-primary transition-colors hover:bg-black/[0.1] disabled:cursor-default disabled:opacity-60 dark:hover:bg-white/[0.15] cursor-pointer"
+              >
+                {playlistsRetrying
+                  ? t("library.playlists_retrying")
+                  : t("library.playlists_retry")}
+              </button>
             </div>
           ) : null}
           {initialLoading ? (

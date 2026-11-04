@@ -112,7 +112,17 @@ export interface DecisionProfile {
    */
   maxStretchUp: number;
   maxStretchDown: number;
-  /** Below this tempo-confidence, a tempo is a guess: no beatmatch. */
+  /**
+   * Below this tempo-confidence, a tempo is a guess: no beatmatch.
+   * Calibrated to the analyser's CENTRED autocorrelation scale
+   * (analysis v3, Note 27): measured reads are 0.00 for white
+   * noise, 0.04 for arrhythmic bursts, 0.17 for a real folk-rock
+   * recording, 0.36 for a sung arrangement, 0.46–0.87 for tidy
+   * rhythmic arrangements. The pre-v3 floors (0.35/0.20/0.15) were
+   * set against the old uncentred scale, on which a real song and
+   * white noise scored the same ~0.33 — they vetoed real music
+   * wholesale while claiming to veto guesses.
+   */
   minTempoConfidence: number;
   /** Below this whole-grid confidence, grid anchors are not trusted. */
   minGridConfidence: number;
@@ -201,7 +211,7 @@ export const STANDARD_PROFILE: DecisionProfile = {
   maxBeatmatchStretch: 0.06,
   maxStretchUp: 0.12,
   maxStretchDown: 0.06,
-  minTempoConfidence: 0.2,
+  minTempoConfidence: 0.12,
   minGridConfidence: 0.15,
   vocalClashIntegral: 0.4,
   vocalTrustConfidence: 0.35,
@@ -263,7 +273,7 @@ export const CONSERVATIVE_PROFILE: DecisionProfile = {
   maxBeatmatchStretch: 0.04,
   maxStretchUp: 0.08,
   maxStretchDown: 0.06,
-  minTempoConfidence: 0.35,
+  minTempoConfidence: 0.2,
   minGridConfidence: 0.3,
   vocalClashIntegral: 0.3,
   vocalTrustConfidence: 0.5,
@@ -327,7 +337,7 @@ export const ADVENTUROUS_PROFILE: DecisionProfile = {
   maxBeatmatchStretch: 0.09,
   maxStretchUp: 0.15,
   maxStretchDown: 0.09,
-  minTempoConfidence: 0.15,
+  minTempoConfidence: 0.05,
   minGridConfidence: 0.1,
   vocalClashIntegral: 0.45,
   vocalTrustConfidence: 0.3,

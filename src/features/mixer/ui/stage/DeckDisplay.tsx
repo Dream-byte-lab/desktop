@@ -3,6 +3,8 @@
 // honest low-confidence note when the analysis is unsure), key, and
 // elapsed / remaining time. Pure render.
 
+import { STANDARD_PROFILE } from "../../engine/decisionProfile";
+
 interface DeckDisplayProps {
   deckLabel: string;
   role: string;
@@ -33,7 +35,16 @@ export function DeckDisplay({
   elapsedSec,
   durationSec,
 }: DeckDisplayProps) {
-  const lowConfidence = tempoConfidence !== null && tempoConfidence < 0.5;
+  // The note means "below the STANDARD mixing floor": under the
+  // standard profile's minimum tempo confidence the planner will
+  // not beatmatch this track at all. The line is the floor itself,
+  // not a display-side guess — and it sits on the repaired
+  // mean-centred confidence scale (note27-c2-fix.md): the old 0.5
+  // line belonged to the uncentred statistic, on which a real
+  // song reads ~0.17 and wore this label while mixing fine.
+  const lowConfidence =
+    tempoConfidence !== null &&
+    tempoConfidence < STANDARD_PROFILE.minTempoConfidence;
   const remainingSec =
     elapsedSec !== null && durationSec !== null
       ? Math.max(0, durationSec - elapsedSec)

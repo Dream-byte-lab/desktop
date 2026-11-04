@@ -117,6 +117,8 @@ function isScratchMove(move: RecipeLoopBlock): boolean {
 const GATE_CLICK_SEC = 0.003;
 /** How fast a scratch gate opens, in seconds. */
 const GATE_OPEN_SEC = 0.002;
+/** How long a crab tap holds the gate open, in seconds — a blip, not a phrase. */
+const GATE_BLIP_HOLD_SEC = 0.012;
 
 /**
  * Schedules a scratch's HAND on a deck's rate control: `strokes`
@@ -129,6 +131,15 @@ const GATE_OPEN_SEC = 0.002;
  * unperturbed playback promised (the advance-exact invariant the
  * recipe documents). The final event pins the rate home: a scratch
  * is a visit, not a tempo.
+ *
+ * The CRAB's hand is the one asymmetric telling: each stroke pair
+ * is a long forward drag (three quarters of the cycle) at
+ * base + a, repaid by a fast return (one quarter) at base − 3a —
+ * the return three times as steep, hidden in the gate's closed
+ * gap. The excursion arithmetic is the same (a carries the record
+ * through `excursionBeats` across the forward drag), and the
+ * invariant holds by the same construction: a × ¾C is repaid
+ * exactly by 3a × ¼C.
  */
 function scheduleScratchHand(
   param: AudioParam,
@@ -139,8 +150,20 @@ function scheduleScratchHand(
   bpm: number,
 ): void {
   const strokes = Math.max(1, move.strokes ?? 1);
-  const halfSec = durationSec / (strokes * 2);
   const excursionSec = (move.excursionBeats ?? 0.5) * (60 / bpm);
+  if (move.technique === "crab") {
+    const cycleSec = durationSec / strokes;
+    const forwardSec = cycleSec * 0.75;
+    const slope = forwardSec > 0 ? excursionSec / forwardSec : 0;
+    for (let k = 0; k < strokes; k += 1) {
+      const strokeStart = startCtx + k * cycleSec;
+      param.setValueAtTime(baseRate + slope, strokeStart);
+      param.setValueAtTime(baseRate - 3 * slope, strokeStart + forwardSec);
+    }
+    param.setValueAtTime(baseRate, startCtx + durationSec);
+    return;
+  }
+  const halfSec = durationSec / (strokes * 2);
   const slope = halfSec > 0 ? excursionSec / halfSec : 0;
   for (let k = 0; k < strokes * 2; k += 1) {
     param.setValueAtTime(
@@ -168,6 +191,16 @@ function scheduleScratchHand(
  *   middle, and clicks shut across its last fifth at the next
  *   extreme; the final extreme is the release, so the gate is
  *   open again exactly at the window's end.
+ * - crab: the gate rests CLOSED — the only technique that does —
+ *   and is tapped open in finger bursts: `tapsPerStroke` brief
+ *   blips spaced evenly across each stroke's FORWARD drag only
+ *   (no tap ever falls in the return quarter, where the hand
+ *   flies back and the gate must be shut). Each blip is anchored
+ *   shut, opens over GATE_OPEN_SEC, holds for GATE_BLIP_HOLD_SEC
+ *   and clicks shut — a ~15–25% duty cycle against the flare's
+ *   open middle and the transformer's even alternation. Tap
+ *   spacing is even by design: this engine's unpredictability
+ *   lives in selection, never in automation jitter.
  *
  * Every transition is ANCHORED — a setValueAtTime of the standing
  * value at the moment the fader starts to move, then the short
@@ -234,6 +267,26 @@ function scheduleScratchGate(
         param.linearRampToValueAtTime(0, strokeStart + halfSec);
       }
     }
+  } else if (move.technique === "crab") {
+    const strokes = Math.max(1, move.strokes ?? 1);
+    const taps = move.tapsPerStroke ?? 3;
+    const cycleSec = durationSec / strokes;
+    const forwardSec = cycleSec * 0.75;
+    param.setValueAtTime(0, startCtx);
+    for (let k = 0; k < strokes; k += 1) {
+      const strokeStart = startCtx + k * cycleSec;
+      for (let j = 0; j < taps; j += 1) {
+        const tapAt = strokeStart + ((j + 0.5) * forwardSec) / taps;
+        param.setValueAtTime(0, tapAt);
+        param.linearRampToValueAtTime(1, tapAt + GATE_OPEN_SEC);
+        param.setValueAtTime(1, tapAt + GATE_OPEN_SEC + GATE_BLIP_HOLD_SEC);
+        param.linearRampToValueAtTime(
+          0,
+          tapAt + GATE_OPEN_SEC + GATE_BLIP_HOLD_SEC + GATE_CLICK_SEC,
+        );
+      }
+    }
+    param.setValueAtTime(1, endCtx);
   }
 }
 

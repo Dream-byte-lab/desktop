@@ -42,9 +42,7 @@ function baseOptions(
   overrides: Partial<GlobalShortcutsOptions> = {},
 ): GlobalShortcutsOptions {
   return {
-    searchOpen: false,
-    openSearch: vi.fn(),
-    closeSearch: vi.fn(),
+    openSearchPage: vi.fn(),
     rightPanelOpen: false,
     openRightPanel: vi.fn(),
     closeRightPanel: vi.fn(),
@@ -226,24 +224,24 @@ describe("useGlobalShortcuts", () => {
     expect(playerEngine.setVolume).toHaveBeenLastCalledWith(0.65);
   });
 
-  it("/ opens Search and prevents the character from being typed elsewhere", () => {
-    const openSearch = vi.fn();
-    mounted = mount(baseOptions({ openSearch }));
+  it("/ opens the search page and prevents the character from being typed elsewhere", () => {
+    const openSearchPage = vi.fn();
+    mounted = mount(baseOptions({ openSearchPage }));
     const event = press("Slash");
-    expect(openSearch).toHaveBeenCalledTimes(1);
+    expect(openSearchPage).toHaveBeenCalledTimes(1);
     expect(event.defaultPrevented).toBe(true);
   });
 
-  it("does not open Search while the user is typing (e.g. a literal '/' in a field)", () => {
+  it("does not open the search page while the user is typing (e.g. a literal '/' in a field)", () => {
     const input = document.createElement("input");
     document.body.appendChild(input);
     input.focus();
 
-    const openSearch = vi.fn();
-    mounted = mount(baseOptions({ openSearch }));
+    const openSearchPage = vi.fn();
+    mounted = mount(baseOptions({ openSearchPage }));
     const event = press("Slash", {}, input);
 
-    expect(openSearch).not.toHaveBeenCalled();
+    expect(openSearchPage).not.toHaveBeenCalled();
     expect(event.defaultPrevented).toBe(false);
   });
 
@@ -345,15 +343,12 @@ describe("useGlobalShortcuts", () => {
   describe("Escape priority", () => {
     it("exits Focus before everything else when Focus is open", () => {
       const exitFocus = vi.fn();
-      const closeSearch = vi.fn();
       const closeRightPanel = vi.fn();
       const closeFullscreen = vi.fn();
       mounted = mount(
         baseOptions({
           focusOpen: true,
           exitFocus,
-          searchOpen: true,
-          closeSearch,
           rightPanelOpen: true,
           closeRightPanel,
           fullscreenOpen: true,
@@ -362,37 +357,15 @@ describe("useGlobalShortcuts", () => {
       );
       press("Escape");
       expect(exitFocus).toHaveBeenCalledTimes(1);
-      expect(closeSearch).not.toHaveBeenCalled();
       expect(closeRightPanel).not.toHaveBeenCalled();
       expect(closeFullscreen).not.toHaveBeenCalled();
     });
 
-    it("closes Search first when Search, the right panel and Fullscreen are all open", () => {
-      const closeSearch = vi.fn();
+    it("closes the right panel first when the right panel and Fullscreen are both open", () => {
       const closeRightPanel = vi.fn();
       const closeFullscreen = vi.fn();
       mounted = mount(
         baseOptions({
-          searchOpen: true,
-          closeSearch,
-          rightPanelOpen: true,
-          closeRightPanel,
-          fullscreenOpen: true,
-          closeFullscreen,
-        }),
-      );
-      press("Escape");
-      expect(closeSearch).toHaveBeenCalledTimes(1);
-      expect(closeRightPanel).not.toHaveBeenCalled();
-      expect(closeFullscreen).not.toHaveBeenCalled();
-    });
-
-    it("closes the right panel next once Search is already closed", () => {
-      const closeRightPanel = vi.fn();
-      const closeFullscreen = vi.fn();
-      mounted = mount(
-        baseOptions({
-          searchOpen: false,
           rightPanelOpen: true,
           closeRightPanel,
           fullscreenOpen: true,
@@ -408,7 +381,6 @@ describe("useGlobalShortcuts", () => {
       const closeFullscreen = vi.fn();
       mounted = mount(
         baseOptions({
-          searchOpen: false,
           rightPanelOpen: false,
           fullscreenOpen: true,
           closeFullscreen,
@@ -416,6 +388,71 @@ describe("useGlobalShortcuts", () => {
       );
       press("Escape");
       expect(closeFullscreen).toHaveBeenCalledTimes(1);
+    });
+
+    it("closes the DJ stage when it is open and no layer above it is (Note 26)", () => {
+      const closeStage = vi.fn();
+      const onEscapeFallback = vi.fn(() => true);
+      mounted = mount(
+        baseOptions({ stageOpen: true, closeStage, onEscapeFallback }),
+      );
+      const event = press("Escape");
+      expect(closeStage).toHaveBeenCalledTimes(1);
+      expect(onEscapeFallback).not.toHaveBeenCalled();
+      expect(event.defaultPrevented).toBe(true);
+    });
+
+    it("serves Focus and Fullscreen before the DJ stage (no double-act)", () => {
+      const exitFocus = vi.fn();
+      const closeFullscreen = vi.fn();
+      const closeStage = vi.fn();
+      mounted = mount(
+        baseOptions({
+          focusOpen: true,
+          exitFocus,
+          fullscreenOpen: true,
+          closeFullscreen,
+          stageOpen: true,
+          closeStage,
+        }),
+      );
+      press("Escape");
+      expect(exitFocus).toHaveBeenCalledTimes(1);
+      expect(closeFullscreen).not.toHaveBeenCalled();
+      expect(closeStage).not.toHaveBeenCalled();
+
+      act(() => mounted!.root.unmount());
+      document.body.removeChild(mounted.container);
+
+      mounted = mount(
+        baseOptions({
+          fullscreenOpen: true,
+          closeFullscreen,
+          stageOpen: true,
+          closeStage,
+        }),
+      );
+      press("Escape");
+      expect(closeFullscreen).toHaveBeenCalledTimes(1);
+      expect(closeStage).not.toHaveBeenCalled();
+    });
+
+    it("reaches the fallback when the DJ stage is closed, even with a closer wired", () => {
+      const closeStage = vi.fn();
+      const onEscapeFallback = vi.fn(() => true);
+      mounted = mount(
+        baseOptions({ stageOpen: false, closeStage, onEscapeFallback }),
+      );
+      press("Escape");
+      expect(closeStage).not.toHaveBeenCalled();
+      expect(onEscapeFallback).toHaveBeenCalledTimes(1);
+    });
+
+    it("leaves the stage slot inert when no closer is provided (the Focus pair rule)", () => {
+      const onEscapeFallback = vi.fn(() => true);
+      mounted = mount(baseOptions({ stageOpen: true, onEscapeFallback }));
+      press("Escape");
+      expect(onEscapeFallback).toHaveBeenCalledTimes(1);
     });
 
     it("falls back to the caller's Escape handler last (e.g. navigating back on the artist page)", () => {
@@ -439,26 +476,26 @@ describe("useGlobalShortcuts", () => {
       expect(event.defaultPrevented).toBe(false);
     });
 
-    it("defers to an open dialog instead of closing Search itself", () => {
+    it("defers to an open dialog instead of closing the right panel itself", () => {
       const dialog = document.createElement("div");
       dialog.setAttribute("data-dialog-container", "true");
       document.body.appendChild(dialog);
 
-      const closeSearch = vi.fn();
-      mounted = mount(baseOptions({ searchOpen: true, closeSearch }));
+      const closeRightPanel = vi.fn();
+      mounted = mount(baseOptions({ rightPanelOpen: true, closeRightPanel }));
       press("Escape");
-      expect(closeSearch).not.toHaveBeenCalled();
+      expect(closeRightPanel).not.toHaveBeenCalled();
     });
 
-    it("still closes Search on Escape even while the search input is focused", () => {
+    it("still closes the right panel on Escape even while an input is focused", () => {
       const input = document.createElement("input");
       document.body.appendChild(input);
       input.focus();
 
-      const closeSearch = vi.fn();
-      mounted = mount(baseOptions({ searchOpen: true, closeSearch }));
+      const closeRightPanel = vi.fn();
+      mounted = mount(baseOptions({ rightPanelOpen: true, closeRightPanel }));
       press("Escape", {}, input);
-      expect(closeSearch).toHaveBeenCalledTimes(1);
+      expect(closeRightPanel).toHaveBeenCalledTimes(1);
     });
   });
 });

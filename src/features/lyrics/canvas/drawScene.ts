@@ -37,6 +37,10 @@ function paintBase(frame: SceneFrame, lines: VisibleLine[]) {
   for (const line of lines) {
     const bitmap = lineBitmap(frame, line);
     if (!bitmap) continue;
+    // Reference 28's distance falloff lives here, at composite
+    // time: the bitmap itself is painted once at the register's
+    // flat alpha, and lines far from the sung one are drawn dimmer.
+    if (line.dim < 1) ctx.globalAlpha = line.dim;
     ctx.drawImage(
       bitmap,
       0,
@@ -44,6 +48,7 @@ function paintBase(frame: SceneFrame, lines: VisibleLine[]) {
       bitmap.width / dpr,
       bitmap.height / dpr,
     );
+    if (line.dim < 1) ctx.globalAlpha = 1;
   }
   frame.fog.draw(ctx, scene.width, scene.height, now);
 }
@@ -61,7 +66,10 @@ export function drawScene(
   const signature =
     (split ? "split|" : "full|") +
     baseLines
-      .map((line) => `${line.index}@${line.top.toFixed(2)}#${line.key}`)
+      .map(
+        (line) =>
+          `${line.index}@${line.top.toFixed(2)}#${line.key}~${line.dim.toFixed(2)}`,
+      )
       .join("|");
   frame.bitmaps.begin();
   for (const line of lines) frame.bitmaps.keep(line.index);

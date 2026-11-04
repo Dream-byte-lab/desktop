@@ -886,6 +886,7 @@ interface ScratchShape {
   strokes: number;
   excursionBeats: number;
   clicksPerBeat?: number;
+  tapsPerStroke?: number;
 }
 
 /**
@@ -905,6 +906,18 @@ interface ScratchShape {
  *   full beats of window. It is attempted first when its
  *   conditions hold and yields to the energy's own technique when
  *   its window refuses (the caller tries shapes in order).
+ * - The CRAB is the family's most demanding telling of the same
+ *   stab: a bold profile, a HOT entry (≥ 0.75) landing on a drop —
+ *   its material IS the stab at the landing, so without the drop
+ *   it is never attempted. In the hot drop branch it is attempted
+ *   after the transformer (whose four-beat room is the rarer
+ *   showcase) and before the flare (which remains the fallback
+ *   when the crab's own window checks refuse). Its difficulty is
+ *   expressed as this eligibility, not as a price: it spends the
+ *   family's one scratch price like every technique in it. Its
+ *   excursion is deliberately the family's shortest — the crab
+ *   works a SHORT sound, and a wide drag smears the stab it
+ *   exists to chop.
  */
 function scratchShapesFor(
   profile: DecisionProfile,
@@ -936,6 +949,13 @@ function scratchShapesFor(
     excursionBeats: 0.4,
     clicksPerBeat: 2,
   };
+  const crab: ScratchShape = {
+    technique: "crab",
+    beats: 2,
+    strokes: 2,
+    excursionBeats: 0.5,
+    tapsPerStroke: 3,
+  };
   const bold = profile.familyCosts.scratch <= 0.4;
   if (entryEnergy === null || entryEnergy < 0.45) return [baby];
   if (entryEnergy < 0.75) {
@@ -943,7 +963,7 @@ function scratchShapesFor(
       ? [transformer, chirp]
       : [chirp];
   }
-  if (bold) return entryIsDrop ? [transformer, flare] : [flare];
+  if (bold) return entryIsDrop ? [transformer, crab, flare] : [flare];
   return [chirp];
 }
 
@@ -964,6 +984,9 @@ function scratchBlock(
     excursionBeats: shape.excursionBeats,
     ...(shape.clicksPerBeat !== undefined
       ? { clicksPerBeat: shape.clicksPerBeat }
+      : {}),
+    ...(shape.tapsPerStroke !== undefined
+      ? { tapsPerStroke: shape.tapsPerStroke }
       : {}),
   };
 }
@@ -1355,6 +1378,13 @@ const MANUAL_SCRATCH_SHAPES: Record<ScratchTechnique, ScratchShape> = {
     strokes: 1,
     excursionBeats: 0.4,
     clicksPerBeat: 2,
+  },
+  crab: {
+    technique: "crab",
+    beats: 2,
+    strokes: 2,
+    excursionBeats: 0.5,
+    tapsPerStroke: 3,
   },
 };
 
@@ -1771,7 +1801,7 @@ function signatureOf(recipe: TransitionRecipe): string {
   const loops = recipe.loops
     .map(
       (l) =>
-        `${l.type}:${l.technique ?? ""}:${l.strokes ?? ""}:${Math.round(l.startMs)}-${Math.round(l.endMs)}`,
+        `${l.type}:${l.technique ?? ""}:${l.strokes ?? ""}:${l.tapsPerStroke ?? ""}:${Math.round(l.startMs)}-${Math.round(l.endMs)}`,
     )
     .join(",");
   // The dressing is part of the plan: two dressings of the same

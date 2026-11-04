@@ -29,3 +29,4 @@ export {
   SearchHistoryList,
   type SearchHistoryListProps,
 } from "./ui/SearchHistoryList";
+export { default as SearchPage } from "./ui/SearchPage";

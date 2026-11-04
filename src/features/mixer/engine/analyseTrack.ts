@@ -50,7 +50,13 @@ import { buildBeatGrid } from "./gridTrack";
 // All passes run wherever the caller runs them — in the app that is
 // the Step 2 worker, never the UI thread.
 
-export const ANALYSIS_VERSION = 2;
+// Version 3 (Note 27, C2): the tempo confidence changed scale —
+// it is now the mean-centred autocorrelation (see estimateTempo).
+// V2 records carry the uncentred scale, whose numbers are not
+// comparable: the cache's version-equality gate must re-analyse
+// rather than let an old-scale confidence be spent against the
+// recalibrated floors.
+export const ANALYSIS_VERSION = 3;
 
 export interface DropCandidate {
   /** Track time where the drop lands (snapped to the beat grid). */
@@ -115,7 +121,7 @@ export interface TrackAnalysis {
 
   // ---- analysis v2 (always populated by the analyser and the cache) ----
 
-  /** Analysis format version — ANALYSIS_VERSION for anything v2 wrote. */
+  /** Analysis format version — ANALYSIS_VERSION for anything current wrote. */
   analysisVersion?: number;
   /** Coarse fingerprint of the decoded audio this analysis describes. */
   audioHash?: string;
@@ -204,7 +210,11 @@ function estimateTempo(
   if (maxLag <= minLag) return null;
 
   let zeroLag = 0;
-  for (let i = 0; i < onsets.length; i += 1) zeroLag += onsets[i] * onsets[i];
+  let onsetSum = 0;
+  for (let i = 0; i < onsets.length; i += 1) {
+    zeroLag += onsets[i] * onsets[i];
+    onsetSum += onsets[i];
+  }
   if (zeroLag === 0) return null;
 
   const scores = new Float64Array(maxLag + 1);
@@ -231,10 +241,32 @@ function estimateTempo(
   }
 
   const bpm = 60 / (chosenLag / framesPerSecond);
+  // Confidence is the MEAN-CENTRED autocorrelation at the chosen
+  // lag: the share of the onset envelope's variance the winning
+  // period explains. The uncentred ratio this replaced
+  // (autocorrelation ÷ zero-lag) counted the envelope's mean level
+  // as evidence for the period, and measured music cannot be told
+  // from noise on it — steady white noise scored 0.32 against a
+  // real song's 0.33, because a busy onset envelope's products sit
+  // on a pedestal of their own mean (Note 27 measurements,
+  // investigation/note27-c2-fix.md). Centred — the textbook
+  // autocorrelation — the same signals separate: white noise 0.00,
+  // arrhythmic bursts 0.04, a real folk-rock recording 0.17,
+  // sung arrangements 0.36, tidy synthetic arrangements 0.46–0.87.
+  // The floors in decisionProfile.ts are calibrated to THIS scale.
+  const n = onsets.length;
+  const mean = onsetSum / n;
+  const pairs = n - chosenLag;
+  const centredDenominator = zeroLag - n * mean * mean;
+  const centredNumerator = scores[chosenLag] * pairs - pairs * mean * mean;
+  const confidence =
+    centredDenominator > 0
+      ? Math.min(1, Math.max(0, centredNumerator / centredDenominator))
+      : 0;
   return {
     bpm,
     periodFrames: chosenLag,
-    confidence: Math.min(1, (scores[chosenLag] * onsets.length) / zeroLag),
+    confidence,
   };
 }
 

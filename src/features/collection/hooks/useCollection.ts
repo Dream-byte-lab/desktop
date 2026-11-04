@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { api, mediaUrl, toClientTrack } from "@/shared/api";
 import { queryCache } from "@/shared/cache/queryCache";
 import type { Track } from "@/shared/types";
@@ -8,6 +8,12 @@ import {
   isLocalMixId,
   resolveLocalMixCollection,
 } from "../lib/localMixResolver";
+import {
+  classifyCollectionLoadError,
+  type CollectionLoadError,
+} from "../lib/collectionLoadError";
+
+export type { CollectionLoadError } from "../lib/collectionLoadError";
 
 export interface CollectionPageData {
   type?: "playlist" | "album";
@@ -158,11 +164,21 @@ export function useCollection(type: string | null, id: string | null) {
   const [loading, setLoading] = useState<boolean>(
     !cached && Boolean(type && id),
   );
+  // Why a load ended with nothing to show: a genuine not-found
+  // vs a failure worth retrying (see lib/collectionLoadError).
+  // Null whenever data is on screen or a load is in flight — a
+  // failed background revalidation of cached data stays silent,
+  // exactly as before.
+  const [error, setError] = useState<CollectionLoadError | null>(null);
+  const [attempt, setAttempt] = useState(0);
+  // Re-runs the same SWR fetch (the failure state's way back).
+  const refetch = useCallback(() => setAttempt((n) => n + 1), []);
 
   useEffect(() => {
     if (!type || !id || !cacheKey) {
       setData(null);
       setLoading(false);
+      setError(null);
       return;
     }
 
@@ -170,9 +186,11 @@ export function useCollection(type: string | null, id: string | null) {
     if (initial) {
       setData(initial);
       setLoading(false);
+      setError(null);
     } else {
       setData(null);
       setLoading(true);
+      setError(null);
     }
 
     let active = true;
@@ -183,6 +201,7 @@ export function useCollection(type: string | null, id: string | null) {
         if (active) {
           setData(updated);
           setLoading(false);
+          setError(null);
         }
       },
     );
@@ -195,12 +214,14 @@ export function useCollection(type: string | null, id: string | null) {
         if (active) {
           setData(result);
           setLoading(false);
+          setError(null);
         }
       })
-      .catch(() => {
+      .catch((err: unknown) => {
         if (active && !queryCache.get(cacheKey)) {
           setData(null);
           setLoading(false);
+          setError(classifyCollectionLoadError(err));
         }
       });
 
@@ -208,7 +229,7 @@ export function useCollection(type: string | null, id: string | null) {
       active = false;
       unsubscribe();
     };
-  }, [type, id, cacheKey]);
+  }, [type, id, cacheKey, attempt]);
 
-  return { data, loading };
+  return { data, loading, error, refetch };
 }

@@ -27,7 +27,8 @@ interface DisplayToggleProps {
   onChange: (checked: boolean) => void;
 }
 
-/** Reference 27's pill toggle: light track, knob carrying a check. */
+/** The pill toggle: reference 28's register — a dark matte track,
+ * the light knob carrying the check. */
 function DisplayToggle({ label, checked, onChange }: DisplayToggleProps) {
   return (
     <button
@@ -42,7 +43,7 @@ function DisplayToggle({ label, checked, onChange }: DisplayToggleProps) {
         aria-hidden
         className={cn(
           "relative h-[26px] w-[46px] shrink-0 rounded-full transition-colors duration-200",
-          checked ? "bg-white/85" : "bg-white/15",
+          checked ? "bg-white/25" : "bg-white/10",
         )}
       >
         <span
@@ -66,11 +67,12 @@ interface LyricsAccessibilityPanelProps {
 }
 
 /**
- * Reference 27's accessibility overlay: the lyrics view's own
- * controls, living on the surface they affect. Every control writes
- * the shared lyrics-display store — the same store Settings mirrors
- * as the global defaults — so a change here and a change there are
- * one fact, applied live.
+ * The accessibility overlay (controls built to reference 27; the
+ * card's matte dark register is reference 28's): the lyrics view's
+ * own controls, living on the surface they affect. Every control
+ * writes the shared lyrics-display store — the same store Settings
+ * mirrors as the global defaults — so a change here and a change
+ * there are one fact, applied live.
  */
 export function LyricsAccessibilityPanel({
   onClose,
@@ -79,10 +81,12 @@ export function LyricsAccessibilityPanel({
   const gaussianBlur = useLyricsDisplayStore((s) => s.gaussianBlur);
   const biggerText = useLyricsDisplayStore((s) => s.biggerText);
   const highlightLyrics = useLyricsDisplayStore((s) => s.highlightLyrics);
+  const romanization = useLyricsDisplayStore((s) => s.romanization);
   const textAlign = useLyricsDisplayStore((s) => s.textAlign);
   const setGaussianBlur = useLyricsDisplayStore((s) => s.setGaussianBlur);
   const setBiggerText = useLyricsDisplayStore((s) => s.setBiggerText);
   const setHighlightLyrics = useLyricsDisplayStore((s) => s.setHighlightLyrics);
+  const setRomanization = useLyricsDisplayStore((s) => s.setRomanization);
   const setTextAlign = useLyricsDisplayStore((s) => s.setTextAlign);
 
   const title = lyricsLabel(
@@ -108,7 +112,7 @@ export function LyricsAccessibilityPanel({
   return (
     <section
       aria-label={title}
-      className="w-[248px] rounded-[20px] border border-white/10 bg-black/60 p-4 shadow-2xl backdrop-blur-xl"
+      className="w-[248px] rounded-[18px] border border-white/[0.08] bg-[#16171b]/95 p-4 shadow-2xl"
     >
       <header className="mb-2 flex items-center gap-2">
         <WheelchairLine size={19} className="text-white/90" />
@@ -151,6 +155,15 @@ export function LyricsAccessibilityPanel({
           checked={highlightLyrics}
           onChange={setHighlightLyrics}
         />
+        <DisplayToggle
+          label={lyricsLabel(
+            t,
+            "player.lyrics_display.romanization",
+            "Romanization",
+          )}
+          checked={romanization}
+          onChange={setRomanization}
+        />
       </div>
 
       <p className="mt-3 mb-1.5 text-[13px] text-white/55">
@@ -163,7 +176,7 @@ export function LyricsAccessibilityPanel({
           "player.lyrics_display.text_align",
           "Text Align",
         )}
-        className="flex rounded-full bg-white/10 p-1"
+        className="flex rounded-full bg-white/[0.07] p-1"
       >
         {alignOptions.map((option) => {
           const active = textAlign === option.value;

@@ -7,6 +7,7 @@ import {
 } from "../store/playerStore";
 import { routeDjCommand } from "@/features/mixer/engine/djCommandRouter";
 import { djSession } from "@/features/mixer/engine/djSession";
+import { recordDevicePlay } from "@/features/space";
 import { playerRuntime } from "./playerRuntime";
 import { clampUserVolume } from "./volume";
 import { isRadioContext, shouldRefillRadio } from "./radioMode";
@@ -37,7 +38,9 @@ import {
   markLrclibFallbackAttempted,
   isPlainOnlyLrclibFallback,
   type CachedLyricsItem,
+  type LyricsProviderOption,
 } from "@/features/lyrics";
+import { resolveDisplayedCachedCandidate } from "@/features/lyrics/store/lyricsCache";
 import { preloadCoverArt } from "@/features/covers";
 import { preloadArtistAvatars } from "@/features/artist/lib/artistAvatar";
 import { linerDb, type CachedLyricsRecord } from "@/shared/storage";
@@ -312,6 +315,10 @@ class PlaybackTelemetryTracker {
   }
 
   private sendEvent(payload: RecordPlaybackEventRequest): Promise<void> {
+    // The hybrid listening record (interface slice S2): the
+    // on-device play log takes the same payload at the same
+    // moment — fire-and-forget by contract, it never throws.
+    recordDevicePlay(payload);
     return api.recordPlaybackEvent(payload).then(
       () => undefined,
       (err) => {
@@ -1626,6 +1633,15 @@ class PlayerEngine {
     let streamCandidateCount = 0;
 
     const memoryCached = lyricsCache.get(trackId);
+    // Wave 4 (wrong-lyrics remedy): the user's persisted pick and
+    // wrong-source mark for this track, read once from the lyrics
+    // cache — their only home. They steer only what is DISPLAYED at
+    // the decision points below; candidate ranking, cache writes and
+    // the no-lyrics outcome are exactly as before. When the fields
+    // are absent (e.g. a linerDb-only record) both stay undefined and
+    // behaviour is unchanged.
+    const userPickKey = memoryCached?.userProvider;
+    const wrongMarkKey = memoryCached?.wrongProvider?.provider;
     let cached: CachedLyricsItem | CachedLyricsRecord | null =
       memoryCached || null;
     if (!cached) {
@@ -1659,28 +1675,37 @@ class PlayerEngine {
       cached.candidate &&
       !isPlainOnlyLrclibFallback(cached.candidate)
     ) {
-      bestCandidate = cached.candidate;
+      // Wave 4: the displayed candidate honours the persisted pick /
+      // wrong-source mark; everything below (freshness, provisional
+      // refresh) still keys off the stored candidate itself
+      const shownCandidate = resolveDisplayedCachedCandidate({
+        candidate: cached.candidate,
+        availableProviders: cached.availableProviders,
+        userProvider: (cached as CachedLyricsItem).userProvider,
+        wrongProvider: (cached as CachedLyricsItem).wrongProvider,
+      });
+      bestCandidate = shownCandidate;
       const parsed = parseRawLyrics(
-        cached.candidate.lyrics.content,
-        cached.candidate.lyrics.format,
+        shownCandidate.lyrics.content,
+        shownCandidate.lyrics.format,
       );
       lyricsStore.setLyricsState({
         lyricsLoading: false,
         lyricsError: null,
-        rawLyrics: cached.candidate.lyrics.content,
-        rawFormat: cached.candidate.lyrics.format,
+        rawLyrics: shownCandidate.lyrics.content,
+        rawFormat: shownCandidate.lyrics.format,
         braccatoLyrics: parsed.braccatoLyrics,
         syncedLines: parsed.syncedLines,
         plainLyrics: parsed.plainLyrics,
-        lyricsQuality: cached.candidate.quality.total,
+        lyricsQuality: shownCandidate.quality.total,
         currentLyricsTrackId: trackId,
-        activeProvider: cached.candidate.provider,
+        activeProvider: shownCandidate.provider,
         availableProviders: cached.availableProviders || [
           {
-            provider: cached.candidate.provider,
-            syncLevel: cached.candidate.syncLevel,
-            quality: cached.candidate.quality.total,
-            candidate: cached.candidate,
+            provider: shownCandidate.provider,
+            syncLevel: shownCandidate.syncLevel,
+            quality: shownCandidate.quality.total,
+            candidate: shownCandidate,
           },
         ],
       });
@@ -1727,21 +1752,30 @@ class PlayerEngine {
           freshCached.candidate &&
           !isPlainOnlyLrclibFallback(freshCached.candidate)
         ) {
+          // Wave 4: same pick / wrong-mark resolution as the cache
+          // read above — this is the same decision reached by a
+          // different road
+          const shownFresh = resolveDisplayedCachedCandidate({
+            candidate: freshCached.candidate,
+            availableProviders: freshCached.availableProviders,
+            userProvider: (freshCached as CachedLyricsItem).userProvider,
+            wrongProvider: (freshCached as CachedLyricsItem).wrongProvider,
+          });
           const parsed = parseRawLyrics(
-            freshCached.candidate.lyrics.content,
-            freshCached.candidate.lyrics.format,
+            shownFresh.lyrics.content,
+            shownFresh.lyrics.format,
           );
           lyricsStore.setLyricsState({
             lyricsLoading: false,
             lyricsError: null,
-            rawLyrics: freshCached.candidate.lyrics.content,
-            rawFormat: freshCached.candidate.lyrics.format,
+            rawLyrics: shownFresh.lyrics.content,
+            rawFormat: shownFresh.lyrics.format,
             braccatoLyrics: parsed.braccatoLyrics,
             syncedLines: parsed.syncedLines,
             plainLyrics: parsed.plainLyrics,
-            lyricsQuality: freshCached.candidate.quality.total,
+            lyricsQuality: shownFresh.quality.total,
             currentLyricsTrackId: trackId,
-            activeProvider: freshCached.candidate.provider,
+            activeProvider: shownFresh.provider,
             availableProviders: freshCached.availableProviders || [],
           });
           return;
@@ -1833,6 +1867,63 @@ class PlayerEngine {
               "lyrics",
               `skip worse candidate ${candidate.provider} q=${candidate.quality.total}`,
             );
+          }
+
+          // Wave 4: display steering at this same decision point. The
+          // quality-best bookkeeping above is untouched — it feeds the
+          // cache write at done and the no-lyrics outcome. What changes
+          // is only which assembled candidate is on screen: a persisted
+          // pick that has arrived is shown (a manual choice stands,
+          // even of the marked source), and a marked source is passed
+          // over once an unmarked alternative has arrived.
+          if (userPickKey || wrongMarkKey) {
+            const displayState = useLyricsStore.getState();
+            const pickOption = userPickKey
+              ? updatedProviders.find(
+                  (p) => p.provider.toLowerCase().trim() === userPickKey,
+                )
+              : undefined;
+            let steerTo: LyricsProviderOption | undefined;
+            if (pickOption) {
+              if (displayState.activeProvider !== pickOption.provider) {
+                steerTo = pickOption;
+              }
+            } else if (
+              wrongMarkKey &&
+              bestCandidate &&
+              bestCandidate.provider.toLowerCase().trim() === wrongMarkKey
+            ) {
+              // the automatic best is the marked source: the screen
+              // belongs to the best unmarked option assembled so far
+              // (the list rides in quality order). While the marked
+              // source is the only one assembled there is nothing to
+              // pass over to, and it stays — the sole-candidate rule.
+              const bestUnmarked = updatedProviders.find(
+                (p) => p.provider.toLowerCase().trim() !== wrongMarkKey,
+              );
+              if (
+                bestUnmarked &&
+                displayState.activeProvider !== bestUnmarked.provider
+              ) {
+                steerTo = bestUnmarked;
+              }
+            }
+            if (steerTo) {
+              const steerParsed = parseRawLyrics(
+                steerTo.candidate.lyrics.content,
+                steerTo.candidate.lyrics.format,
+              );
+              useLyricsStore.getState().setLyricsState({
+                activeProvider: steerTo.provider,
+                availableProviders: updatedProviders,
+                rawLyrics: steerTo.candidate.lyrics.content,
+                rawFormat: steerTo.candidate.lyrics.format,
+                braccatoLyrics: steerParsed.braccatoLyrics,
+                syncedLines: steerParsed.syncedLines,
+                plainLyrics: steerParsed.plainLyrics,
+                lyricsQuality: steerTo.candidate.quality.total,
+              });
+            }
           }
         } else if (event.type === "provider" && event.status === "error") {
           log(

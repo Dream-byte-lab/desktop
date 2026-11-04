@@ -8,7 +8,11 @@ import { useDjModeStore } from "./djModeStore";
 // could be prepared ("start-no-playable") has NOT been switched off
 // by the user — so while intent is on, the wiring ARMS itself at
 // such an end and starts a fresh session when the player moves to a
-// queue state it has not already tried. A deliberate end
+// queue state it has not already tried. Intent is a standing
+// setting that survives restarts, so the wiring is also created
+// armed when intent is already on at launch (Note 27): otherwise a
+// cold launch could never start a session on play, and only a
+// second press of the DJ button would. A deliberate end
 // ("user-stop", "replaced", the button, a deliberate party stop)
 // disarms: nothing resumes until the next qualifying end.
 //
@@ -82,7 +86,12 @@ function sameSignature(
 }
 
 export function createDjIntentWiring(deps: DjIntentWiringDeps): DjIntentWiring {
-  let armed = false;
+  // Armed from standing intent at creation (Note 27), with both
+  // signatures null: the first playback store change after a cold
+  // launch is then a signature the machine has never tried, and
+  // maybeResume starts the session on play exactly as it does
+  // after an in-run arm.
+  let armed = deps.getIntent();
   let armedSignature: DjIntentSignature | null = null;
   let lastAttemptSignature: DjIntentSignature | null = null;
   let lastIntent = deps.getIntent();

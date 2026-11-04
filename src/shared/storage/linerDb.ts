@@ -90,8 +90,46 @@ export interface CachedJoinLogRecord {
   savedAt: number;
 }
 
+/**
+ * The record id the join log persists under in the `joins` store.
+ * Its shared home is here, beside the store itself (interface
+ * slice S2's SEAMS OWED (d)): the engine's joinHistory writes the
+ * log under it and the statistics reader reads it — neither side
+ * keeps a private copy of the string.
+ */
+export const JOINS_LOG_RECORD_ID = "join-log";
+
+/**
+ * One on-device play event (interface slice S2, the hybrid listening
+ * record): a play as THIS device observed it, written at the same
+ * moment the server playback-event report fires. The statistics
+ * surface treats this log as authoritative from its first event on;
+ * the server history is the record before it. The snapshot is the
+ * client Track shape, stored verbatim so rows and aggregates need
+ * no conversion. Records are append-only; the log's discipline
+ * (count-once merge, counting rule) lives in the space feature,
+ * this store's reader/writer.
+ */
+export interface CachedPlayEventRecord {
+  id: string;
+  trackId: string;
+  track: Track;
+  playedDurationMs: number;
+  completionRate: number;
+  completed: boolean;
+  skipped: boolean;
+  loopCount: number;
+  hasSeekBackward: boolean;
+  contextType?: string;
+  contextId?: string;
+  /** The playback session the play belonged to (server dedupe key). */
+  playbackSessionId: string;
+  /** When the play ended on this device, epoch milliseconds. */
+  listenedAtMs: number;
+}
+
 const DB_NAME = "liner_db_v1";
-const DB_VERSION = 6;
+const DB_VERSION = 7;
 
 const MEM_AUDIO_LIMIT = 3;
 // the memory maps only sit in front of indexeddb: cap them so a long session doesn't keep every record it saw
@@ -99,6 +137,10 @@ const MEM_TRACK_LIMIT = 500;
 const MEM_LYRICS_LIMIT = 100;
 const MEM_ARTIST_LIMIT = 100;
 const MEM_ANALYSIS_LIMIT = 50;
+// the play log's memory copy only fronts indexeddb (and is the whole
+// store where indexeddb is absent): it keeps the statistics bound's
+// worth of most recent events — older ones live only on disk.
+const MEM_PLAY_LIMIT = 2000;
 
 // keeps the most recently written entries; maps iterate in insertion order, so the first key is the oldest
 function rememberLimited<T>(
@@ -126,6 +168,7 @@ class LinerDb {
   private memArtists = new Map<string, CachedArtistRecord>();
   private memAnalyses = new Map<string, CachedAnalysisRecord>();
   private memJoins = new Map<string, CachedJoinLogRecord>();
+  private memPlays: CachedPlayEventRecord[] = [];
 
   private handleDbError() {
     this.dbPromise = null;
@@ -209,6 +252,13 @@ class LinerDb {
           const joinStore = db.createObjectStore("joins", { keyPath: "id" });
           joinStore.createIndex("savedAt", "savedAt", { unique: false });
         }
+
+        if (!db.objectStoreNames.contains("plays")) {
+          const playStore = db.createObjectStore("plays", { keyPath: "id" });
+          playStore.createIndex("listenedAtMs", "listenedAtMs", {
+            unique: false,
+          });
+        }
       };
 
       request.onsuccess = () => {
@@ -243,7 +293,14 @@ class LinerDb {
 
   // executes indexeddb transaction with one auto-reconnect retry and zero unhandled rejections
   private async runTransaction<T>(
-    storeName: "tracks" | "audio" | "lyrics" | "artists" | "analyses" | "joins",
+    storeName:
+      | "tracks"
+      | "audio"
+      | "lyrics"
+      | "artists"
+      | "analyses"
+      | "joins"
+      | "plays",
     mode: IDBTransactionMode,
     operation: (store: IDBObjectStore) => Promise<T>,
   ): Promise<T | null> {
@@ -801,6 +858,57 @@ class LinerDb {
     });
   }
 
+  private rememberPlay(record: CachedPlayEventRecord): void {
+    const existing = this.memPlays.findIndex((p) => p.id === record.id);
+    if (existing >= 0) this.memPlays.splice(existing, 1);
+    this.memPlays.push(record);
+    if (this.memPlays.length > MEM_PLAY_LIMIT) {
+      this.memPlays.splice(0, this.memPlays.length - MEM_PLAY_LIMIT);
+    }
+  }
+
+  async putPlayEvent(record: CachedPlayEventRecord): Promise<void> {
+    this.rememberPlay(record);
+
+    await this.runTransaction("plays", "readwrite", (store) => {
+      return new Promise<void>((resolve, reject) => {
+        const req = store.put(record);
+        req.onsuccess = () => resolve();
+        req.onerror = () => reject(req.error);
+      });
+    });
+  }
+
+  /**
+   * The whole on-device play log, oldest first. Reads walk the
+   * listenedAtMs index; where indexeddb is absent the memory copy
+   * answers (it is the store there, session-scoped).
+   */
+  async getPlayEvents(): Promise<CachedPlayEventRecord[]> {
+    const result = await this.runTransaction("plays", "readonly", (store) => {
+      return new Promise<CachedPlayEventRecord[]>((resolve) => {
+        const records: CachedPlayEventRecord[] = [];
+        const req = store.index("listenedAtMs").openCursor();
+        req.onsuccess = () => {
+          const cursor = req.result;
+          if (cursor) {
+            records.push(cursor.value as CachedPlayEventRecord);
+            cursor.continue();
+          } else {
+            resolve(records);
+          }
+        };
+        req.onerror = () => resolve([]);
+      });
+    });
+
+    if (result !== null && result !== undefined) {
+      return result;
+    }
+
+    return [...this.memPlays].sort((a, b) => a.listenedAtMs - b.listenedAtMs);
+  }
+
   async getTotalArtistBytes(): Promise<number> {
     const result = await this.runTransaction("artists", "readonly", (store) => {
       return new Promise<number>((resolve) => {
@@ -832,7 +940,14 @@ class LinerDb {
   }
 
   async clearStore(
-    storeName: "tracks" | "audio" | "lyrics" | "artists" | "analyses" | "joins",
+    storeName:
+      | "tracks"
+      | "audio"
+      | "lyrics"
+      | "artists"
+      | "analyses"
+      | "joins"
+      | "plays",
   ): Promise<void> {
     if (storeName === "tracks") this.memTracks.clear();
     if (storeName === "audio") this.memAudio.clear();
@@ -840,6 +955,7 @@ class LinerDb {
     if (storeName === "artists") this.memArtists.clear();
     if (storeName === "analyses") this.memAnalyses.clear();
     if (storeName === "joins") this.memJoins.clear();
+    if (storeName === "plays") this.memPlays = [];
 
     await this.runTransaction(storeName, "readwrite", (store) => {
       return new Promise<void>((resolve) => {
@@ -867,12 +983,14 @@ class LinerDb {
     this.memArtists.clear();
     this.memAnalyses.clear();
     this.memJoins.clear();
+    this.memPlays = [];
     await this.clearStore("audio");
     await this.clearStore("tracks");
     await this.clearStore("lyrics");
     await this.clearStore("artists");
     await this.clearStore("analyses");
     await this.clearStore("joins");
+    await this.clearStore("plays");
   }
 }
 

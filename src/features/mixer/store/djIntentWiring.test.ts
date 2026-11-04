@@ -123,6 +123,41 @@ describe("djIntentWiring — the auto-resume machine", () => {
     expect(h.activeMirror).toEqual([true, false]);
   });
 
+  it("cold launch with intent on: created armed, and the first play starts a session with no prior end and no press", () => {
+    const h = makeHarness();
+    // No session has ever run in this app run: nothing has armed
+    // the machine but the standing intent it was created with.
+    expect(h.wiring.armed).toBe(true);
+    expect(h.session.start).not.toHaveBeenCalled();
+
+    // The first playback store change (play pressed on the
+    // standing queue) starts the session through maybeResume...
+    h.pokePlayer();
+    expect(h.session.start).toHaveBeenCalledTimes(1);
+    expect(h.session.start.mock.calls[0][1]).toBe(0);
+    expect(
+      (h.session.start.mock.calls[0][0] as Track[]).map((t) => t.id),
+    ).toEqual(["a1", "a2"]);
+    // ...and the same signature is never started twice.
+    h.pokePlayer();
+    expect(h.session.start).toHaveBeenCalledTimes(1);
+  });
+
+  it("cold launch with intent off: never starts, however playback moves", () => {
+    const h = makeHarness(false);
+    expect(h.wiring.armed).toBe(false);
+    h.pokePlayer();
+    h.movePlayer([makeTrack("b1")], 0);
+    expect(h.session.start).not.toHaveBeenCalled();
+  });
+
+  it("cold launch with intent on but no queue yet: no start until a queue exists", () => {
+    const h = makeHarness();
+    h.movePlayer([], -1);
+    h.pokePlayer();
+    expect(h.session.start).not.toHaveBeenCalled();
+  });
+
   it("intent survives a queue-exhausted end and re-engages on a NEW queue signature without a press", () => {
     const h = makeHarness();
     h.endSession("queue-exhausted");

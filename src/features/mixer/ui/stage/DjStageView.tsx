@@ -15,6 +15,7 @@ import { JogWheel } from "./JogWheel";
 import { PadGrid } from "./PadGrid";
 import { PersonalityPanel } from "./PersonalityPanel";
 import { StageBackButton } from "./StageBackButton";
+import { StageBackCoverProbe } from "./StageBackCoverProbe";
 import {
   activityLinesForStage,
   deckRoleLabel,
@@ -142,6 +143,10 @@ export function DjStageView() {
   statusRef.current = status;
   const [displayPosMs, setDisplayPosMs] = useState(positionMs);
   const jogTargetRef = useRef<number | null>(null);
+  // The Back pill's element, shared with the Note 26 cover probe:
+  // the probe asks the running document what sits on top of the
+  // pill and names it in the header if anything foreign does.
+  const backButtonRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     anchorRef.current = { posMs: positionMs, at: performance.now() };
@@ -215,8 +220,9 @@ export function DjStageView() {
     // existed in this state as much as in the live one).
     return (
       <div className="w-full border-t border-border-tertiary bg-bg-primary px-3 py-3 text-text-primary">
-        <div className="mb-3">
-          <StageBackButton />
+        <div className="mb-3 flex flex-wrap items-center gap-3">
+          <StageBackButton buttonRef={backButtonRef} />
+          <StageBackCoverProbe targetRef={backButtonRef} />
         </div>
         <PersonalityPanel />
       </div>
@@ -467,7 +473,10 @@ export function DjStageView() {
   return (
     <div className="w-full border-t border-border-tertiary bg-bg-primary px-3 py-3 text-text-primary">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-        <StageBackButton />
+        <div className="flex flex-wrap items-center gap-3">
+          <StageBackButton buttonRef={backButtonRef} />
+          <StageBackCoverProbe targetRef={backButtonRef} />
+        </div>
         <ControlLevelSwitcher level={controlLevel} intents={stageIntents} />
       </div>
 

@@ -1,3 +1,4 @@
+import type { Ref } from "react";
 import { ArrowLeftLine } from "@mingcute/react";
 import { useDjModeStore } from "../../store/djModeStore";
 
@@ -17,11 +18,21 @@ import { useDjModeStore } from "../../store/djModeStore";
 // ("Back"); the stage's surfaces are not localised yet (every
 // label in DjStageView is a literal), so the string is a literal
 // here too, named against that key in the seam report.
+//
+// The optional `buttonRef` exists for one consumer only: the
+// Note 26 cover probe (StageBackCoverProbe), which needs the
+// pill's element to ask the running app what sits on top of it.
+// It changes nothing about the button itself.
 
-export function StageBackButton() {
+export function StageBackButton({
+  buttonRef,
+}: {
+  buttonRef?: Ref<HTMLButtonElement>;
+} = {}) {
   const setProOpen = useDjModeStore((state) => state.setProOpen);
   return (
     <button
+      ref={buttonRef}
       type="button"
       onClick={() => setProOpen(false)}
       aria-label="Back"

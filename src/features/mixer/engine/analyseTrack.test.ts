@@ -188,7 +188,9 @@ describe("analyseTrack v2 structure", () => {
     () => {
       const analysis = analyseTrack(structuredSong(), SAMPLE_RATE);
       expect(analysis).not.toBeNull();
-      expect(analysis!.analysisVersion).toBe(2);
+      // Analysis v3 (Note 27): the tempo confidence changed to the
+      // centred-autocorrelation scale; v2 records are re-analysed.
+      expect(analysis!.analysisVersion).toBe(3);
       expect(analysis!.depth).toBe("deep");
 
       const sections = analysis!.sections!;

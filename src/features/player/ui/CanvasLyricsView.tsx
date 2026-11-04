@@ -39,9 +39,16 @@ export function CanvasLyricsView({ lyrics }: CanvasLyricsViewProps) {
   const textAlign = useLyricsDisplayStore((s) => s.textAlign);
   const highlightLyrics = useLyricsDisplayStore((s) => s.highlightLyrics);
   const biggerText = useLyricsDisplayStore((s) => s.biggerText);
+  const romanization = useLyricsDisplayStore((s) => s.romanization);
   const displayOptions = useMemo(
-    () => lyricsDisplayOptionsFor({ textAlign, highlightLyrics, biggerText }),
-    [textAlign, highlightLyrics, biggerText],
+    () =>
+      lyricsDisplayOptionsFor({
+        textAlign,
+        highlightLyrics,
+        biggerText,
+        romanization,
+      }),
+    [textAlign, highlightLyrics, biggerText, romanization],
   );
   const { rendererRef, edges, releasePin } = useLyricsCanvas(
     refs,

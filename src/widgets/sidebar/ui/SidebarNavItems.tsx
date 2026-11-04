@@ -13,15 +13,7 @@ import { useOfflineModeStore } from "@/features/connectivity";
 import { usePinnedPlaylistIds } from "@/features/library/lib/playlistIdentity";
 import { useSidebarStore } from "../model/useSidebarStore";
 
-export interface SidebarNavItemsProps {
-  searchOpen: boolean;
-  onSearchToggle: () => void;
-}
-
-export function SidebarNavItems({
-  searchOpen,
-  onSearchToggle,
-}: SidebarNavItemsProps) {
+export function SidebarNavItems() {
   const { pathname, search } = useLocation();
   const { t } = useTranslation();
   const [pendingHref, setPendingHref] = useState<string | null>(null);
@@ -41,6 +33,10 @@ export function SidebarNavItems({
     switch (item.id) {
       case "home":
         return pathname === "/" || pathname === "/home";
+      case "your_space":
+        // Exact match only: /space/history belongs to the
+        // Listening History entry below it, not to this parent.
+        return pathname === "/space";
       case "favorites":
         return (
           pathname === "/library/saved" ||
@@ -74,10 +70,7 @@ export function SidebarNavItems({
     }
   };
 
-  const isItemActive = (item: NavItem) => {
-    if (item.id === "search") return searchOpen;
-    return isRouteActive(item);
-  };
+  const isItemActive = (item: NavItem) => isRouteActive(item);
 
   const renderPill = (active: boolean): ReactNode => {
     if (!active) return null;
@@ -123,22 +116,6 @@ export function SidebarNavItems({
         </span>
       );
 
-      if (item.id === "search") {
-        return (
-          <button
-            key={item.id}
-            type="button"
-            aria-pressed={searchOpen}
-            onClick={onSearchToggle}
-            className={cn(rowClass, "border-0 bg-transparent text-left")}
-          >
-            {renderPill(active)}
-            <Icon size={22} className={iconClass} />
-            {labelEl}
-          </button>
-        );
-      }
-
       return (
         <Link
           key={item.id}
@@ -161,34 +138,6 @@ export function SidebarNavItems({
     }
 
     // Rail (collapsed) capsule — today's rendering
-    if (item.id === "search") {
-      return (
-        <Tooltip key={item.id} content={label} side="right" sideOffset={12}>
-          <button
-            type="button"
-            aria-pressed={searchOpen}
-            aria-label={label}
-            onClick={onSearchToggle}
-            className={cn(
-              "group relative inline-flex h-[38px] w-[38px] items-center justify-center rounded-full border-0 p-0 cursor-pointer active:scale-[0.96] transition-all duration-150 motion-reduce:transition-none",
-              !active && "hover:bg-fill",
-            )}
-          >
-            {renderPill(active)}
-            <Icon
-              size={26}
-              className={cn(
-                "relative z-10 transition-opacity duration-150 ease-out",
-                active
-                  ? "text-accent-primary opacity-100"
-                  : "text-text-primary opacity-55 group-hover:opacity-90",
-              )}
-            />
-          </button>
-        </Tooltip>
-      );
-    }
-
     return (
       <Tooltip key={item.id} content={label} side="right" sideOffset={12}>
         <Link

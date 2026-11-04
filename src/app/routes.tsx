@@ -11,6 +11,8 @@ import {
 } from "@/features/library";
 import ArtistPage from "@/features/artist/ui/ArtistPage";
 import CollectionPage from "@/features/collection/ui/CollectionPage";
+import SearchPage from "@/features/search/ui/SearchPage";
+import { ListeningDashboard, ListeningHistoryPage } from "@/features/space";
 import LoginPage from "@/features/auth/ui/LoginPage";
 import PlayerPage from "@/features/player/ui/FullscreenPlayer";
 import { FullscreenRouteContext } from "@/features/navigation/fullscreenRouteContext";
@@ -42,6 +44,7 @@ const OFFLINE_PATHS = new Set([
   "/library/local",
   "/library/cached",
   "/library/saved",
+  "/search",
   PLAYER_PATH,
 ]);
 
@@ -80,6 +83,9 @@ export function AppRoutes() {
             <Route path="/library/saved" element={<SavedLikesPage />} />
             <Route path="/artist" element={<ArtistPage />} />
             <Route path="/collection" element={<CollectionPage />} />
+            <Route path="/search" element={<SearchPage />} />
+            <Route path="/space" element={<ListeningDashboard />} />
+            <Route path="/space/history" element={<ListeningHistoryPage />} />
             <Route path="/for-you" element={<ForYouPage />} />
             <Route path="/settings" element={<Navigate to="/" replace />} />
             <Route path={PLAYER_PATH} element={null} />

@@ -10,6 +10,13 @@ export interface CachedLyricsItem {
   providers?: Record<string, LyricsCandidate>;
   availableProviders?: LyricsProviderOption[];
   timestamp: number;
+  // Wave 4 (wrong-lyrics remedy): the user's explicit source pick and
+  // wrong-source mark for this track, as normalized provider keys. Both
+  // live only in this device-local cache, are carried forward across
+  // re-sets, and steer only what the fetch displays for this track —
+  // nothing is ever sent anywhere.
+  userProvider?: string;
+  wrongProvider?: { provider: string; markedAt: number };
 }
 
 const STORAGE_INDEX_KEY = "liner_lyrics_v2_index";
@@ -99,6 +106,49 @@ export function isBetterLyricsCandidate(
   current: LyricsCandidate,
 ): boolean {
   return compareLyricsCandidates(next, current) < 0;
+}
+
+// Wave 4: which cached candidate a fetch should DISPLAY for a track,
+// honouring the user's persisted pick and wrong-source mark. The pick
+// wins outright — a manual choice always stands, even of the marked
+// source — and a pick whose provider is absent from this play's
+// assembly is inert. Otherwise a marked stored candidate is passed
+// over for the best unmarked option (the option lists ride in
+// quality order), unless it is the only distinct source. Pure: no
+// cache reads or writes, and the shared comparator is untouched.
+export function resolveDisplayedCachedCandidate(
+  item: Pick<
+    CachedLyricsItem,
+    "candidate" | "availableProviders" | "userProvider" | "wrongProvider"
+  >,
+): LyricsCandidate {
+  const options = item.availableProviders?.length
+    ? item.availableProviders
+    : [
+        {
+          provider: item.candidate.provider,
+          syncLevel: item.candidate.syncLevel,
+          quality: item.candidate.quality.total,
+          candidate: item.candidate,
+        },
+      ];
+
+  if (item.userProvider) {
+    const picked = options.find(
+      (o) => normalizeProviderKey(o.provider) === item.userProvider,
+    );
+    if (picked) return picked.candidate;
+  }
+
+  const marked = item.wrongProvider?.provider;
+  if (marked && normalizeProviderKey(item.candidate.provider) === marked) {
+    const alternative = options.find(
+      (o) => normalizeProviderKey(o.provider) !== marked,
+    );
+    if (alternative) return alternative.candidate;
+  }
+
+  return item.candidate;
 }
 
 function normalizeProviderKey(provider: string): string {
@@ -201,6 +251,8 @@ class LyricsCache {
       providers,
       availableProviders,
       timestamp: parsed.timestamp || Date.now(),
+      userProvider: parsed.userProvider,
+      wrongProvider: parsed.wrongProvider,
     };
   }
 
@@ -279,6 +331,8 @@ class LyricsCache {
       providers,
       availableProviders,
       timestamp: Date.now(),
+      userProvider: existing?.userProvider,
+      wrongProvider: existing?.wrongProvider,
     };
 
     this.memCache.set(trackId, item);
@@ -328,8 +382,55 @@ class LyricsCache {
       providers,
       availableProviders: validOptions,
       timestamp: Date.now(),
+      userProvider: existing?.userProvider,
+      wrongProvider: existing?.wrongProvider,
     };
 
+    this.memCache.set(trackId, item);
+    this.saveToStorage(item);
+    this.touch(trackId);
+  }
+
+  // Wave 4: persist the user's explicit provider pick for this track.
+  // Annotates the existing item in place (candidates, best choice and
+  // timestamp untouched), mirroring setProvider's write shape. With no
+  // cached item there is no home for the pick and the call is a no-op —
+  // the pick then simply is not persisted for that play.
+  rememberUserProvider(trackId: string, provider: string) {
+    const existing = this.get(trackId);
+    if (!existing) return;
+    const key = normalizeProviderKey(provider);
+    if (existing.userProvider === key) return;
+    const item: CachedLyricsItem = { ...existing, userProvider: key };
+    this.memCache.set(trackId, item);
+    this.saveToStorage(item);
+    this.touch(trackId);
+  }
+
+  // Wave 4: record that this track's named source is wrong. One mark
+  // per track — marking another source later replaces it. The mark
+  // never changes what is on screen; it only steers the fetch's
+  // automatic choice on later plays.
+  markWrongProvider(trackId: string, provider: string) {
+    const existing = this.get(trackId);
+    if (!existing) return;
+    const item: CachedLyricsItem = {
+      ...existing,
+      wrongProvider: {
+        provider: normalizeProviderKey(provider),
+        markedAt: Date.now(),
+      },
+    };
+    this.memCache.set(trackId, item);
+    this.saveToStorage(item);
+    this.touch(trackId);
+  }
+
+  clearWrongProvider(trackId: string) {
+    const existing = this.get(trackId);
+    if (!existing?.wrongProvider) return;
+    const item: CachedLyricsItem = { ...existing };
+    delete item.wrongProvider;
     this.memCache.set(trackId, item);
     this.saveToStorage(item);
     this.touch(trackId);

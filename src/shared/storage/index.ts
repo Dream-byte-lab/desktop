@@ -1,5 +1,6 @@
 export {
   linerDb,
+  JOINS_LOG_RECORD_ID,
   type CachedTrackRecord,
   type CachedAudioRecord,
   type CachedLyricsRecord,

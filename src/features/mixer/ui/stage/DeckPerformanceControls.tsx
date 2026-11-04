@@ -34,6 +34,7 @@ const SCRATCH_MOVES: { move: StageDeckMove; label: string }[] = [
   { move: "chirp", label: "Chirp" },
   { move: "transformer", label: "Transformer" },
   { move: "flare", label: "Flare" },
+  { move: "crab", label: "Crab" },
 ];
 
 interface DeckPerformanceControlsProps {

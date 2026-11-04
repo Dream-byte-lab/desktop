@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { KawarpEngine } from "../engine/kawarpEngine";
+import { usePlayerStore } from "../store/playerStore";
 import { getCoverElement, useCoverElement } from "@/features/covers";
 
 export const KAWARP_RESIZE_SETTLE_MS = 300;
@@ -41,6 +42,15 @@ export function isSoftwareRenderedWebGL(): boolean {
   }
 }
 
+/**
+ * Apply the paused slow gate to an engine. The optional call keeps
+ * older engine test doubles (which predate setSlowGate) working; the
+ * real engine always provides it.
+ */
+function applySlowGate(engine: KawarpEngine | null, enabled: boolean) {
+  engine?.setSlowGate?.(enabled);
+}
+
 interface KawarpWrapperProps {
   src?: string;
   onLoad?: () => void;
@@ -53,6 +63,9 @@ export function KawarpWrapper({ src, onLoad, onError }: KawarpWrapperProps) {
   const engineRef = useRef<KawarpEngine | null>(null);
   const [loaded, setLoaded] = useState(false);
   const coverElement = useCoverElement(src);
+  // Paused slow gate (user ruling, 2026-11-03): while playback is
+  // paused, the engine renders at ~1 fps instead of its ~30 fps cap.
+  const isPaused = usePlayerStore((s) => s.status === "paused");
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -75,6 +88,8 @@ export function KawarpWrapper({ src, onLoad, onError }: KawarpWrapperProps) {
       });
       engineRef.current = engine;
       engine.start();
+      // Opened while already paused: start out gated.
+      applySlowGate(engine, usePlayerStore.getState().status === "paused");
     } catch (err) {
       onError?.(err instanceof Error ? err : new Error(String(err)));
       return;
@@ -85,6 +100,10 @@ export function KawarpWrapper({ src, onLoad, onError }: KawarpWrapperProps) {
       engineRef.current = null;
     };
   }, [onError]);
+
+  useEffect(() => {
+    applySlowGate(engineRef.current, isPaused);
+  }, [isPaused]);
 
   useEffect(() => {
     const container = containerRef.current;

@@ -78,7 +78,7 @@ describe("SidebarNavItems", () => {
     act(() => {
       root?.render(
         <MemoryRouter initialEntries={["/"]}>
-          <SidebarNavItems searchOpen={false} onSearchToggle={() => {}} />
+          <SidebarNavItems />
         </MemoryRouter>,
       );
     });
@@ -92,6 +92,24 @@ describe("SidebarNavItems", () => {
 
     expect(container?.textContent).toContain("Discover");
     expect(container?.textContent).toContain("Your Collection");
+    expect(container?.textContent).toContain("Your Space");
+
+    // Search is an ordinary link to the search page now (S1) —
+    // the overlay toggle button retired with the overlay.
+    const search = container?.querySelector('a[href="/search"]');
+    expect(search).not.toBeNull();
+    expect(search?.textContent).toContain("Search");
+    expect(container?.querySelector("button[aria-pressed]")).toBeNull();
+
+    // The Your Space section renders exactly its two entries (S2).
+    const yourSpace = container?.querySelector('a[href="/space"]');
+    expect(yourSpace).not.toBeNull();
+    expect(yourSpace?.textContent).toContain("Your Space");
+    const listeningHistory = container?.querySelector(
+      'a[href="/space/history"]',
+    );
+    expect(listeningHistory).not.toBeNull();
+    expect(listeningHistory?.textContent).toContain("Listening History");
 
     const forYou = container?.querySelector('a[href="/for-you"]');
     expect(forYou).not.toBeNull();
@@ -129,6 +147,9 @@ describe("SidebarNavItems", () => {
 
     // The honest links still exist as rail capsules.
     expect(container?.querySelector('a[href="/for-you"]')).not.toBeNull();
+    expect(container?.querySelector('a[href="/search"]')).not.toBeNull();
+    expect(container?.querySelector('a[href="/space"]')).not.toBeNull();
+    expect(container?.querySelector('a[href="/space/history"]')).not.toBeNull();
     expect(container?.querySelector('a[href="/library/saved"]')).not.toBeNull();
     expect(
       container?.querySelector('a[href="/library/cached"]'),

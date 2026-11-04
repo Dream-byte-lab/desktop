@@ -9,12 +9,14 @@ import en from "@/languages/locales/en.json";
 //
 // Keys of record, from the components:
 // - item ids (SidebarNavItems: t(`common.sidebar.${item.id}`)):
-//   home, for_you, search, library, favorites, downloads
+//   home, for_you, search, library, favorites, downloads,
+//   your_space, listening_history (the last two landed with the
+//   Your Space section at the 0.1.15 integration pass)
 // - SidebarSettingsButton: settings
 // - Sidebar: expand, collapse
 // - SidebarAccountStatus: signed_in, guest
 // - section ids (SidebarNavItems: t(`common.sidebar.section_${id}`)):
-//   section_discover, section_collection
+//   section_discover, section_collection, section_space
 // - SidebarPinnedPlaylists (Interface Build 6): section_pinned, via
 //   the same section_${id} lookup on the pinned section descriptor
 const SIDEBAR_KEYS: Record<string, string> = {
@@ -31,7 +33,10 @@ const SIDEBAR_KEYS: Record<string, string> = {
   guest: "Guest",
   section_discover: "Discover",
   section_collection: "Your Collection",
+  section_space: "Your Space",
   section_pinned: "Pinned",
+  your_space: "Your Space",
+  listening_history: "Listening History",
 };
 
 describe("common.sidebar locales (en)", () => {

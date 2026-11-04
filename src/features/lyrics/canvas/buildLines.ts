@@ -1,4 +1,5 @@
 import type { Lyric } from "@braccato/parsers";
+import { romanize } from "@/shared/text";
 import { lineSyncedParts, tokenize } from "./tokens";
 import type { LineAlign, LyricLineModel, LyricsModel } from "./types";
 
@@ -31,12 +32,34 @@ function hasTimedParts(lyrics: Lyric[]): boolean {
   );
 }
 
-function subtitleOf(line: Lyric): string | null {
-  const text = line.translation?.text ?? line.romanization ?? null;
+/**
+ * The sub-line under a lyric line — the one place the two
+ * romanization sources meet. Selection (Harvest Wave 4, Item 1;
+ * ruling D2):
+ *
+ * - A translation, when present, always wins and is NEVER gated:
+ *   it carries meaning, not pronunciation.
+ * - Otherwise, with romanization ON: the source-provided
+ *   romanization if the lyrics carry one, else the computed fill
+ *   from the shared zero-dependency engine (`romanize` is
+ *   letter-faithful; its composition rule refuses lines it cannot
+ *   honestly carry, e.g. kanji-majority lines, and returns null).
+ * - With romanization OFF: no sub-line from either romanization
+ *   source — the toggle is the single truth for what it names.
+ */
+function subtitleOf(line: Lyric, romanizationOn: boolean): string | null {
+  const translation = line.translation?.text;
+  if (translation && translation.trim()) return translation.trim();
+  if (!romanizationOn) return null;
+  const text = line.romanization ?? romanize(line.words ?? "") ?? null;
   return text && text.trim() ? text.trim() : null;
 }
 
-export function buildLines(lyrics: Lyric[]): LyricsModel {
+export function buildLines(
+  lyrics: Lyric[],
+  options?: { romanization?: boolean },
+): LyricsModel {
+  const romanizationOn = options?.romanization ?? false;
   const lines = lyrics.map((line, index): LyricLineModel => {
     const words = line.words ?? "";
     const parts =
@@ -52,7 +75,7 @@ export function buildLines(lyrics: Lyric[]): LyricsModel {
       rtl: isRtl(words),
       instrumental: Boolean(line.isInstrumental),
       tokens: line.isInstrumental ? [] : tokenize(parts),
-      subtitle: subtitleOf(line),
+      subtitle: subtitleOf(line, romanizationOn),
     };
   });
   return {

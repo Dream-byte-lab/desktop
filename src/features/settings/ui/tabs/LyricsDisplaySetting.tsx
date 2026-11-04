@@ -11,9 +11,24 @@ import { SettingBlock, SegmentedControl } from "../controls";
 // the LRCLIB fallback). It binds the SAME store the full-screen
 // lyrics view's accessibility panel binds
 // (`useLyricsDisplayStore`), so a change made here is the surface's
-// change and vice versa — there is no sync step. The four controls
-// mirror the panel's four: Gaussian blur, bigger text, highlight
-// lyrics, and text alignment.
+// change and vice versa — there is no sync step. The five controls
+// mirror the panel's five: Gaussian blur, bigger text, highlight
+// lyrics, romanization, and text alignment.
+
+/**
+ * Label for a string whose locale key is owed at integration: the
+ * translator returns the key itself for a missing entry, so fall
+ * back to the English string until the key lands (same pattern as
+ * the lyrics panel's `lyricsLabel`).
+ */
+function settingsLabel(
+  t: (key: string) => string,
+  key: string,
+  fallback: string,
+): string {
+  const value = t(key);
+  return value === key ? fallback : value;
+}
 
 function ControlLine({
   label,
@@ -50,6 +65,10 @@ export function LyricsDisplaySetting({
   const setHighlightLyrics = useLyricsDisplayStore(
     (state) => state.setHighlightLyrics,
   );
+  const romanization = useLyricsDisplayStore((state) => state.romanization);
+  const setRomanization = useLyricsDisplayStore(
+    (state) => state.setRomanization,
+  );
   const textAlign = useLyricsDisplayStore((state) => state.textAlign);
   const setTextAlign = useLyricsDisplayStore((state) => state.setTextAlign);
 
@@ -79,6 +98,16 @@ export function LyricsDisplaySetting({
               checked={highlightLyrics}
               onChange={setHighlightLyrics}
             />
+          }
+        />
+        <ControlLine
+          label={settingsLabel(
+            t,
+            "settings.playback.lyrics_display.romanization",
+            "Romanization",
+          )}
+          control={
+            <ToggleSwitch checked={romanization} onChange={setRomanization} />
           }
         />
         <ControlLine

@@ -41,7 +41,7 @@
 //   A fresh (empty) history costs every probe exactly 0 — the rule is
 //   only history-deep, by construction.
 
-import { linerDb } from "@/shared/storage";
+import { linerDb, JOINS_LOG_RECORD_ID } from "@/shared/storage";
 import type { TrackAnalysis } from "./analyseTrack";
 import {
   JOIN_FAMILIES,
@@ -133,8 +133,9 @@ export function evaluationOf(record: JoinRecord): JoinEvaluation | undefined {
 /** The stored log never grows past this many records. */
 export const MAX_STORED_JOINS = 400;
 
-/** The linerDb record id the log persists under. */
-export const JOIN_LOG_ID = "join-log";
+/** The linerDb record id the log persists under (shared home:
+ * shared/storage, beside the `joins` store — S2 seams (d)). */
+export const JOIN_LOG_ID = JOINS_LOG_RECORD_ID;
 
 // ---------------------------------------------------------------------
 // Pair shape

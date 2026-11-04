@@ -49,6 +49,7 @@ import { useExternalItems } from "@/features/library/hooks";
 import { useCollection } from "../hooks/useCollection";
 import { useRomanized } from "@/shared/text";
 import { readCollectionPreview } from "../lib/collectionPreview";
+import { collectionLoadFailureHint } from "../lib/collectionLoadError";
 import {
   useTrackSearch,
   TrackSearchField,
@@ -67,7 +68,7 @@ function CollectionContent() {
 
   const location = useLocation();
   const preview = readCollectionPreview(location.state);
-  const { data, loading } = useCollection(type, id);
+  const { data, loading, error, refetch } = useCollection(type, id);
   // Display-only romanization under the header title; data.title itself
   // (the identity used for playback context and sharing) is never changed.
   const titleRomanized = useRomanized(data?.title);
@@ -263,6 +264,36 @@ function CollectionContent() {
   }, [search.activeQuery, sort.option]);
 
   if (!loading && !data) {
+    if (error?.kind === "failed") {
+      // A load failure is not a missing collection: say so, say
+      // why where the cause proves it, and offer the way back.
+      // (A genuine not-found — including a Daily Mix whose day
+      // rolled over — keeps the calm line below, unchanged.)
+      const hint = collectionLoadFailureHint(error.cause);
+      return (
+        <div className="h-full w-full bg-transparent flex flex-col items-center justify-center gap-[6px] px-[24px] text-center">
+          <span className="text-title font-[600] text-text-primary">
+            {t("collection.load_failed")}
+          </span>
+          {hint ? (
+            <span className="text-body text-text-secondary">
+              {t(
+                hint === "offline"
+                  ? "collection.load_failed_offline"
+                  : "collection.load_failed_server",
+              )}
+            </span>
+          ) : null}
+          <Button
+            variant="secondary"
+            onClick={refetch}
+            className="mt-[10px] !h-[36px] !rounded-[10px] !border-0 px-[16px]"
+          >
+            {t("collection.retry")}
+          </Button>
+        </div>
+      );
+    }
     return (
       <div className="h-full w-full bg-transparent flex items-center justify-center">
         <span className="text-text-secondary">{t("collection.not_found")}</span>

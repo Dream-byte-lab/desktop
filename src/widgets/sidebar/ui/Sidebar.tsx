@@ -9,12 +9,7 @@ import { useTranslation } from "@/languages";
 import { Tooltip } from "@/shared/ui";
 import { cn } from "@/shared/lib";
 
-export interface SidebarProps {
-  searchOpen: boolean;
-  onSearchToggle: () => void;
-}
-
-function Sidebar({ searchOpen, onSearchToggle }: SidebarProps) {
+function Sidebar() {
   const collapsed = useSidebarStore((state) => state.collapsed);
   const toggle = useSidebarStore((state) => state.toggle);
   const { t } = useTranslation();
@@ -31,10 +26,7 @@ function Sidebar({ searchOpen, onSearchToggle }: SidebarProps) {
       )}
     >
       <nav className="relative flex-1 min-h-0 overflow-y-auto flex flex-col">
-        <SidebarNavItems
-          searchOpen={searchOpen}
-          onSearchToggle={onSearchToggle}
-        />
+        <SidebarNavItems />
         <SidebarPinnedPlaylists />
       </nav>
 

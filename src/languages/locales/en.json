@@ -32,6 +32,10 @@
     "unknown_owner": "Unknown Owner",
     "added_to_queue": "Added to queue",
     "not_found": "Not found",
+    "load_failed": "Couldn't load this collection",
+    "load_failed_offline": "Check your connection and try again.",
+    "load_failed_server": "The server ran into a problem — try again in a moment.",
+    "retry": "Retry",
     "playlist": "Playlist",
     "album": "Album",
     "ep": "EP",
@@ -61,7 +65,10 @@
       "guest": "Guest",
       "section_discover": "Discover",
       "section_collection": "Your Collection",
-      "section_pinned": "Pinned"
+      "section_space": "Your Space",
+      "section_pinned": "Pinned",
+      "your_space": "Your Space",
+      "listening_history": "Listening History"
     },
     "minimize": "Minimize",
     "exitFullscreen": "Exit fullscreen",
@@ -287,6 +294,8 @@
     "view_grid": "Grid",
     "view_list": "List",
     "find_music": "Search",
+    "playlists_retry": "Retry",
+    "playlists_retrying": "Retrying…",
     "create_playlist": "Create playlist",
     "no_playlists_title": "No playlists yet",
     "no_playlists_desc": "Create your first playlist or import tracks from external services",
@@ -483,6 +492,14 @@
     "next": "Next",
     "repeat": "Repeat",
     "lyrics_upgraded": "Lyrics upgraded!",
+    "lyrics_source_word": "Word-synced",
+    "lyrics_source_line": "Line-synced",
+    "lyrics_source_plain": "Plain",
+    "lyrics_wrong": "These lyrics are wrong",
+    "lyrics_marked_wrong": "Marked as wrong",
+    "lyrics_unmark": "Unmark",
+    "lyrics_switch_to": "Switch to {provider}",
+    "lyrics_no_alternative": "No other source was found for this track",
     "playing_from": "Playing from",
     "autoplay_radio": "Autoplay Radio",
     "clear_queue": "Clear queue",
@@ -625,7 +642,8 @@
       "highlight_lyrics": "Highlight lyrics",
       "text_align": "Text Align",
       "align_left": "Left",
-      "align_center": "Center"
+      "align_center": "Center",
+      "romanization": "Romanization"
     }
   },
   "playlist": {
@@ -672,7 +690,26 @@
     "albums": "Albums",
     "playlists": "Playlists",
     "no_results": "No results found",
-    "type_to_search": "Type to search"
+    "type_to_search": "Type to search",
+    "page": {
+      "results_eyebrow": "Search results",
+      "follow": "Follow",
+      "following": "Following",
+      "shuffle_play": "Shuffle Play",
+      "related_artists": "Related artists",
+      "genre_chips_title": "Your Playlist Genre labels",
+      "clear_query": "Clear search",
+      "toggle_filters": "Filter results",
+      "no_results_for": "No results for “{query}”",
+      "no_results_hint": "Check the spelling, try a different name, or clear the type filter to search everything.",
+      "no_results_source": "Searched the Liner catalogue — the only source connected right now.",
+      "search_everything": "Search everything",
+      "error_title": "Search didn't go through",
+      "error_hint": "Something went wrong while searching. Check your connection and try again.",
+      "retry": "Try again",
+      "offline_title": "You're offline",
+      "offline_hint": "Search needs a connection. Your downloads and local music are still here."
+    }
   },
   "settings": {
     "title": "Settings",
@@ -727,7 +764,8 @@
         "highlight_lyrics": "Highlight lyrics",
         "text_align": "Text Align",
         "align_left": "Left",
-        "align_center": "Center"
+        "align_center": "Center",
+        "romanization": "Romanization"
       },
       "crossfade": {
         "title": "Crossfade",
@@ -767,7 +805,7 @@
       "toggle_mute": "Mute / Unmute",
       "toggle_mute_desc": "Toggle audio mute state.",
       "search": "Search music",
-      "search_desc": "Quickly open the search dialog.",
+      "search_desc": "Quickly open the search page.",
       "toggle_queue": "Queue",
       "toggle_queue_desc": "Open or close the playback queue panel.",
       "toggle_fullscreen": "Fullscreen / Player view",
@@ -1338,6 +1376,87 @@
     "wall_title_unreachable": "Linerave's servers aren't responding",
     "wall_subtitle_unreachable": "Your internet works, but Linerave can't reach its servers. They may be down, or your network may be blocking Linerave. A VPN often helps."
   },
+  "space": {
+    "title": "Your Space",
+    "loading": "Loading your listening…",
+    "failed": "Your listening history couldn't be loaded.",
+    "retry": "Retry",
+    "coverage": {
+      "plays_one": "1 play",
+      "plays_plural": "{count} plays",
+      "accountSince": "account history since {date}",
+      "accountTo": "account history to {date}",
+      "deviceSince": "this device since {date}",
+      "monthsLimit": "counting the last {months} months",
+      "recentLimit": "counting your most recent {count} plays",
+      "stale": "Showing saved numbers while this updates",
+      "refreshFailed": "Couldn't refresh — showing saved numbers."
+    },
+    "topArtists": "Most listened-to artists",
+    "topTracks": "Most played songs",
+    "listeningTime": "Listening time",
+    "totalTime": {
+      "minutes": "{minutes} min",
+      "hoursMinutes": "{hours} h {minutes} min"
+    },
+    "stat": {
+      "activeDays_one": "{count} active day",
+      "activeDays_plural": "{count} active days",
+      "streak_one": "{count}-day streak",
+      "streak_plural": "{count}-day streak",
+      "skips_one": "{count} skip",
+      "skips_plural": "{count} skips",
+      "repeats_one": "{count} repeat",
+      "repeats_plural": "{count} repeats"
+    },
+    "genres": {
+      "title": "Favorite genres",
+      "playlistGenres": "From your playlists",
+      "basicGenres": "Genres",
+      "basicUnavailable": "Basic genre isn't recorded for these tracks yet."
+    },
+    "movement": {
+      "title": "Changes in your listening",
+      "subtitle": "The last 28 days against the 28 before",
+      "new": "New",
+      "gone": "Dropped out"
+    },
+    "dj": {
+      "title": "Your DJ sets",
+      "joins_one": "{count} join",
+      "joins_plural": "{count} joins",
+      "grade": "Average transition grade {percent}%"
+    },
+    "guest": {
+      "body": "You're listening as a guest, so there's no account history to show. Play counts and listening time begin with sign-in.",
+      "topArtists": "Strongest on this device",
+      "deviceTitle": "On this device"
+    },
+    "thin": {
+      "title": "This space fills as you listen",
+      "body": "Once you've played a few songs all the way through, your artists, songs and habits will appear here.",
+      "home": "Home",
+      "forYou": "For You"
+    },
+    "history": {
+      "title": "Listening History",
+      "count_one": "1 listen",
+      "count_plural": "{count} listens",
+      "today": "Today",
+      "yesterday": "Yesterday",
+      "empty": "Nothing here yet — plays will appear as you listen.",
+      "playedFor": "played {duration}",
+      "looped_one": "looped {count} time",
+      "looped_plural": "looped {count} times",
+      "skipped": "skipped",
+      "brief": "brief listen",
+      "loadMore": "Show more",
+      "loadingMore": "Loading…",
+      "moreFailed": "More history couldn't be loaded.",
+      "boundNote": "Older plays aren't loaded — this view reaches back about 13 months.",
+      "endNote": "That's the start of your history here."
+    }
+  },
   "dj": {
     "stage": {
       "control": "Control",
@@ -1367,7 +1486,8 @@
         "baby": "Baby",
         "chirp": "Chirp",
         "transformer": "Transformer",
-        "flare": "Flare"
+        "flare": "Flare",
+        "crab": "Crab"
       },
       "reset": "Reset",
       "refused": {

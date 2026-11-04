@@ -364,6 +364,7 @@ function EmptyLibraryState({
   hasSearchQuery: boolean;
 }) {
   const { t } = useTranslation();
+  const navigate = useStableNavigate();
 
   if (hasSearchQuery) {
     return (
@@ -414,7 +415,7 @@ function EmptyLibraryState({
         </div>
         <button
           type="button"
-          onClick={() => useModalStore.getState().openSearch()}
+          onClick={() => navigate("/search")}
           className="inline-flex items-center gap-[6px] !h-[36px] rounded-lg px-[16px] text-body font-[500] bg-bg-elevated border border-border-primary text-text-primary hover:bg-border-alpha-14 active:scale-[0.96] transition-all cursor-pointer mt-[2px]"
         >
           <Search3Fill size={15} />
@@ -436,7 +437,7 @@ function EmptyLibraryState({
       </div>
       <button
         type="button"
-        onClick={() => useModalStore.getState().openSearch()}
+        onClick={() => navigate("/search")}
         className="inline-flex items-center gap-[6px] !h-[36px] rounded-lg px-[16px] text-body font-[500] bg-bg-elevated border border-border-primary text-text-primary hover:bg-border-alpha-14 active:scale-[0.96] transition-all cursor-pointer mt-[2px]"
       >
         <Search3Fill size={15} />

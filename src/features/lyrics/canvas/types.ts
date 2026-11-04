@@ -66,15 +66,22 @@ export interface LyricsTypography {
  * - `highlight`: the active line's karaoke emphasis. Off = every
  *   line painted in one even register.
  * - `textScale`: multiplier over the base typography (Bigger text).
+ * - `romanization`: the pronunciation sub-line (source-provided or
+ *   computed at model-build time). Off = no romanization sub-lines
+ *   at all; translations are a different feature and never gated
+ *   by it. Optional in the type because `buildLines` treats an
+ *   absent flag as off; the default below pins it off.
  */
 export interface LyricsDisplayOptions {
   align: LineAlign | null;
   highlight: boolean;
   textScale: number;
+  romanization?: boolean;
 }
 
 export const DEFAULT_LYRICS_DISPLAY_OPTIONS: LyricsDisplayOptions = {
   align: null,
   highlight: true,
   textScale: 1,
+  romanization: false,
 };

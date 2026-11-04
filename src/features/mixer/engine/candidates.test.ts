@@ -163,7 +163,11 @@ describe("candidates — charter requirement 3: measurements have teeth", () => 
     const request = richRequest();
     request.incoming = analysis({
       ...request.incoming,
-      tempoConfidence: 0.1,
+      // 0.03 is the measured guess band on the repaired
+      // (mean-centred) confidence scale — note27-c2-fix.md's
+      // prescribed remedy; 0.1 on that scale is weak-but-real
+      // evidence the adventurous floor (0.05) legitimately admits.
+      tempoConfidence: 0.03,
     });
     const candidates = candidatesForPair(request);
     expect(candidates.length).toBeGreaterThan(0);

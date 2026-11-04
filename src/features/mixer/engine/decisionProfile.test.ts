@@ -23,7 +23,11 @@ describe("decisionProfile — the standard profile is the shipped judgement", ()
     // If a future curriculum changes a value, it changes it HERE,
     // deliberately, and this test is the receipt.
     expect(STANDARD_PROFILE.maxBeatmatchStretch).toBe(0.06);
-    expect(STANDARD_PROFILE.minTempoConfidence).toBe(0.2);
+    // 0.12 since Note 27 (C2): recalibrated to the analyser's
+    // centred-autocorrelation confidence scale (analysis v3),
+    // where a real recording measures 0.17 and white noise 0.00.
+    // The 0.2 this replaces was set on the old uncentred scale.
+    expect(STANDARD_PROFILE.minTempoConfidence).toBe(0.12);
     expect(STANDARD_PROFILE.minGridConfidence).toBe(0.15);
     expect(STANDARD_PROFILE.vocalClashIntegral).toBe(0.4);
     expect(STANDARD_PROFILE.vocalTrustConfidence).toBe(0.35);

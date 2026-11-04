@@ -107,7 +107,8 @@ export type RecipeLoopType =
  * — the gate chops what the hand moves. (Backspin, brake and vinyl
  * stop are the same table's other rows; they are jog moves, above.)
  */
-export type ScratchTechnique = "baby" | "chirp" | "transformer" | "flare";
+export type ScratchTechnique =
+  "baby" | "chirp" | "transformer" | "flare" | "crab";
 
 /**
  * A block of performed motion on one deck: a loop region, or — since
@@ -147,7 +148,11 @@ export type ScratchTechnique = "baby" | "chirp" | "transformer" | "flare";
  *   gate closed on the forward stroke, open on the return;
  *   transformer: gate clicking at `clicksPerBeat` over a slow hand;
  *   flare: gate open mid-stroke, clicking shut at each extreme —
- *   the 1-click flare). The hand is ADVANCE-EXACT by construction:
+ *   the 1-click flare; crab: the gate rests CLOSED and is tapped
+ *   open in finger bursts — `tapsPerStroke` brief blips across each
+ *   stroke's forward drag — while the hand drags asymmetrically,
+ *   a long forward pull repaid by a return three times as steep).
+ *   The hand is ADVANCE-EXACT by construction:
  *   each forward stroke's excess over the written rate is repaid
  *   by its return stroke, so over the window the deck's position
  *   advances exactly as unperturbed playback would — at the
@@ -185,6 +190,15 @@ export interface RecipeLoopBlock {
   excursionBeats?: number;
   /** Transformer only: the gate's click rhythm, in clicks per beat. */
   clicksPerBeat?: number;
+  /**
+   * Crab only: the finger count of each stroke's burst — how many
+   * brief gate openings the fader hand taps out across one forward
+   * drag. Counted per STROKE, not per beat (that is clicksPerBeat's
+   * quantity, and the two are not interchangeable): three fingers
+   * or four are the technique — a two-tap burst is a twiddle, a
+   * different named move this engine does not perform.
+   */
+  tapsPerStroke?: number;
 }
 
 export interface RecipeEcho {
@@ -532,7 +546,8 @@ export function validateRecipe(recipe: TransitionRecipe): string[] {
         loop.technique !== "baby" &&
         loop.technique !== "chirp" &&
         loop.technique !== "transformer" &&
-        loop.technique !== "flare"
+        loop.technique !== "flare" &&
+        loop.technique !== "crab"
       ) {
         errors.push(
           `scratch on ${loop.side}: technique ${loop.technique} is not a scratch technique`,
@@ -577,6 +592,26 @@ export function validateRecipe(recipe: TransitionRecipe): string[] {
             `transformer on ${loop.side}: clicksPerBeat ${loop.clicksPerBeat} outside (0, 8]`,
           );
         }
+      }
+      if (
+        loop.tapsPerStroke !== undefined &&
+        (!Number.isInteger(loop.tapsPerStroke) ||
+          loop.tapsPerStroke < 3 ||
+          loop.tapsPerStroke > 4)
+      ) {
+        // A tap count is a finger count: whole, and inside the
+        // hand's honest range wherever the field appears — the
+        // clicksPerBeat precedent, range-checked wherever present.
+        errors.push(
+          `scratch on ${loop.side}: tapsPerStroke ${loop.tapsPerStroke} outside [3, 4]`,
+        );
+      }
+      if (loop.technique === "crab" && loop.tapsPerStroke === undefined) {
+        // The taps ARE the crab: a crab without its finger count
+        // has no fader pattern to perform.
+        errors.push(
+          `crab on ${loop.side}: tapsPerStroke is required — the taps are the technique`,
+        );
       }
     }
   }

@@ -23,12 +23,17 @@ import { useTranslation } from "@/languages";
 import type { Track } from "@/shared/types/track";
 
 /**
- * The full-screen Lyrics view (reference 27): the artwork as a
- * circular, record-like header cropped by the top edge, title /
- * artist / year, the Next / Lyrics / Recommended tab pill, and the
+ * The full-screen Lyrics view (built to reference 27; visual
+ * register governed by reference 28): the artwork as a circular,
+ * record-like header cropped by the top edge, title / artist /
+ * year, the Next / Lyrics / Recommended tab pill, and the
  * synchronised lyrics in the user's chosen register — with the
  * accessibility overlay (blur, bigger text, highlight, text align)
- * living on the surface itself.
+ * living on the surface itself. Reference 28's register: the
+ * artwork's glow gathers at the top of the screen and the room
+ * falls away to near-black below it, and the lyrics column's
+ * context lines dim with their distance from the sung line (the
+ * falloff itself lives in the canvas scene).
  *
  * Recommended is wired to the real radio source seeded by the
  * current track; Next shows the actual next track in the queue.
@@ -195,6 +200,20 @@ export function LyricsFullscreenView({ onExit }: LyricsFullscreenViewProps) {
           gaussianBlur ? "bg-black/40" : "bg-black/55",
         )}
       />
+      {/* Reference 28's fall: the glow belongs to the top of the
+          room, around the record; below the tab pill the screen
+          deepens toward black so the lyrics column floats in a
+          dark room rather than on a uniformly lit wash. A shading
+          layer only — the composition above it is unchanged, with
+          blur on or off. */}
+      <div
+        aria-hidden="true"
+        className="absolute inset-0 z-[1]"
+        style={{
+          background:
+            "linear-gradient(to bottom, rgba(0, 0, 0, 0) 24%, rgba(0, 0, 0, 0.42) 60%, rgba(0, 0, 0, 0.85) 100%)",
+        }}
+      />
 
       <FullscreenFrameGlass />
 
@@ -202,7 +221,7 @@ export function LyricsFullscreenView({ onExit }: LyricsFullscreenViewProps) {
         {/* The record header: a circular crop of the artwork, cut by
             the top edge of the screen, glowing in the artwork's own
             light while blur is on. */}
-        <div className="relative h-[168px] w-full shrink-0">
+        <div className="relative h-[186px] w-full shrink-0">
           {coverSrc && (
             <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-[46%]">
               {gaussianBlur && (
@@ -219,7 +238,7 @@ export function LyricsFullscreenView({ onExit }: LyricsFullscreenViewProps) {
                 alt=""
                 draggable={false}
                 className={cn(
-                  "relative block h-[320px] w-[320px] rounded-full object-cover",
+                  "relative block h-[352px] w-[352px] rounded-full object-cover",
                   !gaussianBlur && "ring-1 ring-white/15",
                 )}
               />
@@ -250,7 +269,7 @@ export function LyricsFullscreenView({ onExit }: LyricsFullscreenViewProps) {
         <div
           role="tablist"
           aria-label={lyricsLabel(t, "player.lyrics_view.tab_lyrics", "Lyrics")}
-          className="mt-4 inline-flex shrink-0 rounded-full bg-white/10 p-1 backdrop-blur-md"
+          className="mt-4 inline-flex shrink-0 rounded-full bg-black/35 p-1 ring-1 ring-white/10 backdrop-blur-md"
         >
           {tabs.map((entry) => {
             const active = tab === entry.id;
@@ -264,7 +283,7 @@ export function LyricsFullscreenView({ onExit }: LyricsFullscreenViewProps) {
                 className={cn(
                   "cursor-pointer rounded-full border-none px-4 py-1.5 text-sm transition-colors select-none",
                   active
-                    ? "bg-white/20 font-semibold text-white"
+                    ? "bg-white/15 font-semibold text-white"
                     : "bg-transparent text-white/55 hover:text-white",
                 )}
               >

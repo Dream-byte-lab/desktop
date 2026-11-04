@@ -11,6 +11,7 @@ export interface UseSearchAllResult {
   items: ApiSearchItem[];
   loading: boolean;
   hasLoaded: boolean;
+  error: Error | null;
   partialWarning?: string;
   runNow: () => void;
 }
@@ -22,6 +23,7 @@ export function useSearchAll(
   const [items, setItems] = useState<ApiSearchItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [hasLoaded, setHasLoaded] = useState(false);
+  const [error, setError] = useState<Error | null>(null);
   const [partialWarning, setPartialWarning] = useState<string | undefined>();
 
   const latestRequestIdRef = useRef(0);
@@ -35,12 +37,17 @@ export function useSearchAll(
       const res = await api.search(q, "all");
       if (requestId !== latestRequestIdRef.current) return;
       setItems(res.items);
+      setError(null);
       setPartialWarning(undefined);
       lastFetchedQueryRef.current = q;
       setHasLoaded(true);
-    } catch {
+    } catch (err) {
       if (requestId !== latestRequestIdRef.current) return;
       setItems([]);
+      // The Search page must tell a failed search from an empty one
+      // (the S0 lesson): the error rides the result exactly as the
+      // four per-type hooks already expose theirs.
+      setError(err instanceof Error ? err : new Error(String(err)));
       setPartialWarning(undefined);
       setHasLoaded(true);
     } finally {
@@ -54,6 +61,7 @@ export function useSearchAll(
       setItems([]);
       setHasLoaded(false);
       setLoading(false);
+      setError(null);
       setPartialWarning(undefined);
       lastFetchedQueryRef.current = "";
       return;
@@ -89,5 +97,5 @@ export function useSearchAll(
     void runRequest(requestId, trimmed);
   }, [runRequest, shouldRunSearch, trimmed]);
 
-  return { items, loading, hasLoaded, partialWarning, runNow };
+  return { items, loading, hasLoaded, error, partialWarning, runNow };
 }

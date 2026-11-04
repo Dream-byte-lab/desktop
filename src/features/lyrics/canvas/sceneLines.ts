@@ -5,7 +5,7 @@ import { BITMAP_PAD, type LineBitmaps } from "./lineBitmaps";
 import type { LyricsScene } from "./lyricsScene";
 import type { ScrollMotion } from "./scrollMotion";
 import { isLineAnimating, lineExitMs } from "./timing";
-import type { LineLayout } from "./types";
+import type { LineLayout, LyricLineModel } from "./types";
 
 export interface SceneFrame {
   ctx: CanvasRenderingContext2D;
@@ -26,6 +26,44 @@ export interface VisibleLine {
   live: boolean;
   fading: boolean;
   moving: boolean;
+  /** Composite-time brightness for context lines (reference 28):
+   * 1 at the sung line and its neighbours, falling with distance.
+   * Always 1 while highlighting is off — that register is even. */
+  dim: number;
+}
+
+/**
+ * Reference 28's register: the lines around the one being sung fall
+ * away in brightness with their distance from it, instead of every
+ * context line sitting at one flat level. The falloff is applied
+ * when the still bitmaps are composited (see drawScene), so the
+ * alphas painted into the bitmaps — and therefore their cache keys —
+ * do not move; only the composite multiplier changes as the sung
+ * line advances.
+ */
+const DIM_PER_STEP = 0.065;
+const DIM_FLOOR = 0.6;
+
+/** Brightness multiplier for a line `distance` lines from the sung one. */
+export function contextDim(distance: number): number {
+  if (distance <= 1) return 1;
+  return Math.max(DIM_FLOOR, 1 - DIM_PER_STEP * (distance - 1));
+}
+
+/**
+ * The line being sung at `timeMs`: the last line that has started,
+ * or the first line before anything has started (the intro, where
+ * the opening line is the anchor the column gathers around).
+ */
+export function activeLineIndex(
+  lines: readonly LyricLineModel[],
+  timeMs: number,
+): number {
+  let anchor = 0;
+  lines.forEach((line, index) => {
+    if (line.startMs <= timeMs) anchor = index;
+  });
+  return anchor;
 }
 
 export function paintLine(frame: SceneFrame, layout: LineLayout) {
@@ -67,6 +105,7 @@ function litState(layout: LineLayout, timeMs: number): string {
 export function visibleLines(frame: SceneFrame): VisibleLine[] {
   const { scene, motion, now, timeMs, dpr } = frame;
   const highlight = scene.display.highlight;
+  const anchor = highlight ? activeLineIndex(scene.lines, timeMs) : 0;
   const lines: VisibleLine[] = [];
   scene.layouts.forEach((layout, index) => {
     const offset = motion.offsetFor(index, now);
@@ -92,6 +131,7 @@ export function visibleLines(frame: SceneFrame): VisibleLine[] {
       live,
       fading: live && timeMs >= lineExitMs(layout.line),
       moving,
+      dim: highlight ? contextDim(Math.abs(index - anchor)) : 1,
     });
   });
   return lines;
