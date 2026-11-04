@@ -87,6 +87,18 @@ import { applyVocalReferee, type TransitionPlan } from "./transitionPlanner";
 // the fallback cut's offset — are converted by the factor at
 // exactly those reads. With stretchB null, nothing converts and
 // performance is byte-identical to before.
+//
+// The master bus wears the plain path's protection: a limiter
+// (DynamicsCompressor, the plain path's own settings) wired
+// between the master gain and the destination at construction.
+// Level matching plays most tracks hotter than plain playback
+// (up to +6 dB toward the 0.4 RMS target) and the session writes
+// the raw user volume onto the master — without this node that
+// product reaches the destination uncapped, where plain playback
+// caps its element at 1 and routes the excess through its
+// limiter. The node changes no recipe, gain or level value; it
+// only catches peaks at the bus, and it lives and dies with the
+// context the session owns.
 
 /** Samples used when a volume curve is rendered for setValueCurveAtTime. */
 const VOLUME_SAMPLES = 256;
@@ -638,6 +650,16 @@ interface ManualFxState {
 
 export class TwoDeckMixer {
   readonly master: GainNode;
+  // The master bus limiter (the bass fix): a DynamicsCompressor
+  // wired master → limiter → destination IN THE CONSTRUCTOR, so
+  // the level-match × user-volume product is capped exactly the
+  // way plain playback caps its own excess (its limiter in
+  // pitchShifter.ts's buildGraph). Built through the same
+  // capability guard as the analyser taps: a context that cannot
+  // build one (the hand-written fakes) leaves the master wired
+  // straight to the destination, exactly as before — a real
+  // AudioContext always builds it. Null only in that case.
+  private readonly masterLimiter: DynamicsCompressorNode | null;
   private readonly decks: [Deck, Deck];
   private readonly trims: [GainNode, GainNode];
   private readonly echoDelay: DelayNode;
@@ -733,7 +755,13 @@ export class TwoDeckMixer {
   constructor(private readonly context: AudioContext) {
     this.master = context.createGain();
     this.master.gain.value = 1;
-    this.master.connect(context.destination);
+    this.masterLimiter = this.createMasterLimiter();
+    if (this.masterLimiter) {
+      this.master.connect(this.masterLimiter);
+      this.masterLimiter.connect(context.destination);
+    } else {
+      this.master.connect(context.destination);
+    }
 
     // The shared echo network: a feedback delay with a low-pass in
     // the loop, so each repeat comes back darker and softer than the
@@ -796,8 +824,11 @@ export class TwoDeckMixer {
   // --- The lazy R3 networks -------------------------------------
   // Each builder runs once, on the first recipe that names its
   // effect, and wires input → processing → wet gain → master.
-  // Only these builders may create node types beyond the four
-  // factories the constructor is allowed.
+  // Only these builders create node types LAZILY; the
+  // constructor's one node beyond its four factories is the
+  // master limiter, built up front through its capability guard
+  // because bus protection must hold from the first sample, not
+  // from the first recipe that needs it.
 
   private generateReverbIR(decaySec: number): AudioBuffer {
     const sampleRate = this.context.sampleRate;
@@ -1275,6 +1306,32 @@ export class TwoDeckMixer {
     this.master.connect(node);
     this.masterAnalyserNode = node;
     return node;
+  }
+
+  /**
+   * The master limiter, built at construction; null when the
+   * context cannot make a compressor (the hand-written fakes, an
+   * exotic embedding), in which case the constructor wires the
+   * master straight to the destination. The settings are the
+   * plain path's own, mirrored literally: pitchShifter.ts's
+   * buildGraph hardcodes the same five values for its limiter
+   * rather than exporting them (threshold −1 dB, knee 0, ratio
+   * 20, attack 0.002 s, release 0.2 s) — keep the two in step.
+   */
+  private createMasterLimiter(): DynamicsCompressorNode | null {
+    try {
+      const factory = this.context.createDynamicsCompressor;
+      if (typeof factory !== "function") return null;
+      const node = factory.call(this.context);
+      node.threshold.value = -1.0;
+      node.knee.value = 0;
+      node.ratio.value = 20;
+      node.attack.value = 0.002;
+      node.release.value = 0.2;
+      return node;
+    } catch {
+      return null;
+    }
   }
 
   private createAnalyserTap(): AnalyserNode | null {

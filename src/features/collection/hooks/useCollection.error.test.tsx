@@ -240,6 +240,10 @@ describe("useCollection — error states (S0)", () => {
     };
     // Stale on arrival, so opening it triggers a real revalidation.
     queryCache.set("collection:playlist:srv-cached", primed, 0);
+    // Staleness is Date.now() - timestamp > 0: a real millisecond
+    // must pass, or the prime can read fresh in the same millisecond
+    // and the revalidation this test exercises never fires.
+    await new Promise((resolve) => setTimeout(resolve, 2));
     (api.getPlaylist as any).mockRejectedValue(
       new ApiError(500, "Server error"),
     );

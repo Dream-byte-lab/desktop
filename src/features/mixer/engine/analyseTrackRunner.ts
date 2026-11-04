@@ -15,30 +15,58 @@ import type {
 // never blocks the UI thread — the freeze the first-open test felt
 // every time the DJ session prepared a song.
 //
-// The fallback is a promise, not a hope: if the worker cannot be
-// constructed, errors out, or wedges, the same analysis runs inline
-// on the spot and the caller never knows the difference. Samples are
-// posted without transfer, so the caller's copy survives for exactly
-// that fallback — a structured clone of the samples is a memcpy,
-// trivial next to seconds of DSP.
+// Requests are HELD in this runner and dispatched to the worker
+// one at a time, fast passes before deep ones (Note 29): the
+// worker is serial anyway, so posting everything the moment it
+// arrives only decides the order by accident of arrival — and a
+// deep pass posted microseconds before a fast one then blocks the
+// fast answer behind seconds of DSP the listener is waiting on.
+// Dispatch is scheduled on a microtask so a synchronous burst of
+// requests is sorted as a burst. The wedge timeout measures from
+// DISPATCH, not from enqueue: time spent queued is the priority
+// discipline working, not a wedge.
+//
+// The failure discipline is null, never inline (Note 29): if the
+// worker errors or wedges, every unsettled request resolves null
+// — every caller already treats null as a first-class outcome
+// (fast-null → playable shell + background deepen; deep-null →
+// the fast analysis stays) — and the worker is retired WITHOUT
+// poisoning the run: the next dispatch constructs a fresh one.
+// The inline DSP path remains only for the environment that
+// cannot construct a worker at all, and there it serves one
+// request at a time, never a queue drained synchronously.
+// Samples are posted without transfer, so the caller's copy
+// survives for exactly that fallback — a structured clone of the
+// samples is a memcpy, trivial next to seconds of DSP.
 
 /** Far beyond any real analysis; a worker slower than this is wedged, not busy. */
 const WORKER_TIMEOUT_MS = 120_000;
 
-interface PendingAnalysis {
+interface QueuedAnalysis {
+  id: number;
   samples: Float32Array;
   sampleRate: number;
   options: AnalyseOptions;
   resolve: (analysis: TrackAnalysis | null) => void;
+}
+
+interface InFlightAnalysis extends QueuedAnalysis {
   timer: ReturnType<typeof setTimeout>;
 }
 
 let worker: Worker | null = null;
-let workerBroken = false;
+/**
+ * Latched only by the one fact that cannot change mid-run — the
+ * environment has no Worker global at all. A construction THROW
+ * does not latch: the next dispatch tries a fresh construction.
+ */
+let workerUnsupported = false;
 let nextRequestId = 1;
-const pending = new Map<number, PendingAnalysis>();
+const queue: QueuedAnalysis[] = [];
+let inFlight: InFlightAnalysis | null = null;
+let dispatchScheduled = false;
 
-function runInline(entry: Omit<PendingAnalysis, "resolve" | "timer">) {
+function runInline(entry: QueuedAnalysis): TrackAnalysis | null {
   try {
     return analyseTrack(entry.samples, entry.sampleRate, entry.options);
   } catch {
@@ -46,71 +74,114 @@ function runInline(entry: Omit<PendingAnalysis, "resolve" | "timer">) {
   }
 }
 
-/** Settles every outstanding request inline and retires the worker for good. */
+/**
+ * Retires the current worker and settles every unsettled request
+ * — the one in flight and everything queued — with null. The
+ * retirement is not a poisoning: the next dispatch constructs a
+ * fresh worker, so one failure costs the requests it interrupted,
+ * not the rest of the run.
+ */
 function retireWorker(): void {
-  workerBroken = true;
   if (worker) {
     worker.terminate();
     worker = null;
   }
-  for (const entry of pending.values()) {
-    clearTimeout(entry.timer);
-    entry.resolve(runInline(entry));
+  if (inFlight) {
+    clearTimeout(inFlight.timer);
+    inFlight.resolve(null);
+    inFlight = null;
   }
-  pending.clear();
+  for (const entry of queue.splice(0)) {
+    entry.resolve(null);
+  }
 }
 
 function ensureWorker(): Worker | null {
-  if (workerBroken) return null;
   if (worker) return worker;
+  if (workerUnsupported) return null;
   if (typeof Worker === "undefined") {
-    workerBroken = true;
+    workerUnsupported = true;
     return null;
   }
   try {
     worker = new AnalyseWorker();
   } catch {
-    workerBroken = true;
     return null;
   }
   worker.onmessage = (event: MessageEvent<AnalyseWorkerResponse>) => {
-    const entry = pending.get(event.data.id);
-    if (!entry) return;
-    pending.delete(event.data.id);
-    clearTimeout(entry.timer);
-    entry.resolve(event.data.analysis);
+    if (!inFlight || event.data.id !== inFlight.id) return;
+    const done = inFlight;
+    inFlight = null;
+    clearTimeout(done.timer);
+    done.resolve(event.data.analysis);
+    dispatchNext();
   };
   worker.onerror = () => retireWorker();
   return worker;
+}
+
+function scheduleDispatch(): void {
+  if (dispatchScheduled) return;
+  dispatchScheduled = true;
+  void Promise.resolve().then(() => {
+    dispatchScheduled = false;
+    dispatchNext();
+  });
+}
+
+/**
+ * Dispatches the next held request: the first FAST pass in the
+ * queue, else the queue's head (FIFO within a class). One request
+ * is ever in flight — the worker is serial, and holding the rest
+ * here is what lets a fast pass overtake queued deep passes
+ * instead of waiting behind every one of them.
+ */
+function dispatchNext(): void {
+  while (!inFlight && queue.length > 0) {
+    let index = queue.findIndex(
+      (entry) => (entry.options.depth ?? "deep") === "fast",
+    );
+    if (index < 0) index = 0;
+    const [entry] = queue.splice(index, 1);
+    const active = ensureWorker();
+    if (!active) {
+      // No worker can be had in this environment: this one
+      // request runs inline — its own fallback, on its own —
+      // and the next held request is considered on its own turn.
+      entry.resolve(runInline(entry));
+      continue;
+    }
+    const timer = setTimeout(() => {
+      // A wedged worker must not stall preparation forever:
+      // retire it (the in-flight request settles null with
+      // everything queued) and let the next dispatch rebuild.
+      retireWorker();
+    }, WORKER_TIMEOUT_MS);
+    inFlight = { ...entry, timer };
+    const request: AnalyseWorkerRequest = {
+      id: entry.id,
+      samples: entry.samples,
+      sampleRate: entry.sampleRate,
+      options: entry.options,
+    };
+    try {
+      active.postMessage(request);
+    } catch {
+      retireWorker();
+    }
+  }
 }
 
 function analyseInWorker(
   samples: Float32Array,
   sampleRate: number,
   options: AnalyseOptions,
-): Promise<TrackAnalysis | null> | null {
-  const active = ensureWorker();
-  if (!active) return null;
+): Promise<TrackAnalysis | null> {
   const id = nextRequestId;
   nextRequestId += 1;
   return new Promise((resolve) => {
-    const timer = setTimeout(() => {
-      // A wedged worker must not stall preparation forever: settle
-      // this request inline and stop trusting the worker at all.
-      pending.delete(id);
-      retireWorker();
-      resolve(runInline({ samples, sampleRate, options }));
-    }, WORKER_TIMEOUT_MS);
-    pending.set(id, { samples, sampleRate, options, resolve, timer });
-    const request: AnalyseWorkerRequest = { id, samples, sampleRate, options };
-    try {
-      active.postMessage(request);
-    } catch {
-      pending.delete(id);
-      clearTimeout(timer);
-      retireWorker();
-      resolve(runInline({ samples, sampleRate, options }));
-    }
+    queue.push({ id, samples, sampleRate, options, resolve });
+    scheduleDispatch();
   });
 }
 
@@ -127,9 +198,7 @@ export async function analyseSamplesOffThread(
   sampleRate: number,
   options: AnalyseOptions = {},
 ): Promise<TrackAnalysis | null> {
-  const fromWorker = analyseInWorker(samples, sampleRate, options);
-  if (fromWorker) return fromWorker;
-  return runInline({ samples, sampleRate, options });
+  return analyseInWorker(samples, sampleRate, options);
 }
 
 /**

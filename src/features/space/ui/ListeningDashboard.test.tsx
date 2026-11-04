@@ -7,6 +7,7 @@ import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createRoot, type Root } from "react-dom/client";
 import { act } from "react";
+import { MemoryRouter } from "react-router-dom";
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -181,7 +182,13 @@ afterEach(async () => {
 
 async function render() {
   await act(async () => {
-    root.render(React.createElement(ListeningDashboard));
+    root.render(
+      React.createElement(
+        MemoryRouter,
+        null,
+        React.createElement(ListeningDashboard),
+      ),
+    );
   });
 }
 
@@ -217,6 +224,68 @@ describe("ListeningDashboard", () => {
     expect(text).toContain("↑ 1");
     expect(text).toContain("24 joins");
     expect(text).toContain("Average transition grade 83%");
+  });
+
+  it("links artists and songs to their pages when ids resolve", async () => {
+    holder.state = {
+      status: "ready",
+      stats: makeStats({
+        topArtists: [
+          { name: "Ama Artist", plays: 20, coverUrl: "", artistId: "a-ama" },
+          { name: "Ben Band", plays: 9, coverUrl: "" },
+        ],
+        topTracks: [
+          {
+            track: {
+              ...track("t1", "First Song", "Ama Artist"),
+              album: { id: "alb-1", title: "First Album" },
+            },
+            plays: 7,
+          },
+        ],
+        movement: {
+          artists: [
+            {
+              label: "Ama Artist",
+              artistId: "a-ama",
+              currentPlays: 10,
+              previousPlays: 4,
+              currentRank: 1,
+              previousRank: 2,
+            },
+          ],
+          playlistGenres: [],
+        },
+      }),
+      stale: false,
+      refreshFailed: false,
+      retry: vi.fn(),
+    };
+    await render();
+    const hrefs = [...container.querySelectorAll("a")].map((a) =>
+      a.getAttribute("href"),
+    );
+    // The portrait tile and the movement row both open Ama's page.
+    expect(hrefs.filter((h) => h === "/artist?id=a-ama")).toHaveLength(2);
+    // The song opens on its album's collection page.
+    expect(hrefs).toContain("/collection?type=album&id=alb-1");
+    // Ben Band carries no id and the album-less entries guess
+    // nothing: exactly those three links exist.
+    expect(hrefs).toHaveLength(3);
+  });
+
+  it("renders no links when no entry carries a resolvable target", async () => {
+    holder.state = {
+      status: "ready",
+      stats: makeStats(),
+      stale: false,
+      refreshFailed: false,
+      retry: vi.fn(),
+    };
+    await render();
+    expect(container.querySelectorAll("a")).toHaveLength(0);
+    expect(container.textContent ?? "").toContain("Ama Artist");
+    expect(container.textContent ?? "").toContain("First Song");
   });
 
   it("omits the DJ block when no joins exist", async () => {

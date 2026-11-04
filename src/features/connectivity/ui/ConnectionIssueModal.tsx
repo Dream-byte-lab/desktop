@@ -30,6 +30,10 @@ const COPY: Record<ConnectionIssue, { title: string; desc: string }> = {
     title: "offline.issue_server_title",
     desc: "offline.issue_server_desc",
   },
+  server_unreachable: {
+    title: "offline.issue_server_unreachable_title",
+    desc: "offline.issue_server_unreachable_desc",
+  },
   offline: {
     title: "offline.issue_offline_title",
     desc: "offline.issue_offline_desc",
@@ -48,7 +52,7 @@ function IssueIcon({ issue }: { issue: ConnectionIssue }) {
   const youtube = issue.startsWith("youtube");
   const Icon = youtube
     ? YoutubeLine
-    : issue === "server"
+    : issue === "server" || issue === "server_unreachable"
       ? ServerLine
       : WifiOffLine;
   return (

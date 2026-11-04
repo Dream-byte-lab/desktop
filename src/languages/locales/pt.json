@@ -672,12 +672,6 @@
       "resume": "Retomar a última fila",
       "empty": "Começar vazia"
     },
-    "telemetry": {
-      "title": "Telemetria e diagnósticos anônimos",
-      "description": "Ajuda a identificar e corrigir erros de reprodução, travamentos de buffering e problemas de rede. Nunca coleta dados pessoais, tokens, senhas ou caminhos de arquivos locais.",
-      "enabled": "Telemetria anônima ativada",
-      "disabled": "Telemetria completamente desativada"
-    },
     "cache": {
       "title": "Cache e armazenamento",
       "description": "Gerencie os dados do aplicativo para liberar espaço ou resolver problemas de sincronização.",

@@ -607,12 +607,6 @@
       "resume": "Reanudar última cola",
       "empty": "Iniciar vacío"
     },
-    "telemetry": {
-      "title": "Telemetría y diagnósticos anónimos",
-      "description": "Ayuda a identificar y corregir errores de reproducción, cortes de buffer y problemas de red. Nunca recopila datos personales, tokens, contraseñas ni rutas de archivos locales.",
-      "enabled": "Telemetría anónima activada",
-      "disabled": "Telemetría completamente desactivada"
-    },
     "cache": {
       "title": "Caché y Almacenamiento",
       "description": "Gestiona los datos de la aplicación para liberar espacio o resolver problemas de sincronización.",

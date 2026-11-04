@@ -1,9 +1,78 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  parseNetSimulation,
-  simulatedFailureFor,
-  type NetSimulation,
-} from "../../../../electron/netsim/simulation";
+
+// Local outage-scenario model for the mocked network below. This is a
+// faithful transcription of the fixture semantics this suite was built
+// on (scenario name -> which host family fails, and how); the product's
+// dev-only netsim module was removed, so the model now lives with the
+// tests that consume it. Only the scenarios named here are supported.
+type SimulatedFailure = "timeout" | "blocked";
+
+interface NetSimulation {
+  youtube: SimulatedFailure | null;
+  liner: SimulatedFailure | null;
+  country: string | null;
+}
+
+const SCENARIOS: Record<string, Partial<NetSimulation>> = {
+  "youtube-timeout": { youtube: "timeout" },
+  "youtube-blocked": { youtube: "blocked" },
+  "liner-timeout": { liner: "timeout" },
+  "liner-down": { liner: "blocked" },
+};
+
+const YOUTUBE_DOMAINS = [
+  "youtube.com",
+  "youtu.be",
+  "googlevideo.com",
+  "ytimg.com",
+  "ggpht.com",
+];
+
+const LINER_DOMAINS = ["tryliner.fun"];
+
+function onDomain(host: string, domains: string[]): boolean {
+  return domains.some(
+    (domain) => host === domain || host.endsWith(`.${domain}`),
+  );
+}
+
+function parseNetSimulation(env: {
+  LINER_SIMULATE?: string;
+  LINER_SIMULATE_COUNTRY?: string;
+}): NetSimulation | null {
+  const names = (env.LINER_SIMULATE ?? "")
+    .split(",")
+    .map((name) => name.trim().toLowerCase())
+    .filter(Boolean);
+  const unknown = names.filter((name) => !(name in SCENARIOS));
+  if (unknown.length > 0)
+    throw new Error(
+      `unknown LINER_SIMULATE scenario: ${unknown.join(", ")} (use ${Object.keys(SCENARIOS).join(", ")})`,
+    );
+  if (names.length === 0) return null;
+  const sim: NetSimulation = { youtube: null, liner: null, country: null };
+  for (const name of names) Object.assign(sim, SCENARIOS[name]);
+  const country = env.LINER_SIMULATE_COUNTRY?.trim().toUpperCase();
+  if (country && /^[A-Z]{2}$/.test(country)) sim.country = country;
+  return sim;
+}
+
+function simulatedFailureFor(
+  url: string,
+  sim: NetSimulation,
+): SimulatedFailure | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
+  if (sim.youtube && onDomain(parsed.hostname, YOUTUBE_DOMAINS))
+    return sim.youtube;
+  if (sim.liner && onDomain(parsed.hostname, LINER_DOMAINS)) return sim.liner;
+  return null;
+}
 
 const showToast = vi.fn();
 
@@ -224,13 +293,20 @@ describe("liner servers unreachable", () => {
       const { useOfflineModeStore, useConnectivityStore } = await loadFeature();
 
       failApiCalls(useConnectivityStore.getState().recordFailure);
-      await vi.waitFor(() =>
-        expect(useOfflineModeStore.getState().issue).toBe("server"),
+      // The trip's server classification is confirmed by one
+      // re-probe (SERVER_CONFIRM_DELAY_MS) before the modal opens,
+      // and an unreachable verdict carries its own issue now.
+      await vi.waitFor(
+        () =>
+          expect(useOfflineModeStore.getState().issue).toBe(
+            "server_unreachable",
+          ),
+        { timeout: 15_000 },
       );
       expect(useOfflineModeStore.getState().verdict).toBe("server_unreachable");
       expect(useOfflineModeStore.getState().offline).toBe(false);
       expect(useConnectivityStore.getState().visible).toBe(false);
-    });
+    }, 20_000);
   }
 
   it("mutes network toasts while the server modal is open", async () => {
@@ -330,7 +406,14 @@ describe("liner and youtube both down, internet fine", () => {
       "server_unreachable",
     );
     presentDetectedIssue();
-    expect(useOfflineModeStore.getState().issue).toBe("server");
+    // The server classification schedules a confirmation re-probe
+    // first; the youtube problem stays unpresented meanwhile.
+    expect(useOfflineModeStore.getState().issue).toBeNull();
+    await vi.waitFor(
+      () =>
+        expect(useOfflineModeStore.getState().issue).toBe("server_unreachable"),
+      { timeout: 15_000 },
+    );
     expect(useOfflineModeStore.getState().youtube).toBe("blocked");
-  });
+  }, 20_000);
 });

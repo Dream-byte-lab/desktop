@@ -609,12 +609,6 @@
       "resume": "Riprendi l'ultima coda",
       "empty": "Inizia da vuota"
     },
-    "telemetry": {
-      "title": "Telemetria e diagnostica anonime",
-      "description": "Aiuta a individuare e correggere errori di riproduzione, interruzioni del buffering e problemi di rete. Non raccoglie mai dati personali, token, password o percorsi di file locali.",
-      "enabled": "Telemetria anonima attivata",
-      "disabled": "Telemetria completamente disattivata"
-    },
     "cache": {
       "title": "Cache e archiviazione",
       "description": "Gestisci i dati dell'applicazione per liberare spazio o risolvere problemi di sincronizzazione.",

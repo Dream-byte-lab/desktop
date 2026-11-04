@@ -6,9 +6,14 @@
 // leaves the rows on screen standing and says so.
 
 import { useEffect, useRef } from "react";
+import { Link } from "react-router-dom";
 import { useTranslation } from "@/languages";
 import { ListLayout } from "@/shared/ui/layouts";
 import CoverImage from "@/features/covers/ui/CoverImage";
+import {
+  collectionPath,
+  collectionPreviewState,
+} from "@/features/collection/lib/collectionPreview";
 import { useListeningHistory } from "../hooks/useListeningHistory";
 import { countsAsPlay, type PlayEvent } from "../lib/listeningStats";
 import { localDayStartMs, previousDayStartMs } from "../lib/listeningStats";
@@ -29,14 +34,18 @@ function dayLabel(
 
 function HistoryRow({ event, locale }: { event: PlayEvent; locale: string }) {
   const { t } = useTranslation();
-  return (
-    <li className="flex items-center gap-3 py-[8px]">
+  // A song's page, as the app defines it: there is no track route —
+  // a song opens on its album's collection page. A play whose track
+  // carries no album id has no page to go to; its row stays plain.
+  const albumId = event.track.album?.id;
+  const identity = (
+    <>
       <div className="h-[44px] w-[44px] shrink-0 overflow-hidden rounded-[8px] bg-border-alpha-14">
         {event.track.coverUrl ? (
           <CoverImage
             src={event.track.coverUrl}
             alt=""
-            className="h-full w-full object-cover"
+            className="h-full w-full object-cover transition-all duration-300 group-hover:brightness-[1.15]"
           />
         ) : null}
       </div>
@@ -48,6 +57,25 @@ function HistoryRow({ event, locale }: { event: PlayEvent; locale: string }) {
           {event.track.artists}
         </span>
       </div>
+    </>
+  );
+  return (
+    <li className="flex items-center gap-3 py-[8px]">
+      {albumId ? (
+        <Link
+          to={collectionPath("album", albumId)}
+          state={collectionPreviewState({
+            coverUrl: event.track.coverUrl,
+            title: event.track.title,
+            subtitle: event.track.artists,
+          })}
+          className="group flex min-w-0 flex-1 items-center gap-3 no-underline cursor-pointer"
+        >
+          {identity}
+        </Link>
+      ) : (
+        <div className="flex min-w-0 flex-1 items-center gap-3">{identity}</div>
+      )}
       <div className="flex shrink-0 flex-col items-end gap-[2px]">
         <span className="text-body text-text-secondary tabular-nums">
           {formatTimeOfDay(event.listenedAtMs, locale)}

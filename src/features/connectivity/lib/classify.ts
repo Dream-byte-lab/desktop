@@ -8,6 +8,7 @@ export type ConnectionIssue =
   | "youtube_unreachable"
   | "youtube_refused"
   | "server"
+  | "server_unreachable"
   | "offline";
 
 export type IssueGroup = "youtube" | "server" | "offline";
@@ -42,14 +43,20 @@ export function connectionIssue(
   youtube: YoutubeReach,
 ): Exclude<ConnectionIssue, "youtube_refused"> | null {
   if (verdict === "offline") return "offline";
-  if (verdict !== "online") return "server";
+  // The two server verdicts stay distinct issues: a 5xx answer
+  // proves the server responded and failed, while an unreachable
+  // verdict proves only that no answer arrived — the modal copy
+  // must not claim the first for the second.
+  if (verdict === "server_error") return "server";
+  if (verdict === "server_unreachable") return "server_unreachable";
   if (youtube === "blocked") return "youtube_blocked";
   if (youtube === "unreachable") return "youtube_unreachable";
   return null;
 }
 
 export function issueGroup(issue: ConnectionIssue): IssueGroup {
-  if (issue === "server" || issue === "offline") return issue;
+  if (issue === "offline") return "offline";
+  if (issue === "server" || issue === "server_unreachable") return "server";
   return "youtube";
 }
 

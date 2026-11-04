@@ -77,7 +77,9 @@ describe("youtubeReach failure kinds", () => {
 describe("connectionIssue", () => {
   it("puts device and server problems ahead of youtube", () => {
     expect(connectionIssue("offline", "blocked")).toBe("offline");
-    expect(connectionIssue("server_unreachable", "blocked")).toBe("server");
+    expect(connectionIssue("server_unreachable", "blocked")).toBe(
+      "server_unreachable",
+    );
     expect(connectionIssue("server_error", "ok")).toBe("server");
     expect(connectionIssue("online", "blocked")).toBe("youtube_blocked");
     expect(connectionIssue("online", "unreachable")).toBe(
@@ -85,6 +87,19 @@ describe("connectionIssue", () => {
     );
     expect(connectionIssue("online", "ok")).toBeNull();
     expect(connectionIssue("online", "unknown")).toBeNull();
+  });
+
+  it("keeps the two server verdicts as distinct issues in one group", () => {
+    // A 5xx answer and no answer at all are different claims and
+    // carry different modal copy, but they confirm, dismiss, and
+    // resolve as one group.
+    expect(connectionIssue("server_error", "ok")).toBe("server");
+    expect(connectionIssue("server_unreachable", "ok")).toBe(
+      "server_unreachable",
+    );
+    expect(issueGroup("server")).toBe("server");
+    expect(issueGroup("server_unreachable")).toBe("server");
+    expect(issueResolved("server", "online", "ok")).toBe(true);
   });
 
   it("groups the three youtube issues together", () => {

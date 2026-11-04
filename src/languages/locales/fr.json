@@ -713,12 +713,6 @@
       "resume": "Reprendre la dernière file",
       "empty": "Commencer à vide"
     },
-    "telemetry": {
-      "title": "Télémétrie et diagnostic anonymes",
-      "description": "Aide à repérer et corriger les erreurs de lecture, les blocages de mise en mémoire tampon et les problèmes réseau. Ne collecte jamais de données personnelles, jetons, mots de passe ni chemins de fichiers locaux.",
-      "enabled": "Télémétrie anonyme activée",
-      "disabled": "Télémétrie entièrement désactivée"
-    },
     "cache": {
       "title": "Cache et stockage",
       "description": "Gérez les données de l'application pour libérer de l'espace ou résoudre des problèmes de synchronisation.",

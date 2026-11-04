@@ -11,7 +11,6 @@ import { signApiRequest, syncServerTime } from "./requestSigner";
 import { clientCatalog } from "./clientCatalog";
 import { getLocalImportHandler } from "./localImports";
 import type { Track } from "@/shared/contracts";
-import { telemetry } from "@/shared/telemetry";
 import type {
   PublicUser,
   UpdateProfileInput,
@@ -57,6 +56,7 @@ function offlineModeAction() {
 }
 
 import { getApiBaseUrl } from "./baseUrl";
+import { claimErrorToast } from "./errorToastGate";
 import {
   PowTimeoutError,
   SUPPORTED_POW_ALGORITHM,
@@ -113,7 +113,7 @@ async function fetchWithTimeout(
     return res;
   } catch (err: any) {
     if (didTimeout) {
-      if (!connectionToastsMuted())
+      if (!connectionToastsMuted() && claimErrorToast("timeout"))
         showToast(translate("common.error_timeout_title"), "error", {
           id: "network-timeout-toast",
           description: translate("common.error_network"),
@@ -128,7 +128,7 @@ async function fetchWithTimeout(
     if (userSignal?.aborted) {
       throw err;
     }
-    if (!connectionToastsMuted())
+    if (!connectionToastsMuted() && claimErrorToast("network"))
       showToast(translate("common.error_network_title"), "error", {
         id: "network-error-toast",
         description: translate("common.error_network"),
@@ -302,7 +302,6 @@ async function executeRequest<T>(
       throw err;
     }
     const durationMs = Math.round(performance.now() - startTime);
-    telemetry.trackNetwork(method, path, 0, durationMs, requestId);
     if (isConnectivityFailure(err) && !isPlaybackPath(path)) {
       recordConnectivityFailure({
         method,
@@ -342,8 +341,6 @@ async function executeRequest<T>(
     }
 
     if (!nextToken) {
-      const durationMs = Math.round(performance.now() - startTime);
-      telemetry.trackNetwork(method, path, res.status, durationMs, requestId);
       const body = (await res.json().catch(() => ({}))) as Record<
         string,
         unknown
@@ -381,7 +378,6 @@ async function executeRequest<T>(
       }
     } catch (err) {
       const durationMs = Math.round(performance.now() - startTime);
-      telemetry.trackNetwork(method, path, 0, durationMs, requestId);
       if (isConnectivityFailure(err) && !isPlaybackPath(path)) {
         recordConnectivityFailure({
           method,
@@ -395,7 +391,6 @@ async function executeRequest<T>(
   }
 
   const durationMs = Math.round(performance.now() - startTime);
-  telemetry.trackNetwork(method, path, res.status, durationMs, requestId);
   onResponse?.(res);
   if (res.status === 304) return undefined as unknown as T;
 
@@ -412,7 +407,11 @@ async function executeRequest<T>(
           ? body.requestId
           : undefined);
 
-    if (res.status >= 500 && !connectionToastsMuted()) {
+    if (
+      res.status >= 500 &&
+      !connectionToastsMuted() &&
+      claimErrorToast("server")
+    ) {
       showToast(translate("common.error_server_title"), "error", {
         id: `server-error-${res.status}`,
         description: translate("common.error_server"),
@@ -506,7 +505,12 @@ export function resolveApiErrorMessage(
 ): string {
   if (err instanceof ApiError) {
     if (err.status === 0) return t("common.error_network");
-    if (err.status === 401 || err.status === 403)
+    if (err.status === 401) return t("common.error_session_expired");
+    // A 403 earns the session reading only when the API answered
+    // with a structured error (a code rides along); a bare 403 is
+    // the shape of a non-JSON block page, which proves nothing
+    // about the session and falls through to the caller's words.
+    if (err.status === 403 && err.code)
       return t("common.error_session_expired");
     if (err.status === 404) return t("common.error_not_found");
     if (err.status === 429) return t("common.error_too_many");

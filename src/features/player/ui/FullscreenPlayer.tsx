@@ -21,6 +21,7 @@ import { CanvasLyricsView } from "./CanvasLyricsView";
 import { useTranslation } from "@/languages";
 import { useSettledLyricsLayout } from "../hooks/useSettledLyricsLayout";
 import { NOW_PLAYING_MORPH_TRANSITION } from "./nowPlayingMorph";
+import { consumeLyricsViewOpenRequest } from "./lyricsOpenIntent";
 
 const KAWARP_FADE_IN_MS = 600;
 
@@ -76,7 +77,12 @@ export function FullscreenPlayer({
   const reduceMotion = useReducedMotion();
   const [queueOpen, setQueueOpen] = useState(false);
   const toggleQueue = useCallback(() => setQueueOpen((open) => !open), []);
-  const [lyricsViewOpen, setLyricsViewOpen] = useState(false);
+  // A lyrics request from the playback bar (its lyrics button) is
+  // consumed once, here, so the surface opens straight into the
+  // lyrics view instead of the split view.
+  const [lyricsViewOpen, setLyricsViewOpen] = useState(() =>
+    consumeLyricsViewOpenRequest(),
+  );
   const [kawarpShown, setKawarpShown] = useState(false);
   const [kawarpWasEnabled, setKawarpWasEnabled] = useState(kawarpEnabled);
   if (kawarpWasEnabled !== kawarpEnabled) {

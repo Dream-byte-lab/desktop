@@ -1,6 +1,5 @@
 import React, { Component, type ErrorInfo, type ReactNode } from "react";
 import { log } from "@/shared/utils/logger";
-import { telemetry } from "@/shared/telemetry";
 import RootErrorFallback from "./RootErrorFallback";
 
 export interface FallbackProps {
@@ -55,13 +54,6 @@ export class RootErrorBoundary extends Component<
     );
 
     this.props.onError?.(error, errorInfo);
-
-    telemetry
-      .reportError(error, {
-        componentStack: errorInfo.componentStack,
-        source: "React.RootErrorBoundary",
-      })
-      .catch(() => {});
   }
 
   resetErrorBoundary = (): void => {

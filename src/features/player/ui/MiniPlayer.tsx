@@ -15,7 +15,7 @@ import {
   RepeatOne,
   Shuffle,
 } from "@solar-icons/react";
-import { HeartFill, HeartLine } from "@mingcute/react";
+import { HeartFill, HeartLine, Text2Line } from "@mingcute/react";
 
 import { PlayerMorphIcon, ICON_PLAY, ICON_PAUSE } from "./morphPlayerIcons";
 
@@ -40,7 +40,8 @@ import { DjProToggle } from "@/features/mixer/ui/DjProView";
 import { SpeedPitchPicker } from "./SpeedPitchPicker";
 import { EqualizerPicker } from "./EqualizerPicker";
 import { isEqActive } from "../engine/equalizer";
-import { TimelineSlider, formatPlaybackTime } from "./TimelineSlider";
+import { TimelineSlider } from "./TimelineSlider";
+import { requestLyricsViewOpen } from "./lyricsOpenIntent";
 import { resolveBarExpanded, usePlayerBarSizeStore } from "./playerBarSize";
 import {
   NOW_PLAYING_ARTWORK_LAYOUT_ID,
@@ -614,8 +615,6 @@ function MiniPlayer({
         popupOpen,
       })
     : false;
-  const displayedPositionMs =
-    scrubRatio !== null ? scrubRatio * durationMs : player.positionMs;
 
   return (
     <div
@@ -691,9 +690,9 @@ function MiniPlayer({
       <div
         className={`${
           embedded
-            ? "absolute inset-x-0 bottom-0 flex flex-col transition-[height] duration-[210ms] ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none"
-            : "relative h-[64px]"
-        } w-full overflow-hidden cursor-pointer ${
+            ? "absolute inset-x-[12px] bottom-[8px] flex flex-col transition-[height] duration-[210ms] ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none"
+            : "relative mx-[12px] my-[4px] h-[56px]"
+        } overflow-hidden cursor-pointer shadow-[0_18px_48px_-12px_rgba(0,0,0,0.55)] ${
           usesRoundedStyle
             ? "rounded-full border-[0.5px] border-border-tertiary bg-bg-primary"
             : embedded
@@ -702,9 +701,9 @@ function MiniPlayer({
                     ? "bg-bg-glass backdrop-blur-[16px] backdrop-saturate-150"
                     : "bg-bg-primary"
                 }`
-              : "rounded-3xl border-[0.5px] border-border-tertiary bg-bg-primary"
+              : "rounded-[24px] border-[0.5px] border-border-tertiary bg-bg-primary"
         }`}
-        style={embedded ? { height: expanded ? 92 : 64 } : undefined}
+        style={embedded ? { height: expanded ? 84 : 56 } : undefined}
         onPointerDown={(e) => {
           if (e.button !== 0) return;
           const target = e.target as Element | null;
@@ -775,6 +774,7 @@ function MiniPlayer({
               durationMs={durationMs}
               onSeek={(pos) => playerEngine.seek(pos)}
               size="xs"
+              showTime
               fillColor={accentColorSolid || undefined}
               fillClassName={
                 !accentColorSolid
@@ -794,21 +794,116 @@ function MiniPlayer({
           </div>
         )}
         <div
-          className={`relative grid ${embedded ? "h-[64px] shrink-0" : "h-full"} pointer-events-none ${
-            embedded
-              ? // Fluid tracks, not fixed numbers: the track-info column
-                // may yield down to 200px and the toolbox column takes
-                // exactly the width its controls need. The old fixed
-                // 260px toolbox track was already full with upstream's
-                // buttons alone, so the added DJ/PRO toggles overflowed
-                // it and the card clipped the queue/expand buttons at
-                // every window size (Step 2, slice C).
-                "grid-cols-[minmax(200px,280px)_minmax(0,1fr)_auto]"
-              : "grid-cols-[286px_minmax(0,1fr)]"
-          } ${!usesRoundedStyle && !embedded ? "pb-[4px]" : ""}`}
+          className={`relative flex pointer-events-none ${
+            embedded ? "h-[56px] shrink-0" : "h-full"
+          } ${!embedded ? "pb-[14px]" : ""}`}
         >
+          {/* Transport cluster — the reference capsule's left-hand
+              group (Ref 29): shuffle, previous, the larger
+              play/pause, next, repeat, in that order. */}
           <div
-            className="flex h-full items-center gap-[16px] px-[18px] pt-[1px] pointer-events-none cursor-default"
+            className="flex h-full shrink-0 items-center gap-[2px] pl-[10px] pr-[4px] pointer-events-auto prevent-seek cursor-default"
+            onPointerDown={(e) => e.stopPropagation()}
+          >
+            <button
+              type="button"
+              aria-label="Shuffle"
+              title={
+                player.shuffle
+                  ? t("player.shuffle_on")
+                  : t("player.shuffle_off")
+              }
+              className={`${iconButtonClass} ${
+                player.shuffle ? activeToggleClass : ""
+              }`}
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={() => playerEngine.setShuffle(!player.shuffle)}
+            >
+              <Shuffle size={18} weight="Outline" />
+            </button>
+            <button
+              type="button"
+              aria-label="Previous track"
+              className={`${iconButtonClass} text-text-secondary hover:text-text-primary`}
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={() => {
+                void playerEngine.skipPrevious();
+              }}
+              style={{ cursor: "pointer" }}
+            >
+              <SkipPrevious size={18} weight="Bold" />
+            </button>
+            <button
+              type="button"
+              aria-label={isPlaying ? "Pause" : "Play"}
+              className="inline-flex h-[38px] w-[38px] items-center justify-center rounded-full bg-btn-primary-bg text-btn-primary-text transition-all duration-150 ease-out hover:scale-105 active:scale-[0.96] border-none cursor-pointer shadow-sm"
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={() => {
+                void playerEngine.togglePlayPause();
+              }}
+              style={{ cursor: "pointer" }}
+            >
+              {/* keep the morph icon mounted through the loading state
+                  (spinner overlays it) — swapping it out on "loading" would
+                  remount MorphIcon when the track starts, which skips the
+                  play -> pause morph animation. */}
+              <span className="relative flex h-[18px] w-[18px] items-center justify-center">
+                <span
+                  className={`absolute inset-0 flex items-center justify-center ${
+                    isLoading ? "opacity-0" : ""
+                  } transition-transform ${
+                    isPlaying ? "" : "translate-x-[0.5px]"
+                  }`}
+                >
+                  <PlayerMorphIcon
+                    icon={isPlaying ? ICON_PAUSE : ICON_PLAY}
+                    size={18}
+                  />
+                </span>
+                {isLoading && (
+                  <span
+                    className="absolute h-[18px] w-[18px] animate-spin rounded-full border-[2px] border-current border-t-transparent"
+                    aria-label="Loading playback"
+                  />
+                )}
+              </span>
+            </button>
+            <button
+              type="button"
+              aria-label="Next track"
+              className={`${iconButtonClass} text-text-secondary hover:text-text-primary`}
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={() => {
+                void playerEngine.skipNext();
+              }}
+              style={{ cursor: "pointer" }}
+            >
+              <SkipNext size={18} weight="Bold" />
+            </button>
+            <button
+              type="button"
+              aria-label={repeatLabel}
+              title={repeatLabel}
+              className={`${iconButtonClass} ${
+                player.repeat !== "off" ? activeToggleClass : ""
+              }`}
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={() =>
+                playerEngine.setRepeat(
+                  // radio has no repeat-all: it refills instead of looping
+                  nextRepeatMode(
+                    player.repeat,
+                    isRadioContext(player.playbackContext),
+                  ),
+                )
+              }
+            >
+              {repeatIcon}
+            </button>
+          </div>
+
+          <div
+            className="relative flex h-full min-w-0 items-center gap-[12px] px-[6px] pointer-events-none cursor-default"
             onContextMenu={handleTrackContextMenu}
           >
             {trackMenuPosition && (
@@ -835,7 +930,7 @@ function MiniPlayer({
               role="button"
               tabIndex={0}
               aria-label="Open player"
-              className={`relative h-[38px] w-[38px] shrink-0 overflow-hidden rounded-control bg-bg-elevated cursor-pointer pointer-events-auto prevent-seek ${
+              className={`relative h-[40px] w-[40px] shrink-0 overflow-hidden rounded-control bg-bg-elevated cursor-pointer pointer-events-auto prevent-seek ${
                 coverUrl && !isCoverLoaded ? "animate-pulse" : ""
               }`}
               style={{ borderRadius: 8 }}
@@ -846,21 +941,21 @@ function MiniPlayer({
                 key={coverUrl}
                 src={coverUrl}
                 alt="Track artwork"
-                width={38}
-                height={38}
+                width={40}
+                height={40}
                 priority
                 draggable={false}
                 onLoad={(e) => {
                   extractAccentColor(e.currentTarget as HTMLImageElement);
                 }}
-                className="h-[38px] w-[38px] object-cover rounded-control"
+                className="h-[40px] w-[40px] object-cover rounded-control"
               />
             </motion.div>
             <div className="flex min-w-0 flex-col pointer-events-none">
               <p
-                className="m-0 truncate text-[16px] font-[400] text-text-primary flex items-center gap-[6px] pointer-events-none"
+                className="m-0 truncate text-[14px] font-medium text-text-primary flex items-center gap-[6px] pointer-events-none"
                 style={{
-                  lineHeight: "18px",
+                  lineHeight: "17px",
                   letterSpacing: "0",
                 }}
               >
@@ -882,7 +977,7 @@ function MiniPlayer({
                 </span>
               </p>
               <p
-                className="m-0 mt-[4px] flex min-w-0 items-center gap-[5px] text-body font-[300] text-text-tertiary pointer-events-none"
+                className="m-0 mt-[2px] flex min-w-0 items-center gap-[5px] text-[13px] font-normal text-text-tertiary pointer-events-none"
                 style={{
                   lineHeight: "15px",
                 }}
@@ -928,53 +1023,11 @@ function MiniPlayer({
             )}
           </div>
 
-          <div
-            className={`flex h-full items-center pl-[10px] pr-[18px] pointer-events-none ${
-              embedded ? "col-start-3" : ""
-            }`}
-          >
+          <div className="ml-auto flex h-full shrink-0 items-center pr-[8px] pointer-events-none">
             <div
-              className={`ml-auto flex items-center gap-[2px] rounded-item p-[3px] pointer-events-auto prevent-seek cursor-default ${
-                hasPageBackdrop ? "bg-fill-subtle" : "bg-bg-elevated"
-              }`}
+              className="flex items-center gap-[2px] pointer-events-auto prevent-seek cursor-default"
               onPointerDown={(e) => e.stopPropagation()}
             >
-              <button
-                type="button"
-                aria-label="Shuffle"
-                title={
-                  player.shuffle
-                    ? t("player.shuffle_on")
-                    : t("player.shuffle_off")
-                }
-                className={`${iconButtonClass} ${
-                  player.shuffle ? activeToggleClass : ""
-                }`}
-                onPointerDown={(e) => e.stopPropagation()}
-                onClick={() => playerEngine.setShuffle(!player.shuffle)}
-              >
-                <Shuffle size={18} weight="Outline" />
-              </button>
-              <button
-                type="button"
-                aria-label={repeatLabel}
-                title={repeatLabel}
-                className={`${iconButtonClass} ${
-                  player.repeat !== "off" ? activeToggleClass : ""
-                }`}
-                onPointerDown={(e) => e.stopPropagation()}
-                onClick={() =>
-                  playerEngine.setRepeat(
-                    // radio has no repeat-all: it refills instead of looping
-                    nextRepeatMode(
-                      player.repeat,
-                      isRadioContext(player.playbackContext),
-                    ),
-                  )
-                }
-              >
-                {repeatIcon}
-              </button>
               <DjModeButton
                 className={iconButtonClass}
                 activeClassName={activeToggleClass}
@@ -1054,6 +1107,65 @@ function MiniPlayer({
                   />
                 </motion.div>
               </button>
+              <span
+                className="mx-[3px] h-[16px] w-px bg-border-toolbox-divider"
+                aria-hidden="true"
+              />
+              <button
+                type="button"
+                aria-label={t("player.lyrics_view.open")}
+                title={t("player.lyrics_view.open")}
+                className={iconButtonClass}
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={() => {
+                  setSpeedOpen(false);
+                  setEqOpen(false);
+                  setVolumeOpen(false);
+                  if (currentTrack && onFullscreenOpen) {
+                    // Land the Now Playing surface on its lyrics
+                    // view (the one-shot intent it consumes on
+                    // mount — see lyricsOpenIntent).
+                    requestLyricsViewOpen();
+                    onFullscreenOpen();
+                  } else {
+                    onFullscreenOpen?.();
+                  }
+                }}
+                style={{ cursor: "pointer" }}
+              >
+                <Text2Line size={18} />
+              </button>
+              <button
+                type="button"
+                aria-label={t("player.queue")}
+                title={t("player.queue")}
+                className={iconButtonClass}
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={() => {
+                  setSpeedOpen(false);
+                  setEqOpen(false);
+                  setVolumeOpen(false);
+                  onQueueToggle?.();
+                }}
+                style={{ cursor: "pointer" }}
+              >
+                <Sidebar size={18} weight="Outline" />
+              </button>
+              <button
+                type="button"
+                aria-label={t("player.open_player")}
+                title={t("player.open_player")}
+                className={iconButtonClass}
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={() => {
+                  setSpeedOpen(false);
+                  setEqOpen(false);
+                  setVolumeOpen(false);
+                  onFullscreenOpen?.();
+                }}
+              >
+                <MaximizeSquare3 size={18} weight="Outline" />
+              </button>
               <button
                 ref={volumeToggleRef}
                 type="button"
@@ -1089,41 +1201,6 @@ function MiniPlayer({
                   <VolumeLoud size={18} weight="Outline" />
                 )}
               </button>
-              <button
-                type="button"
-                aria-label={t("player.open_player")}
-                title={t("player.open_player")}
-                className={iconButtonClass}
-                onPointerDown={(e) => e.stopPropagation()}
-                onClick={() => {
-                  setSpeedOpen(false);
-                  setEqOpen(false);
-                  setVolumeOpen(false);
-                  onFullscreenOpen?.();
-                }}
-              >
-                <MaximizeSquare3 size={18} weight="Outline" />
-              </button>
-              <span
-                className="mx-[3px] h-[16px] w-px bg-border-toolbox-divider"
-                aria-hidden="true"
-              />
-              <button
-                type="button"
-                aria-label={t("player.queue")}
-                title={t("player.queue")}
-                className={iconButtonClass}
-                onPointerDown={(e) => e.stopPropagation()}
-                onClick={() => {
-                  setSpeedOpen(false);
-                  setEqOpen(false);
-                  setVolumeOpen(false);
-                  onQueueToggle?.();
-                }}
-                style={{ cursor: "pointer" }}
-              >
-                <Sidebar size={18} weight="Outline" />
-              </button>
             </div>
           </div>
         </div>
@@ -1138,7 +1215,7 @@ function MiniPlayer({
               durationMs={durationMs}
               onSeek={(pos) => playerEngine.seek(pos)}
               size="xs"
-              showTime={false}
+              showTime
               fillColor={accentColorSolid || undefined}
               fillClassName={
                 !accentColorSolid
@@ -1157,83 +1234,6 @@ function MiniPlayer({
             />
           </div>
         )}
-
-        <div
-          className={`pointer-events-none absolute flex items-center justify-center ${
-            embedded ? "inset-x-0 top-0 h-[64px]" : "inset-0"
-          }`}
-        >
-          <div
-            className="pointer-events-auto flex items-center gap-[8px] prevent-seek cursor-default"
-            onPointerDown={(e) => e.stopPropagation()}
-          >
-            <span className="text-[11px] tabular-nums text-text-tertiary w-[36px] shrink-0 text-right pr-[6px]">
-              {formatPlaybackTime(displayedPositionMs)}
-            </span>
-            <button
-              type="button"
-              aria-label="Previous track"
-              className={`${iconButtonClass} text-text-secondary hover:text-text-primary`}
-              onPointerDown={(e) => e.stopPropagation()}
-              onClick={() => {
-                void playerEngine.skipPrevious();
-              }}
-              style={{ cursor: "pointer" }}
-            >
-              <SkipPrevious size={18} weight="Bold" />
-            </button>
-            <button
-              type="button"
-              aria-label={isPlaying ? "Pause" : "Play"}
-              className="inline-flex h-[34px] w-[34px] items-center justify-center rounded-full bg-btn-primary-bg text-btn-primary-text transition-all duration-150 ease-out hover:scale-105 active:scale-[0.96] border-none cursor-pointer shadow-sm"
-              onPointerDown={(e) => e.stopPropagation()}
-              onClick={() => {
-                void playerEngine.togglePlayPause();
-              }}
-              style={{ cursor: "pointer" }}
-            >
-              {/* keep the morph icon mounted through the loading state
-                  (spinner overlays it) — swapping it out on "loading" would
-                  remount MorphIcon when the track starts, which skips the
-                  play -> pause morph animation. */}
-              <span className="relative flex h-[16px] w-[16px] items-center justify-center">
-                <span
-                  className={`absolute inset-0 flex items-center justify-center ${
-                    isLoading ? "opacity-0" : ""
-                  } transition-transform ${
-                    isPlaying ? "" : "translate-x-[0.5px]"
-                  }`}
-                >
-                  <PlayerMorphIcon
-                    icon={isPlaying ? ICON_PAUSE : ICON_PLAY}
-                    size={16}
-                  />
-                </span>
-                {isLoading && (
-                  <span
-                    className="absolute h-[16px] w-[16px] animate-spin rounded-full border-[2px] border-current border-t-transparent"
-                    aria-label="Loading playback"
-                  />
-                )}
-              </span>
-            </button>
-            <button
-              type="button"
-              aria-label="Next track"
-              className={`${iconButtonClass} text-text-secondary hover:text-text-primary`}
-              onPointerDown={(e) => e.stopPropagation()}
-              onClick={() => {
-                void playerEngine.skipNext();
-              }}
-              style={{ cursor: "pointer" }}
-            >
-              <SkipNext size={18} weight="Bold" />
-            </button>
-            <span className="text-[11px] tabular-nums text-text-tertiary w-[36px] shrink-0 text-left pl-[6px]">
-              {formatPlaybackTime(durationMs)}
-            </span>
-          </div>
-        </div>
       </div>
     </div>
   );

@@ -554,12 +554,6 @@
       "resume": "Letzte Warteschlange fortsetzen",
       "empty": "Leer starten"
     },
-    "telemetry": {
-      "title": "Anonyme Telemetrie & Diagnose",
-      "description": "Hilft dabei, Wiedergabefehler, Pufferunterbrechungen und Netzwerkprobleme zu erkennen und zu beheben. Es werden niemals persönliche Daten, Tokens, Passwörter oder lokale Dateipfade erfasst.",
-      "enabled": "Anonyme Telemetrie aktiviert",
-      "disabled": "Telemetrie vollständig deaktiviert"
-    },
     "cache": {
       "title": "Cache & Speicher",
       "description": "Verwalte Anwendungsdaten, um Speicherplatz freizugeben oder Synchronisierungsprobleme zu beheben.",

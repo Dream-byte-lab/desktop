@@ -375,6 +375,98 @@ describe("derivations", () => {
   });
 });
 
+describe("artist ids — the space surfaces' doors", () => {
+  it("carries the top artist's id from a counted play's artist list", () => {
+    const stats = aggregate({ serverItems: [serverItem()] });
+    // contractTrack's artist is "Ama Artist" with id "a-Ama Artist".
+    expect(stats.topArtists[0]).toMatchObject({
+      name: "Ama Artist",
+      artistId: "a-Ama Artist",
+    });
+  });
+
+  it("pairs a joined-string name with the track's primary artistId", () => {
+    const stats = aggregate({
+      deviceRecords: [
+        deviceRecord({
+          track: {
+            ...clientTrack("solo-1", "Solo Name"),
+            artistList: undefined,
+            artistId: "a-solo",
+          },
+        }),
+      ],
+    });
+    expect(stats.topArtists[0]).toMatchObject({
+      name: "Solo Name",
+      artistId: "a-solo",
+    });
+  });
+
+  it("leaves the artist unresolved when no counted play carries a usable id", () => {
+    const stats = aggregate({
+      deviceRecords: [
+        deviceRecord({
+          track: {
+            ...clientTrack("myst-1", "Mystery"),
+            artistList: [{ id: "unknown", name: "Mystery" }],
+            artistId: undefined,
+          },
+        }),
+      ],
+    });
+    expect(stats.topArtists[0].name).toBe("Mystery");
+    expect(stats.topArtists[0].artistId).toBeUndefined();
+  });
+
+  it("resolves from an older counted play when the newest carries no id", () => {
+    const stats = aggregate({
+      deviceRecords: [
+        deviceRecord({
+          track: {
+            ...clientTrack("noid-1", "Ama Artist"),
+            artistList: [{ id: "", name: "Ama Artist" }],
+            artistId: undefined,
+          },
+          listenedAtMs: NOW - HOUR,
+        }),
+        deviceRecord({
+          track: clientTrack("withid-1", "Ama Artist"),
+          listenedAtMs: NOW - 2 * HOUR,
+        }),
+      ],
+    });
+    expect(stats.topArtists[0]).toMatchObject({
+      name: "Ama Artist",
+      plays: 2,
+      artistId: "a-Ama Artist",
+    });
+  });
+
+  it("carries ids on artist movement entries, never on genre entries", () => {
+    const stats = aggregate({
+      serverItems: [
+        serverItem({
+          track: contractTrack("mv-1") as PlaybackHistoryItem["track"],
+          listenedAt: new Date(NOW - DAY).toISOString(),
+        }),
+        serverItem({
+          track: contractTrack("mv-2") as PlaybackHistoryItem["track"],
+          listenedAt: new Date(NOW - 30 * DAY).toISOString(),
+        }),
+      ],
+      labelsFor: () => ({ playlistGenres: ["Amapiano"], genres: [] }),
+    });
+    expect(stats.movement).not.toBeNull();
+    expect(stats.movement!.artists[0]).toMatchObject({
+      label: "Ama Artist",
+      artistId: "a-Ama Artist",
+    });
+    expect(stats.movement!.playlistGenres[0].label).toBe("Amapiano");
+    expect(stats.movement!.playlistGenres[0].artistId).toBeUndefined();
+  });
+});
+
 describe("days, streaks and the calendar across DST", () => {
   // America/New_York sprang forward on 2026-03-08: that local day
   // is 23 hours long. Buckets are local days, stated.

@@ -24,6 +24,7 @@
 // parameter — the hooks do the fetching and the clocks.
 
 import { toClientTrack } from "@/shared/api";
+import { isArtistId } from "@/features/artist/lib/artistResolver";
 import type { PlaybackHistoryItem } from "@/shared/contracts/history";
 import type { CachedPlayEventRecord } from "@/shared/storage/linerDb";
 import type { Track } from "@/shared/types";
@@ -216,6 +217,13 @@ export interface RankedArtist {
   plays: number;
   /** Cover of this artist's most recent counted play, for the portrait row. */
   coverUrl: string;
+  /**
+   * The primary artist's id, taken from a counted play of this
+   * artist — the portrait's door to the artist page. Absent when no
+   * counted play carried a usable id; the surface then renders the
+   * portrait without a link rather than guessing a target.
+   */
+  artistId?: string;
 }
 
 export interface RankedTrack {
@@ -230,6 +238,11 @@ export interface RankedLabel {
 
 export interface MovementEntry {
   label: string;
+  /**
+   * Artist entries only: the primary artist's id, under the same
+   * rule as RankedArtist.artistId. Genre entries never carry one.
+   */
+  artistId?: string;
   currentPlays: number;
   previousPlays: number;
   /** Null when the label fell out of the current window's ranking. */
@@ -286,6 +299,22 @@ function artistNameOf(track: Track): string {
   return track.artists;
 }
 
+/**
+ * The id that pairs with artistNameOf(track)'s name, resolved under
+ * the same rule that produced the name: when the name came from the
+ * track's artist list, the id is that entry's; when it came from the
+ * joined artist string, the id is the track's primary artistId. An
+ * id counts only under the artist feature's own rule (isArtistId) —
+ * anything else means this play cannot resolve the artist's page.
+ */
+function primaryArtistIdOf(track: Track): string | undefined {
+  const listed = track.artistList?.[0];
+  if (listed?.name && listed.name.trim().length > 0) {
+    return isArtistId(listed.id) ? listed.id : undefined;
+  }
+  return isArtistId(track.artistId) ? track.artistId : undefined;
+}
+
 function rankLabels(counts: Map<string, number>): RankedLabel[] {
   return [...counts.entries()]
     .map(([label, plays]) => ({ label, plays }))
@@ -296,6 +325,7 @@ function movementFor(
   current: Map<string, number>,
   previous: Map<string, number>,
   limit: number,
+  ids?: ReadonlyMap<string, string>,
 ): MovementEntry[] {
   const rankOf = (counts: Map<string, number>) => {
     const order = [...counts.entries()].sort(
@@ -316,8 +346,10 @@ function movementFor(
       (previousRank === undefined || previousRank > limit)
     )
       continue;
+    const artistId = ids?.get(label);
     entries.push({
       label,
+      ...(artistId ? { artistId } : {}),
       currentPlays: current.get(label) ?? 0,
       previousPlays: previous.get(label) ?? 0,
       currentRank: currentRank ?? null,
@@ -350,7 +382,10 @@ export function aggregateListeningStats(input: AggregateInput): ListeningStats {
     loopCount += Math.max(0, event.loopCount);
   }
 
-  const artistCounts = new Map<string, { plays: number; coverUrl: string }>();
+  const artistCounts = new Map<
+    string,
+    { plays: number; coverUrl: string; artistId?: string }
+  >();
   const trackCounts = new Map<
     string,
     { track: Track; plays: number; lastAt: number }
@@ -370,8 +405,15 @@ export function aggregateListeningStats(input: AggregateInput): ListeningStats {
     const artist = artistCounts.get(name);
     if (artist) {
       artist.plays += 1;
+      // The first counted play carrying a usable id resolves the
+      // artist's page; a play without one never blocks a later one.
+      if (!artist.artistId) artist.artistId = primaryArtistIdOf(event.track);
     } else {
-      artistCounts.set(name, { plays: 1, coverUrl: event.track.coverUrl });
+      artistCounts.set(name, {
+        plays: 1,
+        coverUrl: event.track.coverUrl,
+        artistId: primaryArtistIdOf(event.track),
+      });
     }
 
     const seen = trackCounts.get(event.track.id);
@@ -416,7 +458,12 @@ export function aggregateListeningStats(input: AggregateInput): ListeningStats {
   }
 
   const topArtists: RankedArtist[] = [...artistCounts.entries()]
-    .map(([name, v]) => ({ name, plays: v.plays, coverUrl: v.coverUrl }))
+    .map(([name, v]) => ({
+      name,
+      plays: v.plays,
+      coverUrl: v.coverUrl,
+      ...(v.artistId ? { artistId: v.artistId } : {}),
+    }))
     .sort((a, b) => b.plays - a.plays || a.name.localeCompare(b.name))
     .slice(0, 10);
 
@@ -468,12 +515,16 @@ export function aggregateListeningStats(input: AggregateInput): ListeningStats {
     }
   }
 
+  const artistIds = new Map<string, string>();
+  for (const [name, v] of artistCounts) {
+    if (v.artistId) artistIds.set(name, v.artistId);
+  }
   const hasCurrent = [...curArtists.values()].some((n) => n > 0);
   const hasPrevious = [...prevArtists.values()].some((n) => n > 0);
   const movement: ListeningMovement | null =
     hasCurrent && hasPrevious
       ? {
-          artists: movementFor(curArtists, prevArtists, 5),
+          artists: movementFor(curArtists, prevArtists, 5, artistIds),
           playlistGenres: movementFor(curGenres, prevGenres, 5),
         }
       : null;

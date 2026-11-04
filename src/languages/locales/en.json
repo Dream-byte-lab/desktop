@@ -972,12 +972,6 @@
       "resume": "Resume last queue",
       "empty": "Start empty"
     },
-    "telemetry": {
-      "title": "Anonymous Telemetry & Diagnostics",
-      "description": "Helps identify and fix playback errors, buffering stalls, and network issues. Never collects personal data, tokens, passwords, or local file paths.",
-      "enabled": "Anonymous telemetry enabled",
-      "disabled": "Telemetry completely disabled"
-    },
     "cache": {
       "title": "Cache & Storage",
       "description": "Manage application data to free up space or resolve sync issues.",
@@ -1581,6 +1575,8 @@
     "issue_youtube_refused_desc": "This often happens with a VPN or proxy. Switch VPN server or turn it off, then try again.",
     "issue_server_title": "Linerave's servers aren't responding",
     "issue_server_desc": "Your internet works, but Linerave can't reach its servers. Music saved on this device still plays.",
+    "issue_server_unreachable_title": "No answer from Linerave's servers",
+    "issue_server_unreachable_desc": "Your internet works, but the servers didn't answer this time — they may just be slow right now. Music saved on this device still plays.",
     "issue_offline_title": "You're offline",
     "issue_offline_desc": "Check your internet connection. Music saved on this device still plays.",
     "try_again": "Try again",

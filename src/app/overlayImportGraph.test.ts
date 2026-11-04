@@ -48,7 +48,6 @@ describe("overlay window bundle", () => {
     "features/settings/ui/",
     "features/library/",
     "features/lyrics/",
-    "shared/telemetry/",
   ])("never pulls in %s", (heavy) => {
     expect(graph.filter((file) => file.startsWith(heavy))).toEqual([]);
   });

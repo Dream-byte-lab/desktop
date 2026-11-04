@@ -53,14 +53,9 @@ import {
 import { TouchBarManager } from "./touchbar.js";
 import { registerAuthSessionIpc } from "./auth-session-ipc.js";
 import { registerPartyIpc } from "./liverave/ipc.js";
-import { initStartupLog, slog } from "./startupLog.js";
 import { ThumbarController } from "./thumbar.js";
 import { OverlayManager } from "./overlay.js";
 import { detectCompositor } from "./compositor/index.js";
-import {
-  BUNDLE_UPDATES_DISABLED_FOR_LINERAVE,
-  BundleManager,
-} from "./bundle-manager.js";
 import { LineraveBundleChannel } from "./linerave-bundle-channel.js";
 import { createBundleErrorStamp } from "./bundle-stamp.js";
 import { createSleepBlocker } from "./sleep-blocker.js";
@@ -88,10 +83,6 @@ import {
   setupSavedTracks,
 } from "./saved-tracks/ipc.js";
 import { setupNetProbe } from "./netprobe/ipc.js";
-import {
-  installNetSimulation,
-  simulatedResponseStatus,
-} from "./netsim/install.js";
 import { registerLocalTrackScheme } from "./local-tracks/protocol.js";
 import { attachZoomControls } from "./zoom.js";
 import {
@@ -118,19 +109,7 @@ process.on("unhandledRejection", (reason) => {
 // deliberately NOT reinstated: they were the original "window never
 // presents" suspects on ARM/Qualcomm stacks, and the proven launch
 // root cause was the packaged frontend's asset base (fixed in the
-// vite config), not GPU selection. The startup log stays: it is the
-// flight recorder and costs nothing at use time (startup/event-only
-// call sites), so a silent launch failure still leaves evidence.
-initStartupLog();
-slog(
-  "startup: GPU acceleration enabled (Chromium defaults), startup log active",
-);
-process.on("uncaughtException", (error) =>
-  slog(`uncaught exception: ${String(error)}`),
-);
-process.on("unhandledRejection", (reason) =>
-  slog(`unhandled rejection: ${String(reason)}`),
-);
+// vite config), not GPU selection.
 // forces resilient http/1.1 to prevent chromium err_http2_ping_failed on dropped network frames
 app.commandLine.appendSwitch("disable-http2");
 const linuxPasswordStore = resolveLinuxPasswordStoreSync();
@@ -158,7 +137,6 @@ let touchBarManager: TouchBarManager | null = null;
 let overlayManager: OverlayManager | null = null;
 let thumbar: ThumbarController | null = null;
 let keepPlaying: ReturnType<typeof createKeepPlayingController> | null = null;
-let bundleManager: BundleManager | null = null;
 let lineraveBundles: LineraveBundleChannel | null = null;
 let discordRpcManager: DiscordRpcManager | null = null;
 let poTokenService: PoTokenService | null = null;
@@ -479,15 +457,19 @@ function createWindow() {
   const bundleErrorStamp = createBundleErrorStamp(
     {
       getVersionInfo: () => {
-        const active = bundleManager?.getActiveState();
+        const active = lineraveBundles?.getState().active ?? null;
         return {
           version: active?.bundleVersion || app.getVersion(),
           isOta: Boolean(active),
           sha256: active?.sha256 || null,
         };
       },
-      peekUpdate: async () =>
-        bundleManager ? bundleManager.peekUpdate() : { kind: "inactive" },
+      // LINERAVE: upstream's OTA bundle manager is removed; the stamp
+      // reports the app version plus our signed channel's active bundle.
+      // Release updates run through electron-updater, a separate channel,
+      // so the update half reads "latest" — the same value the disabled
+      // manager's peekUpdate always short-circuited to in this fork.
+      peekUpdate: async () => ({ kind: "latest" }),
     },
     { emit: (line) => mainWindow?.webContents.send("bundle:stamp", line) },
   );
@@ -513,41 +495,27 @@ function createWindow() {
   if (process.env.VITE_DEV_SERVER_URL) {
     mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL);
   } else {
-    bundleManager = new BundleManager({
-      defaultRendererDist: RENDERER_DIST,
-    });
-    bundleManager.setMainWindow(mainWindow);
     // LINERAVE, deliberate: upstream awaits a network update check
     // (updateBeforeLaunch) before loading the first screen, so a hanging
-    // fetch can leave the window blank forever — and upstream's OTA
-    // bundle channel is disabled for Linerave in any case (SA-1). This
-    // build therefore skips that gate: it logs what the bundle system
-    // would have served, then loads the built-in screen (or our own
-    // signed channel's staged frontend, resolved below) directly.
-    slog(
-      `bundle would serve: ${bundleManager.getEffectiveIndexPath()} (userData: ${app.getPath("userData")})`,
-    );
+    // fetch can leave the window blank forever. Upstream's OTA bundle
+    // manager is removed in this fork (SA-1); this build loads the
+    // built-in screen (or our own signed channel's staged frontend,
+    // resolved below) directly.
     const embeddedIndex = path.join(RENDERER_DIST, "index.html");
     // LINERAVE STEP 3: our own signed bundle channel may have a verified
-    // frontend staged/active — serve it; upstream's channel above stays
-    // gated off. resolveIndexPath() also performs rollback of a bundle
+    // frontend staged/active — serve it; upstream's channel is removed.
+    // resolveIndexPath() also performs rollback of a bundle
     // whose previous boot was never confirmed healthy.
     lineraveBundles = new LineraveBundleChannel({
       defaultRendererDist: RENDERER_DIST,
     });
     const lineraveIndex = lineraveBundles.resolveIndexPath();
-    slog(
-      lineraveIndex
-        ? `loading Linerave bundle frontend: ${lineraveIndex}`
-        : `loading embedded frontend instead: ${embeddedIndex}`,
-    );
     // LINERAVE STEP 3: a freshly applied bundle must prove a healthy
     // boot — loaded and still alive after a grace period, or closed
     // cleanly after loading — or the next launch rolls back to
     // last-good automatically (see linerave-bundle-channel.ts).
     let lineraveRendererLoaded = false;
     mainWindow.webContents.on("did-finish-load", () => {
-      slog("renderer: did-finish-load");
       lineraveRendererLoaded = true;
       setTimeout(() => {
         if (mainWindow && !mainWindow.isDestroyed()) {
@@ -558,21 +526,10 @@ function createWindow() {
     mainWindow.on("closed", () => {
       if (lineraveRendererLoaded) lineraveBundles?.confirmBootHealthy();
     });
-    mainWindow.webContents.on("did-fail-load", (_event, code, description) =>
-      slog(`renderer: did-fail-load ${code} ${description}`),
-    );
-    mainWindow.webContents.on("render-process-gone", (_event, details) =>
-      slog(
-        `renderer: render-process-gone reason=${details.reason} exit=${details.exitCode}`,
-      ),
-    );
-    void mainWindow
-      .loadFile(lineraveIndex ?? embeddedIndex)
-      .catch((error) => slog(`loadFile rejected: ${String(error)}`));
+    void mainWindow.loadFile(lineraveIndex ?? embeddedIndex).catch(() => {});
   }
 
   mainWindow.once("ready-to-show", () => {
-    slog("window: ready-to-show — showing");
     mainWindow?.show();
     mainWindow?.focus();
   });
@@ -662,7 +619,6 @@ if (!gotTheLock) {
     const savedTracks = createSavedTrackLibrary();
     setupLocalTracks(savedTracks);
     setupSavedTracks(savedTracks);
-    installNetSimulation(session.defaultSession);
     setupNetProbe();
     touchBarManager = new TouchBarManager(
       path.join(__dirname, "preload.cjs"),
@@ -710,7 +666,6 @@ if (!gotTheLock) {
     overlayManager.setIndexPathResolver(
       () =>
         lineraveBundles?.getActiveIndexPath() ??
-        bundleManager?.getEffectiveIndexPath() ??
         path.join(RENDERER_DIST, "index.html"),
     );
     overlayManager.setMainWindow(mainWindow);
@@ -1005,16 +960,7 @@ if (!gotTheLock) {
             keepsOwnCors(details.url, !app.isPackaged),
           )
         : {};
-      const statusLine = simulatedResponseStatus(details.url, details.method);
-      callback(
-        statusLine
-          ? {
-              responseHeaders: details.responseHeaders,
-              ...cors,
-              statusLine,
-            }
-          : cors,
-      );
+      callback(cors);
     });
 
     let lastSavedExportPath: string | null = null;
@@ -2096,47 +2042,40 @@ if (!gotTheLock) {
     });
 
     // OTA bundle updater IPC handlers
-    // LINERAVE: while BUNDLE_UPDATES_DISABLED_FOR_LINERAVE is set, these
-    // answer exactly like the "no bundle manager" (dev mode) path, so the
-    // renderer's settings UI sees the same inactive shapes. The manager's
-    // own entry points refuse as well (defence in depth).
+    // LINERAVE: upstream's OTA bundle manager is removed (SA-1). These
+    // handlers keep answering the inactive shapes the renderer's settings
+    // UI has always seen in this fork (the disabled manager never served
+    // an update), and the status handler reports our own signed channel's
+    // active bundle, falling back to the app version and embedded index.
     ipcMain.handle("bundle:check", async () => {
-      if (!bundleManager || BUNDLE_UPDATES_DISABLED_FOR_LINERAVE) {
-        return {
-          available: false,
-          error: "Bundle updater inactive (dev mode)",
-        };
-      }
-      return await bundleManager.checkForUpdates();
+      return {
+        available: false,
+        error: "Bundle updater inactive (dev mode)",
+      };
     });
 
-    ipcMain.handle("bundle:download-and-install", async (_event, manifest) => {
-      if (!bundleManager || BUNDLE_UPDATES_DISABLED_FOR_LINERAVE) {
-        return { success: false, error: "Bundle updater inactive (dev mode)" };
-      }
-      return await bundleManager.downloadAndInstall(manifest);
+    ipcMain.handle("bundle:download-and-install", async () => {
+      return { success: false, error: "Bundle updater inactive (dev mode)" };
     });
 
     ipcMain.handle("bundle:hot-swap", () => {
-      if (!bundleManager || BUNDLE_UPDATES_DISABLED_FOR_LINERAVE) return false;
-      return bundleManager.hotSwap();
+      return false;
     });
 
     ipcMain.handle("bundle:rollback", () => {
-      if (!bundleManager || BUNDLE_UPDATES_DISABLED_FOR_LINERAVE) return false;
-      return bundleManager.rollback();
+      return false;
     });
 
     ipcMain.handle("bundle:get-status", () => {
-      const activeState = bundleManager?.getActiveState?.() || null;
+      const active = lineraveBundles?.getState().active ?? null;
       return {
         appVersion: app.getVersion(),
-        bundleVersion: activeState?.bundleVersion || app.getVersion(),
-        isOta: Boolean(activeState),
-        sha256: activeState?.sha256 || null,
-        effectivePath: bundleManager
-          ? bundleManager.getEffectiveIndexPath()
-          : RENDERER_DIST,
+        bundleVersion: active?.bundleVersion || app.getVersion(),
+        isOta: Boolean(active),
+        sha256: active?.sha256 || null,
+        effectivePath:
+          lineraveBundles?.getActiveIndexPath() ??
+          path.join(RENDERER_DIST, "index.html"),
       };
     });
 
@@ -2173,19 +2112,6 @@ if (!gotTheLock) {
         },
         6 * 60 * 60 * 1000,
       );
-
-      // check for OTA bundles every 15 minutes silently in background
-      // LINERAVE: never armed — BUNDLE_UPDATES_DISABLED_FOR_LINERAVE
-      // (the manager's checkForUpdates would refuse anyway; don't even
-      // schedule the timer in this fork).
-      if (!BUNDLE_UPDATES_DISABLED_FOR_LINERAVE) {
-        setInterval(
-          () => {
-            bundleManager?.checkForUpdates().catch(() => {});
-          },
-          15 * 60 * 1000,
-        );
-      }
     }
 
     app.on("activate", () => {

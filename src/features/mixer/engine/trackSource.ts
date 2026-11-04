@@ -138,6 +138,13 @@ async function deepen(
   samples: Float32Array,
   sampleRate: number,
 ): Promise<void> {
+  // Note 29: do not spend a deep pass on an entry the bounded
+  // prepared map has already evicted — under heavy preparation an
+  // entry can churn out between its preparation and this call
+  // (the fast-landing continuations above call deepen late). The
+  // landing check below has always guarded the write; this start
+  // check saves the worker pass itself.
+  if (prepared.get(entry.track.id) !== entry) return;
   try {
     const deep = await analyseSamplesOffThread(samples, sampleRate, {
       depth: "deep",

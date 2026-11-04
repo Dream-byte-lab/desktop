@@ -1,6 +1,6 @@
 {
   "name": "linerave",
-  "version": "0.1.15",
+  "version": "0.1.16",
   "type": "module",
   "private": true,
   "description": "Linerave \u2014 a DJ edition built on Liner",
@@ -114,7 +114,6 @@
     ]
   },
   "dependencies": {
-    "@braccato/core": "^1.16.13",
     "@braccato/parsers": "^0.4.0",
     "@fontsource-variable/inter": "^5.3.0",
     "@mingcute/react": "^1.4.1",
@@ -138,7 +137,6 @@
     "react-dom": "19.3.1",
     "react-icons": "^5.6.0",
     "react-router-dom": "^7.18.4",
-    "solar-icons": "^0.0.15",
     "soundtouchjs": "^0.3.0",
     "tailwind-merge": "^3.7.0",
     "tar": "^7.5.22",

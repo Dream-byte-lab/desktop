@@ -1,7 +1,6 @@
 import { ipcMain, net } from "electron";
 import type { NetProbeResult } from "./types";
 import { youtubeFailureOf, type ProbeOutcome } from "./outcome.js";
-import { activeNetSimulation } from "../netsim/install.js";
 
 const PROBE_TIMEOUT_MS = 5000;
 const COUNTRY_RE = /^loc=([A-Z]{2})$/m;
@@ -41,9 +40,7 @@ export async function probeNetwork(): Promise<NetProbeResult> {
     internet: okStatus(google, 204) || cloudflareOk,
     youtube: okStatus(youtube, 204),
     youtubeFailure: youtubeFailureOf(youtube),
-    country:
-      activeNetSimulation()?.country ??
-      (cloudflareOk ? (COUNTRY_RE.exec(traceBody)?.[1] ?? null) : null),
+    country: cloudflareOk ? (COUNTRY_RE.exec(traceBody)?.[1] ?? null) : null,
   };
 }
 

@@ -1,7 +1,6 @@
 import { usePlayerStore } from "../store/playerStore";
 import { ApiError } from "@/shared/api";
 import { log } from "@/shared/utils/logger";
-import { telemetry } from "@/shared/telemetry";
 import { linerDb, audioCache } from "@/shared/storage";
 import { isStandaloneAudioFile } from "@/shared/storage/audioFormat";
 import type { Track } from "@/shared/types";
@@ -87,9 +86,7 @@ export class PlayerRuntime {
   private loadAbortController: AbortController | null = null;
   private isResetting = false;
   private fadeTimer: ReturnType<typeof setTimeout> | null = null;
-  private stallStartTime: number | null = null;
   private loadStartTime = 0;
-  private ttfbMs = 0;
   private activePlayPromise: Promise<void> | null = null;
   private activeBlobUrl: string | null = null;
   private releaseActiveStream: (() => void) | null = null;
@@ -395,7 +392,6 @@ export class PlayerRuntime {
     audioEl.addEventListener("waiting", () => {
       if (this.isResetting || audioEl !== this.audio) return;
       log("yellow", "audio", "buffering (waiting)");
-      this.stallStartTime = performance.now();
       if (this.waitingTimer) clearTimeout(this.waitingTimer);
       this.waitingTimer = setTimeout(() => {
         this.waitingTimer = null;
@@ -440,19 +436,6 @@ export class PlayerRuntime {
       if (this.recoveryHoldUntilMs === null) this.recoveryAttempts = 0;
       this.applyPlaybackRateAndPitch();
 
-      if (this.stallStartTime !== null) {
-        const stallDurationMs = Math.round(
-          performance.now() - this.stallStartTime,
-        );
-        if (stallDurationMs > 400) {
-          telemetry.trackPlaybackHealth("STALL_BUFFERING", {
-            trackId: this.currentTrackId || undefined,
-            stallDurationMs,
-          });
-        }
-        this.stallStartTime = null;
-      }
-
       if (!this.currentTrackId || audioEl.paused) return;
       const currentStatus = usePlayerStore.getState().status;
       if (currentStatus !== "paused") {
@@ -490,24 +473,6 @@ export class PlayerRuntime {
         audioEl.src,
       );
       log("red", "audio", `error (code ${code}): ${message}`);
-
-      const isDecode =
-        code ===
-          (typeof MediaError !== "undefined"
-            ? MediaError.MEDIA_ERR_DECODE
-            : 3) ||
-        code ===
-          (typeof MediaError !== "undefined"
-            ? MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED
-            : 4);
-
-      if (isDecode) {
-        telemetry.trackPlaybackHealth("MEDIA_DECODE_ERROR", {
-          trackId: this.currentTrackId || undefined,
-          errorMessage: message,
-          details: { mediaErrorCode: code },
-        });
-      }
 
       if (this.attachedFromLiner) {
         this.attachedFromLiner = false;
@@ -1609,7 +1574,6 @@ export class PlayerRuntime {
       const stream = await resolvePlaybackStream(track, controller.signal, {
         progressive: true,
       });
-      this.ttfbMs = Math.round(performance.now() - this.loadStartTime);
 
       if (epoch !== this.loadEpoch || controller.signal.aborted) {
         stream.release?.();
@@ -1676,14 +1640,6 @@ export class PlayerRuntime {
         this.cacheAudioInBackground(track, stream, bgCacheController.signal);
       }
       logNowPlaying(track, false, audioStartLatencyMs);
-
-      telemetry.trackPlaybackHealth("INIT_LATENCY", {
-        trackId: track.id,
-        codec: streamCodec,
-        bitrate: streamBitrate,
-        timeToFirstByteMs: this.ttfbMs,
-        audioStartLatencyMs,
-      });
     } catch (error) {
       if (epoch !== this.loadEpoch || controller.signal.aborted) {
         return;
@@ -1724,14 +1680,6 @@ export class PlayerRuntime {
       console.error("[LoadAndPlayError]", track.id, error);
       log("red", "playback", `failed: ${message}`);
       usePlayerStore.getState().setStatus("error", message);
-
-      telemetry
-        .reportError(error, {
-          action: "playback_failed",
-          trackId: track.id,
-          title: track.title,
-        })
-        .catch(() => {});
 
       this.onError?.({ trackId: track.id, message });
     } finally {

@@ -613,12 +613,6 @@
       "resume": "Wznów ostatnią kolejkę",
       "empty": "Zacznij od pustej"
     },
-    "telemetry": {
-      "title": "Anonimowa telemetria i diagnostyka",
-      "description": "Pomaga wykrywać i naprawiać błędy odtwarzania, przestoje buforowania i problemy z siecią. Nigdy nie zbiera danych osobowych, tokenów, haseł ani ścieżek do plików lokalnych.",
-      "enabled": "Anonimowa telemetria włączona",
-      "disabled": "Telemetria całkowicie wyłączona"
-    },
     "cache": {
       "title": "Pamięć podręczna",
       "description": "Zarządzaj danymi aplikacji, aby zwolnić miejsce lub rozwiązać problemy z synchronizacją.",

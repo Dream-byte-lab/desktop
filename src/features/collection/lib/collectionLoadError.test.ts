@@ -138,6 +138,19 @@ describe("collectionLoadFailureHint", () => {
     expect(collectionLoadFailureHint(new ApiError(0, "Network error"))).toBe(
       "offline",
     );
+    expect(
+      collectionLoadFailureHint(
+        new ApiError(0, "Network error", "NETWORK_ERROR"),
+      ),
+    ).toBe("offline");
+  });
+
+  it("offers no line for a status-0 timeout — it proves neither side", () => {
+    expect(
+      collectionLoadFailureHint(
+        new ApiError(0, "Request timed out", "TIMEOUT_ERROR"),
+      ),
+    ).toBe(null);
   });
 
   it("reads a fetch TypeError as a connection problem", () => {

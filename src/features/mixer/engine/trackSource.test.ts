@@ -16,7 +16,16 @@ import {
 const harness = vi.hoisted(() => {
   const analyses = new Map<string, unknown>();
   const calls: { depth: string }[] = [];
-  return { analyses, calls, failFast: false };
+  return {
+    analyses,
+    calls,
+    failFast: false,
+    // Note 29 Fix C: a fast pass that hangs until the test
+    // releases it, so a preparation can sit in the timed-out
+    // shell state while the prepared map churns around it.
+    hangFast: false,
+    fastResolvers: [] as Array<() => void>,
+  };
 });
 
 vi.mock("@/shared/storage", () => ({
@@ -39,50 +48,70 @@ vi.mock("../../player/engine/streamResolver", () => ({
   }),
 }));
 
-vi.mock("./analyseTrackRunner", () => ({
-  analyseSamplesOffThread: async (
+vi.mock("./analyseTrackRunner", () => {
+  const buildAnalysis = (
     samples: Float32Array,
     sampleRate: number,
-    options: { depth?: string } = {},
-  ): Promise<TrackAnalysis | null> => {
-    const depth = options.depth ?? "deep";
-    harness.calls.push({ depth });
-    // A scripted fast-pass failure (Note 20's shell case): the deep
-    // pass behind it still answers, as the real worker's would.
-    if (depth === "fast" && harness.failFast) return null;
-    // The real deep pass runs in a worker and takes real time; the
-    // fast answer must observably come first, so the mock's deep
-    // pass waits a tick of the clock rather than resolving in the
-    // same microtask burst as the fast one.
-    if (depth === "deep") {
-      await new Promise((resolve) => setTimeout(resolve, 25));
-    }
-    return {
-      beatMap: {
-        bpm: 120,
-        firstBeatSec: 0,
-        beatsPerBar: 4,
-        durationSec: 10,
-        grid: { anchors: [], sections: [], confidence: 0.5 },
-      },
-      tempoConfidence: 0.9,
-      energyCurve: [],
-      drops: [],
-      key: null,
-      vocalRanges: [],
-      loudness: 0.2,
-      analysisVersion: ANALYSIS_VERSION,
-      audioHash: audioFingerprint(samples, sampleRate),
-      depth: depth === "fast" ? "fast" : "deep",
-      sections: [],
-      intro: null,
-      outro: null,
-    };
-  },
-  analyseBufferOffThread: async () => null,
-}));
+    depth: string,
+  ): TrackAnalysis => ({
+    beatMap: {
+      bpm: 120,
+      firstBeatSec: 0,
+      beatsPerBar: 4,
+      durationSec: 10,
+      grid: { anchors: [], sections: [], confidence: 0.5 },
+    },
+    tempoConfidence: 0.9,
+    energyCurve: [],
+    drops: [],
+    key: null,
+    vocalRanges: [],
+    loudness: 0.2,
+    analysisVersion: ANALYSIS_VERSION,
+    audioHash: audioFingerprint(samples, sampleRate),
+    depth: depth === "fast" ? "fast" : "deep",
+    sections: [],
+    intro: null,
+    outro: null,
+  });
+  return {
+    analyseSamplesOffThread: async (
+      samples: Float32Array,
+      sampleRate: number,
+      options: { depth?: string } = {},
+    ): Promise<TrackAnalysis | null> => {
+      const depth = options.depth ?? "deep";
+      harness.calls.push({ depth });
+      // A scripted fast pass that hangs until the test releases
+      // it (Note 29 Fix C's eviction window).
+      if (depth === "fast" && harness.hangFast) {
+        return new Promise<TrackAnalysis | null>((resolve) => {
+          harness.fastResolvers.push(() => {
+            resolve(buildAnalysis(samples, sampleRate, "fast"));
+          });
+        });
+      }
+      // A scripted fast-pass failure (Note 20's shell case): the deep
+      // pass behind it still answers, as the real worker's would.
+      if (depth === "fast" && harness.failFast) return null;
+      // The real deep pass runs in a worker and takes real time; the
+      // fast answer must observably come first, so the mock's deep
+      // pass waits a tick of the clock rather than resolving in the
+      // same microtask burst as the fast one.
+      if (depth === "deep") {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      return buildAnalysis(samples, sampleRate, depth);
+    },
+    analyseBufferOffThread: async () => null,
+  };
+});
 
-import { loadTrackForMixing, preparedTrack } from "./trackSource";
+import {
+  ANALYSIS_WAIT_MS,
+  loadTrackForMixing,
+  preparedTrack,
+} from "./trackSource";
 
 const SAMPLE_RATE = 44100;
 
@@ -108,6 +137,8 @@ beforeEach(() => {
   harness.analyses.clear();
   harness.calls.length = 0;
   harness.failFast = false;
+  harness.hangFast = false;
+  harness.fastResolvers.length = 0;
   vi.stubGlobal("OfflineAudioContext", FakeOfflineAudioContext);
 });
 
@@ -184,5 +215,58 @@ describe("trackSource preparation (Step 5)", () => {
     });
     expect(prepared!.mixable).toBe(true);
     expect(prepared!.analysis.depth).toBe("deep");
+  });
+});
+
+// Note 29 Fix C: deepen() re-checks that the prepared entry is
+// still held BEFORE spending the deep pass, not only when the
+// pass lands — an entry evicted during heavy preparation must
+// not consume worker time nobody will read.
+describe("trackSource deepen start check (Note 29 Fix C)", () => {
+  it("starts exactly one deep pass for an entry that is still held", async () => {
+    await loadTrackForMixing(track("ts-held"));
+    await vi.waitFor(() => {
+      expect(preparedTrack("ts-held")?.analysis.depth).toBe("deep");
+    });
+    expect(harness.calls.filter((call) => call.depth === "deep")).toHaveLength(
+      1,
+    );
+  });
+
+  it("sends no deep request for an entry evicted before its deepen could start", async () => {
+    vi.useFakeTimers();
+    try {
+      harness.hangFast = true;
+      // A preparation whose fast pass outlasts the wait: it
+      // answers with the timed-out shell, and the deepen behind
+      // it can only begin when the fast pass finally lands.
+      const first = loadTrackForMixing(track("ts-evicted"));
+      await vi.advanceTimersByTimeAsync(ANALYSIS_WAIT_MS + 1);
+      const shell = await first;
+      expect(shell?.mixable).toBe(false);
+
+      // Churn the bounded prepared map (holds five) until the
+      // shell is evicted — the heavy-preparation case.
+      for (const id of ["ts-x1", "ts-x2", "ts-x3", "ts-x4", "ts-x5"]) {
+        const pendingLoad = loadTrackForMixing(track(id));
+        await vi.advanceTimersByTimeAsync(ANALYSIS_WAIT_MS + 1);
+        await pendingLoad;
+      }
+      expect(preparedTrack("ts-evicted")).toBeUndefined();
+      expect(
+        harness.calls.filter((call) => call.depth === "deep"),
+      ).toHaveLength(0);
+
+      // The evicted track's fast pass finally lands. Its
+      // continuation reaches deepen() — and the start check
+      // refuses: no deep request ever reaches the runner.
+      harness.fastResolvers[0]();
+      for (let i = 0; i < 10; i += 1) await Promise.resolve();
+      expect(
+        harness.calls.filter((call) => call.depth === "deep"),
+      ).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

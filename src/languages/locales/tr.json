@@ -609,12 +609,6 @@
       "resume": "Son sıradan devam et",
       "empty": "Boş başla"
     },
-    "telemetry": {
-      "title": "Anonim Telemetri ve Tanılama",
-      "description": "Çalma hatalarını, arabelleğe alma takılmalarını ve ağ sorunlarını bulup düzeltmeye yardımcı olur. Asla kişisel veri, token, şifre veya yerel dosya yolu toplamaz.",
-      "enabled": "Anonim telemetri açık",
-      "disabled": "Telemetri tamamen kapalı"
-    },
     "cache": {
       "title": "Önbellek ve Depolama",
       "description": "Yer açmak veya eşitleme sorunlarını çözmek için uygulama verilerini yönet.",

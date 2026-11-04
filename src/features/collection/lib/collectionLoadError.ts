@@ -35,8 +35,9 @@ export type CollectionLoadFailureHint = "offline" | "server";
  * cause proves it: the browser reporting itself offline, a
  * network-level failure (fetch TypeError, or the API layer's
  * status-0 network error) reads as a connection problem; a 5xx
- * answer reads as a server problem. Anything else proves nothing
- * and gets no line.
+ * answer reads as a server problem. A status-0 TIMEOUT proves
+ * neither side — a slow server is not a connection problem — so
+ * it gets no line. Anything else proves nothing and gets no line.
  */
 export function collectionLoadFailureHint(
   cause: unknown,
@@ -46,7 +47,10 @@ export function collectionLoadFailureHint(
   }
   if (cause instanceof ApiError) {
     if (cause.status >= 500) return "server";
-    if (cause.status === 0) return "offline";
+    if (cause.status === 0) {
+      if (cause.code === "TIMEOUT_ERROR") return null;
+      return "offline";
+    }
     return null;
   }
   if (cause instanceof TypeError) return "offline";

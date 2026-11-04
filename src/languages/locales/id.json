@@ -684,12 +684,6 @@
       "resume": "Lanjutkan antrean terakhir",
       "empty": "Mulai dengan kosong"
     },
-    "telemetry": {
-      "title": "Telemetri & Diagnostik Anonim",
-      "description": "Membantu mengidentifikasi dan memperbaiki error pemutaran, buffering macet, dan masalah jaringan. Tidak pernah mengumpulkan data pribadi, token, kata sandi, atau lokasi file lokal.",
-      "enabled": "Telemetri anonim aktif",
-      "disabled": "Telemetri dinonaktifkan sepenuhnya"
-    },
     "cache": {
       "title": "Cache & Penyimpanan",
       "description": "Kelola data aplikasi untuk mengosongkan ruang atau mengatasi masalah sinkronisasi.",

@@ -8,9 +8,14 @@
 // never appear here.
 
 import type { ReactNode } from "react";
+import { Link } from "react-router-dom";
 import { useTranslation } from "@/languages";
 import { EditorialLayout } from "@/shared/ui/layouts";
 import CoverImage from "@/features/covers/ui/CoverImage";
+import {
+  collectionPath,
+  collectionPreviewState,
+} from "@/features/collection/lib/collectionPreview";
 import { useStableNavigate } from "@/shared/hooks/useStableNavigate";
 import { useListeningStats } from "../hooks/useListeningStats";
 import {
@@ -19,6 +24,12 @@ import {
   type MovementEntry,
 } from "../lib/listeningStats";
 import { formatDay } from "../lib/format";
+
+/** The artist page's route, built the way every other surface
+ * builds it (CollectionPage, SearchPage, the deeplink handler). */
+function artistHref(artistId: string): string {
+  return `/artist?id=${encodeURIComponent(artistId)}`;
+}
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
@@ -120,9 +131,18 @@ function MovementList({ entries }: { entries: MovementEntry[] }) {
             key={entry.label}
             className="flex items-baseline justify-between gap-3"
           >
-            <span className="min-w-0 truncate text-body text-text-primary">
-              {entry.label}
-            </span>
+            {entry.artistId ? (
+              <Link
+                to={artistHref(entry.artistId)}
+                className="min-w-0 truncate text-body text-text-primary no-underline underline-offset-2 cursor-pointer hover:underline"
+              >
+                {entry.label}
+              </Link>
+            ) : (
+              <span className="min-w-0 truncate text-body text-text-primary">
+                {entry.label}
+              </span>
+            )}
             <span className="shrink-0 text-body text-text-tertiary tabular-nums">
               {entry.currentRank === null
                 ? t("space.movement.gone")
@@ -151,28 +171,47 @@ function ReadyDashboard({ stats }: { stats: ListeningStats }) {
       {stats.topArtists.length > 0 && (
         <Section title={t("space.topArtists")}>
           <div className="flex flex-wrap gap-[18px]">
-            {stats.topArtists.map((artist) => (
-              <div
-                key={artist.name}
-                className="flex w-[96px] flex-col items-center gap-[6px] text-center"
-              >
-                <div className="h-[72px] w-[72px] overflow-hidden rounded-full bg-border-alpha-14">
-                  {artist.coverUrl ? (
-                    <CoverImage
-                      src={artist.coverUrl}
-                      alt=""
-                      className="h-full w-full object-cover"
-                    />
-                  ) : null}
+            {stats.topArtists.map((artist) => {
+              const portrait = (
+                <>
+                  <div className="h-[72px] w-[72px] overflow-hidden rounded-full bg-border-alpha-14">
+                    {artist.coverUrl ? (
+                      <CoverImage
+                        src={artist.coverUrl}
+                        alt=""
+                        className="h-full w-full object-cover transition-all duration-300 group-hover:brightness-[1.15]"
+                      />
+                    ) : null}
+                  </div>
+                  <span className="w-full truncate text-body font-medium text-text-primary">
+                    {artist.name}
+                  </span>
+                  <span className="text-caption text-text-tertiary tabular-nums">
+                    {t("space.coverage.plays", { count: artist.plays })}
+                  </span>
+                </>
+              );
+              // A portrait with a resolved artist id is a door to the
+              // artist page (the AlbumCard whole-tile Link idiom);
+              // without one it stays a plain portrait — never a
+              // guessed link.
+              return artist.artistId ? (
+                <Link
+                  key={artist.name}
+                  to={artistHref(artist.artistId)}
+                  className="group flex w-[96px] flex-col items-center gap-[6px] text-center no-underline cursor-pointer"
+                >
+                  {portrait}
+                </Link>
+              ) : (
+                <div
+                  key={artist.name}
+                  className="flex w-[96px] flex-col items-center gap-[6px] text-center"
+                >
+                  {portrait}
                 </div>
-                <span className="w-full truncate text-body font-medium text-text-primary">
-                  {artist.name}
-                </span>
-                <span className="text-caption text-text-tertiary tabular-nums">
-                  {t("space.coverage.plays", { count: artist.plays })}
-                </span>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </Section>
       )}
@@ -180,36 +219,65 @@ function ReadyDashboard({ stats }: { stats: ListeningStats }) {
       {stats.topTracks.length > 0 && (
         <Section title={t("space.topTracks")}>
           <ol className="flex flex-col">
-            {stats.topTracks.map((entry, i) => (
-              <li
-                key={entry.track.id}
-                className="flex items-center gap-3 py-[6px]"
-              >
-                <span className="w-[22px] shrink-0 text-body text-text-tertiary tabular-nums">
-                  {i + 1}
-                </span>
-                <div className="h-[40px] w-[40px] shrink-0 overflow-hidden rounded-[8px] bg-border-alpha-14">
-                  {entry.track.coverUrl ? (
-                    <CoverImage
-                      src={entry.track.coverUrl}
-                      alt=""
-                      className="h-full w-full object-cover"
-                    />
-                  ) : null}
-                </div>
-                <div className="flex min-w-0 flex-1 flex-col">
-                  <span className="truncate text-body font-medium text-text-primary">
-                    {entry.track.title}
+            {stats.topTracks.map((entry, i) => {
+              // A song's page, as the app defines it: there is no
+              // track route — a song opens on its album's collection
+              // page (the deeplink handler resolves albums the same
+              // way). A track whose album carries no id has no page
+              // to go to and its row stays plain.
+              const albumId = entry.track.album?.id;
+              const identity = (
+                <>
+                  <div className="h-[40px] w-[40px] shrink-0 overflow-hidden rounded-[8px] bg-border-alpha-14">
+                    {entry.track.coverUrl ? (
+                      <CoverImage
+                        src={entry.track.coverUrl}
+                        alt=""
+                        className="h-full w-full object-cover transition-all duration-300 group-hover:brightness-[1.15]"
+                      />
+                    ) : null}
+                  </div>
+                  <div className="flex min-w-0 flex-1 flex-col">
+                    <span className="truncate text-body font-medium text-text-primary">
+                      {entry.track.title}
+                    </span>
+                    <span className="truncate text-caption text-text-tertiary">
+                      {entry.track.artists}
+                    </span>
+                  </div>
+                </>
+              );
+              return (
+                <li
+                  key={entry.track.id}
+                  className="flex items-center gap-3 py-[6px]"
+                >
+                  <span className="w-[22px] shrink-0 text-body text-text-tertiary tabular-nums">
+                    {i + 1}
                   </span>
-                  <span className="truncate text-caption text-text-tertiary">
-                    {entry.track.artists}
+                  {albumId ? (
+                    <Link
+                      to={collectionPath("album", albumId)}
+                      state={collectionPreviewState({
+                        coverUrl: entry.track.coverUrl,
+                        title: entry.track.title,
+                        subtitle: entry.track.artists,
+                      })}
+                      className="group flex min-w-0 flex-1 items-center gap-3 no-underline cursor-pointer"
+                    >
+                      {identity}
+                    </Link>
+                  ) : (
+                    <div className="flex min-w-0 flex-1 items-center gap-3">
+                      {identity}
+                    </div>
+                  )}
+                  <span className="shrink-0 text-body text-text-tertiary tabular-nums">
+                    {t("space.coverage.plays", { count: entry.plays })}
                   </span>
-                </div>
-                <span className="shrink-0 text-body text-text-tertiary tabular-nums">
-                  {t("space.coverage.plays", { count: entry.plays })}
-                </span>
-              </li>
-            ))}
+                </li>
+              );
+            })}
           </ol>
         </Section>
       )}

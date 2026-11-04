@@ -5,6 +5,7 @@ import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createRoot, type Root } from "react-dom/client";
 import { act } from "react";
+import { MemoryRouter } from "react-router-dom";
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -112,7 +113,13 @@ afterEach(async () => {
 
 async function render() {
   await act(async () => {
-    root.render(React.createElement(ListeningHistoryPage));
+    root.render(
+      React.createElement(
+        MemoryRouter,
+        null,
+        React.createElement(ListeningHistoryPage),
+      ),
+    );
   });
 }
 
@@ -163,6 +170,38 @@ describe("ListeningHistoryPage", () => {
     expect(text).toContain("Skipped Song");
     expect(text).toContain("skipped");
     expect(text).toContain("That's the start of your history here.");
+  });
+
+  it("links a row to the song's album page when the track carries an album", async () => {
+    holder.state = readyState({
+      groups: [
+        {
+          dayStartMs: localDayStartMs(Date.now()),
+          events: [
+            playEvent({
+              track: {
+                ...track("t1", "Morning Song"),
+                album: { id: "alb-9", title: "Morning Album" },
+              },
+            }),
+          ],
+        },
+      ],
+      totalEvents: 1,
+    });
+    await render();
+    const anchor = container.querySelector("a");
+    expect(anchor?.getAttribute("href")).toBe(
+      "/collection?type=album&id=alb-9",
+    );
+    expect(anchor?.textContent).toContain("Morning Song");
+  });
+
+  it("keeps rows whose track has no album non-clickable", async () => {
+    holder.state = readyState();
+    await render();
+    expect(container.textContent ?? "").toContain("Morning Song");
+    expect(container.querySelectorAll("a")).toHaveLength(0);
   });
 
   it("offers Show more while pages remain, and the click loads them", async () => {

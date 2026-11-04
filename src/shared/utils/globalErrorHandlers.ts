@@ -1,5 +1,4 @@
 import { log } from "./logger";
-import { telemetry } from "@/shared/telemetry";
 
 export interface GlobalErrorHandlerOptions {
   onError?: (event: ErrorEvent) => void;
@@ -38,15 +37,6 @@ export function initGlobalErrorHandlers(
       errorObj ?? event,
     );
 
-    telemetry
-      .reportError(errorObj ?? message, {
-        source: "window.onerror",
-        filename,
-        lineno,
-        colno,
-      })
-      .catch(() => {});
-
     options?.onError?.(event);
   };
 
@@ -65,12 +55,6 @@ export function initGlobalErrorHandlers(
       `Unhandled Promise Rejection: ${message}`,
       reason,
     );
-
-    telemetry
-      .reportError(reason ?? "Unhandled Promise Rejection", {
-        source: "window.unhandledrejection",
-      })
-      .catch(() => {});
 
     options?.onUnhandledRejection?.(event);
   };

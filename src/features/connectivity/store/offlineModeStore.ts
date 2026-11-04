@@ -138,5 +138,8 @@ export function isOfflineMode(): boolean {
 
 export function connectionToastsMuted(): boolean {
   const { offline, issue } = useOfflineModeStore.getState();
-  return offline || issue === "server" || issue === "offline";
+  if (offline) return true;
+  if (!issue) return false;
+  const group = issueGroup(issue);
+  return group === "server" || group === "offline";
 }

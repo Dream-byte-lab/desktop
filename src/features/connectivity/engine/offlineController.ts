@@ -10,10 +10,23 @@ import {
   setConnectivityHooks,
   useConnectivityStore,
 } from "../store/connectivityStore";
-import { issueGroup, issueResolved, type IssueGroup } from "../lib/classify";
+import {
+  issueGroup,
+  issueResolved,
+  type ConnectionIssue,
+  type IssueGroup,
+} from "../lib/classify";
 
 const RECHECK_DELAYS_MS = [5_000, 10_000, 20_000, 30_000];
 const STARTUP_CHECK_DELAY_MS = 8_000;
+/**
+ * A first server-side classification never opens the modal on its
+ * own: one probe can be slow or transient (the health endpoint has
+ * been measured answering at the probe's own timeout), so it only
+ * schedules this one confirmation re-probe. The modal opens when
+ * the re-probe also classifies server-side.
+ */
+export const SERVER_CONFIRM_DELAY_MS = 5_000;
 const ONLINE_EVENT_SETTLE_MS = 1_500;
 const YOUTUBE_RECHECK_GAP_MS = 10 * 60_000;
 const ISSUE_POLL_MS = 20_000;
@@ -22,6 +35,7 @@ export const DEVICE_LIBRARY_HASH = "#/library";
 
 let recheckTimer: ReturnType<typeof setTimeout> | null = null;
 let issuePollTimer: ReturnType<typeof setInterval> | null = null;
+let serverConfirmTimer: ReturnType<typeof setTimeout> | null = null;
 let recheckAttempt = 0;
 let initialized = false;
 
@@ -151,9 +165,35 @@ export async function goOnline(): Promise<boolean> {
   return false;
 }
 
+/**
+ * Route a freshly classified issue to the modal. Every group
+ * presents immediately except the server group, which must be
+ * confirmed first (see SERVER_CONFIRM_DELAY_MS): a single slow or
+ * transient probe presents nothing, a sustained outage presents
+ * one probe-cycle later.
+ */
+function presentClassifiedIssue(issue: ConnectionIssue | null): void {
+  if (!issue) return;
+  if (issueGroup(issue) !== "server") {
+    useOfflineModeStore.getState().openIssue(issue);
+    return;
+  }
+  if (serverConfirmTimer) return;
+  serverConfirmTimer = setTimeout(() => {
+    serverConfirmTimer = null;
+    void useOfflineModeStore
+      .getState()
+      .check()
+      .then(() => {
+        const confirmed = useOfflineModeStore.getState().detectedIssue();
+        if (confirmed && issueGroup(confirmed) === "server")
+          useOfflineModeStore.getState().openIssue(confirmed);
+      });
+  }, SERVER_CONFIRM_DELAY_MS);
+}
+
 export function presentDetectedIssue(): void {
-  const issue = useOfflineModeStore.getState().detectedIssue();
-  if (issue) useOfflineModeStore.getState().openIssue(issue);
+  presentClassifiedIssue(useOfflineModeStore.getState().detectedIssue());
 }
 
 export function noteYoutubeTrouble(
@@ -240,8 +280,8 @@ export function initOfflineMode(): void {
     onTrip: async () => {
       await useOfflineModeStore.getState().check();
       const issue = useOfflineModeStore.getState().detectedIssue();
-      if (issue === "offline" || issue === "server")
-        useOfflineModeStore.getState().openIssue(issue);
+      if (issue && issueGroup(issue) !== "youtube")
+        presentClassifiedIssue(issue);
       return "handled";
     },
   });
