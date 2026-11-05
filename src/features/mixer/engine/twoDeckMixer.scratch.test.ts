@@ -79,6 +79,7 @@ class FakeSource {
     this.playbackRate.value = 1;
   }
   connect(): void {}
+  disconnect(): void {}
   start(when: number, offset: number): void {
     this.startedWith = { when, offset };
   }
@@ -501,5 +502,109 @@ describe("performRecipe — scratches on the outgoing deck", () => {
     for (const e of gateEvents(mixer.nextDeck)) {
       expect(e.time).toBeLessThan(times.blendStartCtxTime);
     }
+  });
+});
+
+describe("scratch gate cancellation (Note 31, C4)", () => {
+  // A chirp patterns the incoming deck's gate across [1006, 1007]:
+  // future set/ramp events a listener would hear as chops.
+  function chirpOnB(): TransitionRecipe {
+    return scratchRecipe([
+      {
+        type: "scratch",
+        side: "B",
+        startMs: 2_000,
+        endMs: 3_000,
+        beats: 2,
+        technique: "chirp",
+        strokes: 2,
+        excursionBeats: 0.75,
+      },
+    ]);
+  }
+
+  it("stopAll cancels the scratch gate like every other automated parameter", () => {
+    const { ctx, mixer } = newMixer();
+    mixer.playNow(buffer());
+    mixer.performRecipe(buffer(), chirpOnB(), {});
+    const gate = gateEvents(mixer.currentDeck);
+    expect(gate.length).toBeGreaterThan(0); // the pattern stands
+    const before = gate.length;
+
+    mixer.stopAll();
+
+    // At stopAll's now (the fake clock stands at 1000) the gate is
+    // cancelled and then held open — before the fix, stopAll
+    // cancelled gain, echo, fx gate and every send but never this
+    // one, so the dead pattern fired into the next sound.
+    const tail = gate.slice(before);
+    const cancelAt = tail.findIndex((e) => e.type === "cancel");
+    expect(cancelAt).toBeGreaterThanOrEqual(0);
+    expect(tail[cancelAt].time).toBe(ctx.currentTime);
+    expect(tail[cancelAt + 1]).toEqual({
+      type: "set",
+      value: 1,
+      time: ctx.currentTime,
+    });
+  });
+
+  it("a plain start cancels a leftover gate pattern instead of only setting the gate open", () => {
+    const { ctx, mixer } = newMixer();
+    mixer.playNow(buffer());
+    mixer.performRecipe(buffer(), chirpOnB(), {});
+    // The incoming deck is now the current deck, and its gate
+    // still holds the chirp's future events.
+    const gate = gateEvents(mixer.currentDeck);
+    const before = gate.length;
+
+    mixer.playNow(buffer());
+
+    // The plain start's first gate writes are the cancellation
+    // and then the open set — a bare setValueAtTime(1) (the old
+    // reset) leaves the scheduled pattern in force past it.
+    const tail = gate.slice(before);
+    expect(tail[0]).toEqual({
+      type: "cancel",
+      value: 0,
+      time: ctx.currentTime,
+    });
+    expect(tail[1]).toEqual({ type: "set", value: 1, time: ctx.currentTime });
+  });
+
+  it("the fallback cut cancels the incoming deck's gate at the cut time", () => {
+    const { mixer } = newMixer();
+    mixer.playNow(buffer());
+    mixer.performRecipe(buffer(), chirpOnB(), {});
+    // The first deck (the chirp's outgoing side, gate clean since
+    // its plain start) is the fallback's incoming deck.
+    const gate = gateEvents(mixer.nextDeck);
+    const before = gate.length;
+
+    // An anchorless A-side recipe falls back to the plain cut.
+    const recipe = scratchRecipe([
+      {
+        type: "scratch",
+        side: "A",
+        startMs: 120_000,
+        endMs: 121_000,
+        beats: 2,
+        technique: "baby",
+        strokes: 2,
+        excursionBeats: 0.75,
+      },
+    ]);
+    recipe.overlap.startAMs = null;
+    const times = mixer.performRecipe(buffer(), recipe, {});
+    expect(times.blendEndCtxTime).toBe(times.blendStartCtxTime);
+
+    const tail = gate.slice(before);
+    const cancelAt = tail.findIndex((e) => e.type === "cancel");
+    expect(cancelAt).toBeGreaterThanOrEqual(0);
+    expect(tail[cancelAt].time).toBeCloseTo(times.blendStartCtxTime, 6);
+    expect(tail[cancelAt + 1]).toEqual({
+      type: "set",
+      value: 1,
+      time: times.blendStartCtxTime,
+    });
   });
 });

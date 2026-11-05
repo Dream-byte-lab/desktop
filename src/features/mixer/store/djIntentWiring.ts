@@ -1,5 +1,8 @@
 import type { Track } from "@/shared/types";
-import { usePlayerStore } from "../../player/store/playerStore";
+import {
+  usePlayerStore,
+  type PlayerStatus,
+} from "../../player/store/playerStore";
 import { djSession, type DjSessionEndReason } from "../engine/djSession";
 import { useDjModeStore } from "./djModeStore";
 
@@ -24,6 +27,22 @@ import { useDjModeStore } from "./djModeStore";
 // queue signature (different queue array, track, or index) is a new
 // chance.
 //
+// Note 32 hardened the spend itself. The wiring is born armed at a
+// cold launch, and a press writes the store in stages — context,
+// then queue, then track, then status — so an unguarded spend could
+// fire on the press's OWN early writes, starting a session on the
+// restored (or half-written, mixed) state behind the user's back;
+// the session then landed over the song the user had just pressed.
+// The spend now requires (a) a sounding player — status "playing",
+// which a press only reaches once its own pick is the state being
+// presented, never on the restored paused state or the press's
+// intermediate writes — and (b) an internally consistent signature,
+// queue[currentIndex] IS the current track, so a mixed state (new
+// queue, restored track/index) can never start a session. The
+// session's deck door re-validates auto-resume starts a final time
+// (see DjSession.start), so even a spend that passed both gates
+// cannot land on a choice the user has since replaced.
+//
 // The deps are injected behind narrow interfaces (the
 // djCommandRouter DjTransport pattern) so the machine is
 // unit-testable against a fake session and a fake player state.
@@ -39,6 +58,7 @@ interface DjIntentPlayerState {
   queue: Track[];
   currentTrack: Track | null;
   currentIndex: number;
+  status: PlayerStatus;
 }
 
 /** The slice of the DJ session the wiring needs. */
@@ -46,7 +66,11 @@ export interface DjIntentSession {
   readonly isRunning: boolean;
   readonly endReason: DjSessionEndReason | null;
   onRunningChange: ((running: boolean) => void) | null;
-  start: (queue: Track[], startIndex: number) => Promise<void>;
+  start: (
+    queue: Track[],
+    startIndex: number,
+    options?: { autoResume?: boolean },
+  ) => Promise<void>;
 }
 
 export interface DjIntentWiringDeps {
@@ -120,11 +144,27 @@ export function createDjIntentWiring(deps: DjIntentWiringDeps): DjIntentWiring {
     if (!deps.getIntent()) return;
     const state = deps.getPlayerState();
     if (state.queue.length === 0 || !state.currentTrack) return;
+    // Note 32 gate (a): spend only on a sounding player. The
+    // restored state is paused, and a press's early writes still
+    // describe the old state; "playing" is only ever reached with
+    // the state that is actually sounding, so the resume can no
+    // longer be triggered by a press's own writes ahead of its
+    // sound. The legitimate cold-launch flow survives: the press's
+    // final, sounding change presents the NEW queue/track and
+    // spends the resume on the right set.
+    if (state.status !== "playing") return;
+    // Note 32 gate (b): refuse an internally inconsistent
+    // signature — a queue and an index/track that do not belong to
+    // one context (the mixed state a press leaves mid-write) must
+    // never start a session.
+    if (state.queue[state.currentIndex]?.id !== state.currentTrack.id) return;
     const signature = signatureOf(state);
     if (sameSignature(signature, armedSignature)) return;
     if (sameSignature(signature, lastAttemptSignature)) return;
     lastAttemptSignature = signature;
-    void deps.session.start(state.queue, Math.max(0, state.currentIndex));
+    void deps.session.start(state.queue, Math.max(0, state.currentIndex), {
+      autoResume: true,
+    });
   };
 
   const unsubscribePlayer = deps.subscribePlayer(maybeResume);
@@ -166,6 +206,7 @@ export function initDjIntentWiring(): DjIntentWiring {
         queue: state.queue,
         currentTrack: state.currentTrack,
         currentIndex: state.currentIndex,
+        status: state.status,
       };
     },
     subscribePlayer: (listener) => usePlayerStore.subscribe(() => listener()),

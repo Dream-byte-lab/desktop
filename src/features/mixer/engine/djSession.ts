@@ -1231,7 +1231,16 @@ export class DjSession {
     return true;
   }
 
-  async start(queue: Track[], startIndex = 0): Promise<void> {
+  async start(
+    queue: Track[],
+    startIndex = 0,
+    options?: { autoResume?: boolean },
+  ): Promise<void> {
+    // Note 32: an auto-resume start remembers what the store held
+    // when it was handed its queue, so the deck door (below) can
+    // tell a user who has since chosen something else from a user
+    // whose choice this start still is.
+    const entryTrackId = usePlayerStore.getState().currentTrack?.id ?? null;
     this.stop("replaced");
     if (queue.length === 0 || startIndex >= queue.length) {
       this.startOutcomeValue = "empty";
@@ -1274,6 +1283,29 @@ export class DjSession {
       // leaves quietly instead of dismantling it.
       this.startOutcomeValue = "superseded";
       return;
+    }
+    if (options?.autoResume) {
+      // Note 32, the deck door: an auto-resume start must still be
+      // the user's current choice at the moment it would land. If
+      // the store's track has moved outside the queue this start
+      // was handed, or to a different track than both the one
+      // current when the start began and the one about to play,
+      // the user has chosen something else while preparation ran —
+      // the start leaves quietly, exactly like a superseded one,
+      // instead of landing over their song. Deliberate starts (the
+      // button, the door) are not re-validated: the user's own hand
+      // is already on them.
+      const nowTrack = usePlayerStore.getState().currentTrack;
+      const userMovedOn =
+        nowTrack !== null &&
+        (!this.queue.some((track) => track.id === nowTrack.id) ||
+          (nowTrack.id !== entryTrackId &&
+            (found === null || nowTrack.id !== found.prepared.track.id)));
+      if (userMovedOn) {
+        this.startOutcomeValue = "superseded";
+        this.stop("start-no-playable");
+        return;
+      }
     }
     if (!found || !this.mixer) {
       // Nothing from the requested position onward can be prepared.

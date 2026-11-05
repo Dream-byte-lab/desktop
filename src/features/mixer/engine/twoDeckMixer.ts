@@ -1769,6 +1769,10 @@ export class TwoDeckMixer {
       deck.filter.frequency.setValueAtTime(20_000, now);
     }
     deck.echoSend.gain.setValueAtTime(0, now);
+    // Cancel before resetting (Note 31, C4): a bare setValueAtTime
+    // does not remove gate events a previous recipe scheduled
+    // ahead, and they would chop this plain start mid-window.
+    deck.scratchGate.gain.cancelScheduledValues(now);
     deck.scratchGate.gain.setValueAtTime(1, now);
     deck.fxGate.gain.setValueAtTime(1, now);
     if (!held({ kind: "send", effect: "reverb" })) {
@@ -1809,6 +1813,12 @@ export class TwoDeckMixer {
       deck.gain.gain.setValueAtTime(0, now);
       deck.echoSend.gain.cancelScheduledValues(now);
       deck.echoSend.gain.setValueAtTime(0, now);
+      // The scratch gate is cancelled like every other automated
+      // parameter (Note 31, C4): left scheduled, a dead scratch
+      // join's gate pattern would still fire and chop whatever
+      // this deck plays next.
+      deck.scratchGate.gain.cancelScheduledValues(now);
+      deck.scratchGate.gain.setValueAtTime(1, now);
       deck.fxGate.gain.cancelScheduledValues(now);
       deck.fxGate.gain.setValueAtTime(1, now);
       for (const send of [
@@ -2372,6 +2382,10 @@ export class TwoDeckMixer {
     incoming.high.gain.setValueAtTime(BASS_FLAT_DB, start);
     incoming.filter.frequency.setValueAtTime(20_000, start);
     incoming.echoSend.gain.setValueAtTime(0, start);
+    // Cancel before resetting (Note 31, C4): gate events the
+    // failed recipe (or an older one) scheduled at or after the
+    // cut must not survive into the fallback's sound.
+    incoming.scratchGate.gain.cancelScheduledValues(start);
     incoming.scratchGate.gain.setValueAtTime(1, start);
     incoming.fxGate.gain.setValueAtTime(1, start);
     incoming.reverbSend.gain.setValueAtTime(0, start);

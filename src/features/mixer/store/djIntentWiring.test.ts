@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Track } from "@/shared/types";
+import type { PlayerStatus } from "../../player/store/playerStore";
 import type { DjSessionEndReason } from "../engine/djSession";
 
 // The intent wiring's state machine, driven against a fake session
@@ -41,6 +42,18 @@ interface Harness {
   getIntent: () => boolean;
   /** Replace the player state wholesale and fire a player change. */
   movePlayer: (queue: Track[], currentIndex: number) => void;
+  /**
+   * Patch individual player-state fields (a staged press writes
+   * the store field by field) and fire a player change.
+   */
+  mutatePlayer: (
+    patch: Partial<{
+      queue: Track[];
+      currentTrack: Track | null;
+      currentIndex: number;
+      status: PlayerStatus;
+    }>,
+  ) => void;
   /** Fire a player change with the state untouched. */
   pokePlayer: () => void;
   /** Simulate the session ending for the given reason. */
@@ -56,7 +69,16 @@ function makeHarness(initialIntent = true): Harness {
     queue: Track[];
     currentTrack: Track | null;
     currentIndex: number;
-  } = { queue: queueA, currentTrack: queueA[0], currentIndex: 0 };
+    status: PlayerStatus;
+  } = {
+    queue: queueA,
+    currentTrack: queueA[0],
+    currentIndex: 0,
+    // The harness's standing scenarios are a sounding player (a
+    // play pressed, a queue advancing); Note 32's staged-press
+    // scenarios patch the status explicitly.
+    status: "playing",
+  };
 
   const sessionState: {
     running: boolean;
@@ -102,6 +124,10 @@ function makeHarness(initialIntent = true): Harness {
       playerState.queue = queue;
       playerState.currentIndex = currentIndex;
       playerState.currentTrack = queue[currentIndex] ?? null;
+      for (const listener of playerListeners) listener();
+    },
+    mutatePlayer: (patch) => {
+      Object.assign(playerState, patch);
       for (const listener of playerListeners) listener();
     },
     pokePlayer: () => {
@@ -167,7 +193,9 @@ describe("djIntentWiring — the auto-resume machine", () => {
     const queueB = [makeTrack("b1"), makeTrack("b2")];
     h.movePlayer(queueB, 1);
     expect(h.session.start).toHaveBeenCalledTimes(1);
-    expect(h.session.start).toHaveBeenCalledWith(queueB, 1);
+    expect(h.session.start).toHaveBeenCalledWith(queueB, 1, {
+      autoResume: true,
+    });
   });
 
   it("does not engage for the SAME signature it armed on", () => {
@@ -241,7 +269,9 @@ describe("djIntentWiring — the auto-resume machine", () => {
     const queueC = [makeTrack("c1")];
     h.movePlayer(queueC, 0);
     expect(h.session.start).toHaveBeenCalledTimes(2);
-    expect(h.session.start).toHaveBeenLastCalledWith(queueC, 0);
+    expect(h.session.start).toHaveBeenLastCalledWith(queueC, 0, {
+      autoResume: true,
+    });
   });
 
   it("does not resume onto an empty queue or with no current track", () => {
@@ -249,6 +279,97 @@ describe("djIntentWiring — the auto-resume machine", () => {
     h.endSession("queue-exhausted");
     h.movePlayer([], -1);
     expect(h.session.start).not.toHaveBeenCalled();
+  });
+
+  it("Note 32, restored-queue variant: a press's own staged writes cannot spend the resume on the restored state", () => {
+    const h = makeHarness();
+    // Fresh launch: the store rehydrated the previous queue and
+    // track, paused; the wiring was created armed (Note 27).
+    const restored = [makeTrack("r1"), makeTrack("r2")];
+    h.mutatePlayer({
+      queue: restored,
+      currentTrack: restored[0],
+      currentIndex: 0,
+      status: "paused",
+    });
+    expect(h.session.start).not.toHaveBeenCalled();
+
+    // The user presses a song in a NEW playlist. playTrack writes
+    // the store in stages, and every stage fires the wiring: the
+    // context write first, while the restored state still stands…
+    h.pokePlayer();
+    // …then the new queue lands while the restored track and the
+    // paused status still stand (the mixed intermediate)…
+    const fresh = [makeTrack("n1"), makeTrack("n2")];
+    h.mutatePlayer({ queue: fresh });
+    // …then the pick itself, still only "loading", not sounding.
+    h.mutatePlayer({
+      currentTrack: fresh[1],
+      currentIndex: 1,
+      status: "loading",
+    });
+    // No stage of the press may start a session — above all not
+    // on the restored queue behind the user's back.
+    expect(h.session.start).not.toHaveBeenCalled();
+
+    // The pick sounds: only now does the resume spend, and it
+    // spends on the pressed state, exactly once.
+    h.mutatePlayer({ status: "playing" });
+    expect(h.session.start).toHaveBeenCalledTimes(1);
+    expect(h.session.start).toHaveBeenCalledWith(fresh, 1, {
+      autoResume: true,
+    });
+    expect(h.session.start).not.toHaveBeenCalledWith(
+      restored,
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it("Note 32, mixed-state variant: a sounding but inconsistent signature is refused, a consistent one is not", () => {
+    const h = makeHarness();
+    const fresh = [makeTrack("n1"), makeTrack("n2")];
+    const restoredTrack = makeTrack("r1");
+    // The mixed state the press leaves mid-write, except sounding:
+    // the new queue, but the restored track at the restored index
+    // — queue[0] is n1, not r1, so the signature is inconsistent.
+    h.mutatePlayer({
+      queue: fresh,
+      currentTrack: restoredTrack,
+      currentIndex: 0,
+      status: "playing",
+    });
+    h.pokePlayer();
+    expect(h.session.start).not.toHaveBeenCalled();
+
+    // The same sounding state made consistent spends normally —
+    // the refusal was the inconsistency, not a blanket block.
+    h.mutatePlayer({ currentTrack: fresh[0] });
+    expect(h.session.start).toHaveBeenCalledTimes(1);
+    expect(h.session.start).toHaveBeenCalledWith(fresh, 0, {
+      autoResume: true,
+    });
+  });
+
+  it("Note 27 preserved: pressing play on the restored track itself spends the resume on it once it sounds", () => {
+    const h = makeHarness();
+    const restored = [makeTrack("r1"), makeTrack("r2")];
+    h.mutatePlayer({
+      queue: restored,
+      currentTrack: restored[0],
+      currentIndex: 0,
+      status: "paused",
+    });
+    h.pokePlayer();
+    expect(h.session.start).not.toHaveBeenCalled();
+
+    // The user resumes the leftover song itself: it sounds, and
+    // the cold-launch session starts on it, as Note 27 intends.
+    h.mutatePlayer({ status: "playing" });
+    expect(h.session.start).toHaveBeenCalledTimes(1);
+    expect(h.session.start).toHaveBeenCalledWith(restored, 0, {
+      autoResume: true,
+    });
   });
 });
 
