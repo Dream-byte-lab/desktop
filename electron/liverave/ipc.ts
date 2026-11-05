@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { ipcMain, type BrowserWindow } from "electron";
+import type { BrowserWindow } from "electron";
+import { handleTrusted, onTrusted } from "../ipc-guard.js";
 import { PartyServer } from "./partyServer.js";
 import type {
   PartyPublicState,
@@ -62,25 +63,25 @@ export function registerPartyIpc(
     pendingSearches.clear();
   };
 
-  ipcMain.handle("liverave:start-party", () => {
+  handleTrusted("liverave:start-party", () => {
     dropPendingSearches();
     return server.start();
   });
-  ipcMain.handle("liverave:stop-party", async () => {
+  handleTrusted("liverave:stop-party", async () => {
     dropPendingSearches();
     await server.stop();
     return server.partyInfo();
   });
-  ipcMain.handle("liverave:party-info", () => server.partyInfo());
-  ipcMain.on("liverave:set-state", (_event, state: PartyPublicState) =>
+  handleTrusted("liverave:party-info", () => server.partyInfo());
+  onTrusted("liverave:set-state", (_event, state: PartyPublicState) =>
     server.setState(state),
   );
-  ipcMain.on(
+  onTrusted(
     "liverave:set-request-status",
     (_event, update: PartyRequestStatusUpdate) =>
       server.setRequestStatus(update.requestId, update.status),
   );
-  ipcMain.on("liverave:search-reply", (_event, reply: PartySearchReply) => {
+  onTrusted("liverave:search-reply", (_event, reply: PartySearchReply) => {
     const pending = pendingSearches.get(reply.searchId);
     if (!pending) return;
     pendingSearches.delete(reply.searchId);
