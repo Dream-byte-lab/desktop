@@ -44,19 +44,24 @@
 // that own them, at any signal pressure — signals shift taste only.
 
 import {
+  authorJuggle,
+  authorManualJuggle,
   authorManualScratch,
   authorManualStopExit,
   candidatesForPair,
   deriveCandidateEvidence,
   familyOfRecipe,
   isManualStopMove,
+  type AuthoredJuggle,
   type Candidate,
   type ManualDeckMove,
 } from "./candidates";
 import { scoreCandidates, type ScoredCandidate } from "./scoring";
 import {
+  chooseBySoftmax,
   countRecentFamilyUsesWeighted,
   decisionSeed,
+  NO_TRANSITION_FAMILY,
   randomForDecision,
   recentUseSensitivity,
   selectFromBand,
@@ -68,10 +73,12 @@ import { STANDARD_PROFILE, type DecisionProfile } from "./decisionProfile";
 import {
   joinHistory,
   pairShapeOf,
+  repetitionCost,
   type JoinEvaluation,
   type JoinHistoryLog,
   type JoinRecord,
 } from "./joinHistory";
+import type { JugglePerformance } from "./juggle";
 import { SignalBank } from "./signals";
 import {
   arcTarget,
@@ -158,6 +165,52 @@ export interface BrainDecision {
   /** The arc target energy actually spent on this decision. */
   arcTargetEnergy: number;
   consideredAtMs: number;
+}
+
+/** A juggle consideration, as the brain sees it at spend time. */
+export interface JuggleConsiderInput {
+  /** The track playing now — both of the act's copies are of it. */
+  current: PreparedTrack;
+  /** The playhead, in track seconds. */
+  positionSec: number;
+  /** Where the set sits on its arc, 0..1 (arcFit's coordinate). */
+  arcPosition: number;
+  /**
+   * Party mode with guest requests waiting: the parent ruling is
+   * that no autonomous juggle is authored while the room's
+   * requests are pending. The manual trigger is not bound by it.
+   */
+  partyRequestsPending: boolean;
+}
+
+/** A spent juggle consideration: the verdict and its audit trail. */
+export interface JuggleSpend {
+  outcome: "juggle" | "restraint";
+  /** The authored act, whichever way the spend fell. */
+  authored: AuthoredJuggle;
+  /** The [juggle, restraint] spend's §16/§15 selection record. */
+  selection: SelectionRecord;
+  /** The derived profile the spend was authored and scored with. */
+  profile: DecisionProfile;
+  /** The arc target energy actually spent on this consideration. */
+  arcTargetEnergy: number;
+  consideredAtMs: number;
+}
+
+/** Total beats across a juggle performance (the history probe's geometry). */
+function juggleTotalBeats(performance: JugglePerformance): number {
+  return performance.segments.reduce((sum, s) => sum + s.beats, 0);
+}
+
+/**
+ * A juggle window's wall-clock length, in seconds: a repeat hears
+ * its segment span once per segment; a continue hears the walk.
+ */
+function juggleWindowSec(performance: JugglePerformance): number {
+  return performance.pattern === "repeat"
+    ? performance.segments.length *
+        (performance.exitSec - performance.breakStartSec)
+    : performance.exitSec - performance.breakStartSec;
 }
 
 /** What the decks actually did with a decision, reported back. */
@@ -285,6 +338,14 @@ export class DjBrain {
   private setIndex = 0;
   /** Selections made in the current set (the decision coordinate). */
   private decisionIndex = 0;
+  /**
+   * The juggle window most recently spent (track + break), so a
+   * standing break is spent exactly once — a restraint verdict is
+   * a verdict, never re-rolled while the same break stands ahead.
+   * Cleared when a new track instance begins (the session's
+   * resetJuggleWindow call) and at each new set.
+   */
+  private lastJuggleWindowKey: string | null = null;
 
   constructor(options: DjBrainOptions = {}) {
     this.now = options.now ?? (() => Date.now());
@@ -303,6 +364,7 @@ export class DjBrain {
     // later set of the same session draws a different stream.
     this.setIndex += 1;
     this.decisionIndex = 0;
+    this.lastJuggleWindowKey = null;
   }
 
   get profile(): DecisionProfile {
@@ -374,7 +436,9 @@ export class DjBrain {
     // whose anchor lands before the floor is eligible, so the
     // performed join can never start inside the owed length.
     // let-it-play anchors at the natural end and always stands.
-    // With no usable section data the floor abstains (no veto).
+    // Without usable section data the floor is derived from the
+    // track's own proportions (Note 33); it abstains only when
+    // the track's length itself is unknown.
     const floorSec = minimumPlayEndSec(input.outgoing.analysis);
     const eligible =
       floorSec === null
@@ -533,6 +597,234 @@ export class DjBrain {
       arcTargetEnergy,
       consideredAtMs: atMs,
     };
+  }
+
+  /**
+   * A new track instance begins: the spent-juggle window belongs
+   * to the play that spent it, so the same break on a later play
+   * of the same track is a new window, spendable again.
+   */
+  resetJuggleWindow(): void {
+    this.lastJuggleWindowKey = null;
+  }
+
+  /**
+   * Consider a beat juggle on the CURRENT track (the
+   * crab-and-juggling plan's admission spend): not a join — there
+   * is no pair, no incoming, nothing to hand over to. The question
+   * is of a moment: does the brain cut this track's break between
+   * its two copies here, or let the track play? The spend is the
+   * [juggle, restraint] band, spent with R5's own lottery —
+   * chooseBySoftmax at the profile's temperature, §15-shaped by
+   * both families' recent uses, drawn from the same seeded stream
+   * at the next decision coordinate, and audited by a
+   * SelectionRecord in selectFromBand's exact shape. (It is not
+   * routed through selectFromBand itself for one honest reason:
+   * that function's band is made of join Candidates, and a
+   * Candidate carries a recipe — a juggle has none, and inventing
+   * one to satisfy the type would put a performable-looking lie
+   * in the record. The lottery, the shaping, the seed discipline
+   * and the audit shape are R5's; only the envelope differs.)
+   * Restraint stands IN this lottery, not held out of it — with
+   * no rival joins in the band, holding it out would make the
+   * spend a formality, and the plan's construction is that
+   * restraint wins most bands on its score.
+   *
+   * The scores are scoring.ts's arithmetic, mirrored: weighed
+   * evidence (the author's JuggleEvidence, arcFit against the
+   * night's target) less the family cost less the repetition
+   * charge. The juggle's repetition probe pairs the track with
+   * itself — the same self-pair its history record will carry —
+   * so a juggle of this track charges a later one at the
+   * same-pair rate, as §15 intends. Restraint's weighed evidence
+   * is the engine's neutral 0.5 on every term (the weights sum to
+   * 1): it has no pair, so no pair evidence exists to weigh, and
+   * no pair-repetition charge can honestly be computed for it —
+   * its §15 pressure enters through recentUses in the lottery,
+   * exactly where selectFromBand applies it.
+   *
+   * The party ruling binds first, before anything is authored:
+   * while guest requests are pending the brain authors no juggle
+   * at all, and the window is not consumed — if the requests
+   * clear while the break is still ahead, the spend may still
+   * happen. One spend per window: once a break has been spent
+   * (either verdict), the same break never re-rolls.
+   */
+  considerJuggle(input: JuggleConsiderInput): JuggleSpend | null {
+    if (input.partyRequestsPending) return null;
+    const atMs = this.now();
+    const profile = this.effectiveProfile(atMs);
+    const authored = authorJuggle(
+      input.current.analysis,
+      profile,
+      input.positionSec,
+    );
+    if (!authored) return null;
+    const windowKey = `${input.current.track.id}@${authored.performance.breakStartSec}`;
+    if (windowKey === this.lastJuggleWindowKey) return null;
+    this.lastJuggleWindowKey = windowKey;
+
+    const arcTargetEnergy = this.arcTargetAt(input.arcPosition, atMs);
+    const history = this.history.all();
+    const e = authored.evidence;
+    const w = profile.weights;
+    const arcFit =
+      e.entryEnergy === null
+        ? 0.5
+        : clamp(1 - Math.abs(e.entryEnergy - arcTargetEnergy), 0, 1);
+    const weighed =
+      w.keyFit * e.keyFit +
+      w.vocalClarity * e.vocalClarity +
+      w.stretchFit * e.stretchFit +
+      w.structureFit * e.structureFit +
+      w.loopValue * e.loopValue +
+      w.arcFit * arcFit;
+    const analysis = input.current.analysis;
+    const historyCost = repetitionCost(
+      history,
+      {
+        family: "juggle",
+        pairShape: pairShapeOf(analysis, analysis),
+        blendBeats: juggleTotalBeats(authored.performance),
+        heardLengthSec: juggleWindowSec(authored.performance),
+        aAudioHash: analysis.audioHash ?? null,
+        bAudioHash: analysis.audioHash ?? null,
+      },
+      profile,
+    ).cost;
+    const juggleScore = weighed - profile.familyCosts.juggle - historyCost;
+    const restraintScore = 0.5 - profile.familyCosts[NO_TRANSITION_FAMILY];
+
+    this.decisionIndex += 1;
+    const seed = decisionSeed(
+      this.sessionSeed,
+      this.setIndex,
+      this.decisionIndex,
+    );
+    const temperature = temperatureForProfile(profile);
+    const sensitivity = recentUseSensitivity(profile);
+    const entries = [
+      {
+        score: juggleScore,
+        recentUses: countRecentFamilyUsesWeighted(
+          history,
+          "juggle",
+          profile.antiRepetition.windowJoins,
+        ),
+      },
+      {
+        score: restraintScore,
+        recentUses: countRecentFamilyUsesWeighted(
+          history,
+          NO_TRANSITION_FAMILY,
+          profile.antiRepetition.windowJoins,
+        ),
+      },
+    ];
+    const outcome = chooseBySoftmax(entries, {
+      temperature,
+      sensitivity,
+      random: randomForDecision(
+        this.sessionSeed,
+        this.setIndex,
+        this.decisionIndex,
+      ),
+    });
+    const chosenIndex = Math.max(0, outcome.index);
+    const record: SelectionRecord = {
+      method: "softmax",
+      seed,
+      temperature,
+      sensitivity,
+      band: [
+        {
+          family: "juggle",
+          score: juggleScore,
+          historyCost,
+          recentUses: entries[0].recentUses,
+          penalty: outcome.penalties[0],
+          probability: outcome.probabilities[0],
+        },
+        {
+          family: NO_TRANSITION_FAMILY,
+          score: restraintScore,
+          historyCost: 0,
+          recentUses: entries[1].recentUses,
+          penalty: outcome.penalties[1],
+          probability: outcome.probabilities[1],
+        },
+      ],
+      // Restraint stood IN this lottery (see the method's note):
+      // nothing was held out of the pool.
+      restraintHeld: [],
+      chosenIndex,
+      agreedWithScorer: (chosenIndex === 0) === juggleScore >= restraintScore,
+    };
+    return {
+      outcome: chosenIndex === 0 ? "juggle" : "restraint",
+      authored,
+      selection: record,
+      profile,
+      arcTargetEnergy,
+      consideredAtMs: atMs,
+    };
+  }
+
+  /**
+   * Author a juggle for the HOST's hand (the stage's Juggle
+   * control): no price gate, no lottery, no window consumed — the
+   * host named the act, so the act is authored if the track
+   * honestly offers it (authorManualJuggle keeps every material
+   * and structural gate), exactly as authorManualMove stands
+   * behind the manual deck moves. The performed act still lands
+   * in history through recordPerformedJuggle: anti-repetition
+   * charges what the room heard, whoever called for it.
+   */
+  authorManualJuggleMove(input: {
+    current: PreparedTrack;
+    positionSec: number;
+  }): { performance: JugglePerformance; profile: DecisionProfile } | null {
+    const profile = this.effectiveProfile();
+    const authored = authorManualJuggle(
+      input.current.analysis,
+      profile,
+      input.positionSec,
+    );
+    if (!authored) return null;
+    return { performance: authored.performance, profile };
+  }
+
+  /**
+   * Remember a performed juggle. The record pairs the track with
+   * ITSELF (aAudioHash = bAudioHash): the act's two copies are one
+   * track, and the self-pair is what makes a repeat juggle of the
+   * same track draw repetitionCost's same-pair charge later — the
+   * §15 doctrine working as written, bending the odds without
+   * ever zeroing them. Blueprint §28 ABSTAINS here (the decided
+   * ruling): the evaluation's terms are a join's — beat alignment
+   * across a handover, loudness continuity across a blend — and a
+   * juggle has no handover to grade, so no outcome is reported
+   * and the record carries no evaluation, counting at exactly
+   * weight 1 in the §15 feedback weighting like every
+   * unevaluated record.
+   */
+  recordPerformedJuggle(input: {
+    current: PreparedTrack;
+    performance: JugglePerformance;
+    profile: DecisionProfile;
+  }): void {
+    const analysis = input.current.analysis;
+    void this.history.record({
+      aAudioHash: analysis.audioHash ?? null,
+      bAudioHash: analysis.audioHash ?? null,
+      family: "juggle",
+      profileId: input.profile.id,
+      pairShape: pairShapeOf(analysis, analysis),
+      blendBeats: juggleTotalBeats(input.performance),
+      stretch: 0,
+      heardLengthSec: juggleWindowSec(input.performance),
+      at: this.now(),
+    });
   }
 
   /**

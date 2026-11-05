@@ -58,6 +58,20 @@ export const DECISION_PROFILE_VERSION = 2;
  * with R1 and R2, DECISION_PROFILE_VERSION is not bumped for the
  * addition: the version stamps the judgement VALUES a profile was
  * written against, and every pre-existing value is untouched.)
+ * juggle joined with the crab-and-juggling plan the same way —
+ * one family for beat juggling, the two-deck act that cuts a
+ * break of the current track between two copies of it (engine/
+ * juggle.ts carries the data; it is NOT a join between two
+ * tracks, and its history records pair the track with itself).
+ * It is priced exactly like scratch per the parent ruling —
+ * standard pays full theatre price but can reach it, adventurous
+ * pays less, conservative prices it out of its own authoring
+ * reach — and the scratching slider bends it by the scratch
+ * amount (−0.3) in personality.ts, scratch and juggle being the
+ * two hands-on theatre families. Its admission spends through
+ * the [juggle, restraint] band (brain.ts), never the join
+ * candidate set: a juggle is chosen against letting the track
+ * play, at a moment, not against another track's joins.
  */
 export type JoinFamily =
   | "long-blend"
@@ -72,6 +86,7 @@ export type JoinFamily =
   | "vinyl-stop"
   | "scratch"
   | "fx"
+  | "juggle"
   | "let-it-play"
   | "early-cut";
 
@@ -88,6 +103,7 @@ export const JOIN_FAMILIES: readonly JoinFamily[] = [
   "vinyl-stop",
   "scratch",
   "fx",
+  "juggle",
   "let-it-play",
   "early-cut",
 ];
@@ -238,6 +254,7 @@ export const STANDARD_PROFILE: DecisionProfile = {
     spinback: 0.45,
     "vinyl-stop": 0.45,
     scratch: 0.5,
+    juggle: 0.5,
     fx: 0.45,
   },
   weights: {
@@ -300,6 +317,7 @@ export const CONSERVATIVE_PROFILE: DecisionProfile = {
     spinback: 0.6,
     "vinyl-stop": 0.6,
     scratch: 0.75,
+    juggle: 0.75,
     fx: 0.7,
   },
   weights: {
@@ -364,6 +382,7 @@ export const ADVENTUROUS_PROFILE: DecisionProfile = {
     spinback: 0.3,
     "vinyl-stop": 0.3,
     scratch: 0.35,
+    juggle: 0.35,
     fx: 0.3,
   },
   weights: {

@@ -7,14 +7,14 @@ import { djSession } from "../../engine/djSession";
 import { useDjModeStore } from "../../store/djModeStore";
 import { ControlLevelSwitcher } from "./ControlLevelSwitcher";
 import { DeckPerformanceControls } from "./DeckPerformanceControls";
-import { StageBackButton } from "./StageBackButton";
+import { LeaveStageButton } from "./LeaveStageButton";
 import { midBlendFixture } from "./stageFixtures";
 import type { StageControlIntents, StageDeckSnapshot } from "./stageSnapshot";
 
 (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
 
 // Component tests for the stage's engine-seam surfaces and the
-// Note 25 back control, in the tree's createRoot + act idiom:
+// stage's back button, in the tree's createRoot + act idiom:
 //   · the control-level switcher — the snapshot's level is the
 //     pressed button, clicks emit the level intent, and without
 //     the intent there is no switcher;
@@ -23,7 +23,7 @@ import type { StageControlIntents, StageDeckSnapshot } from "./stageSnapshot";
 //     roll is pressed), the move/loop/roll/bias intents carry
 //     exactly what the hand did, a refusal is SAID, and a deck
 //     holding no track says so;
-//   · the back button (Note 25) — closes the view through the
+//   · the back button — closes the view through the
 //     mode store and touches nothing else: the session is not
 //     stopped, paused, or even imported; and DjStageView mounts
 //     it in both of its states.
@@ -297,11 +297,11 @@ describe("stage engine-seam surfaces", () => {
     expect(ratio).toBeGreaterThan(1);
   });
 
-  it("back button (Note 25): closes the view and leaves the session untouched", async () => {
+  it("back button: closes the view and leaves the session untouched", async () => {
     const stopSpy = vi.spyOn(djSession, "stop");
     const pauseSpy = vi.spyOn(djSession, "pause");
     useDjModeStore.getState().setProOpen(true);
-    await render(<StageBackButton />);
+    await render(<LeaveStageButton />);
     const back = buttonByText(container, "Back");
     expect(back.getAttribute("aria-label")).toBe("Back");
     await click(back);
@@ -313,12 +313,12 @@ describe("stage engine-seam surfaces", () => {
     stopSpy.mockRestore();
     pauseSpy.mockRestore();
     // And the button's own module never reaches for the session.
-    expect(sourceOf("StageBackButton.tsx")).not.toContain("djSession");
+    expect(sourceOf("LeaveStageButton.tsx")).not.toContain("djSession");
   });
 
-  it("back button (Note 25): DjStageView mounts it in both of its states", () => {
+  it("back button: DjStageView mounts it in both of its states", () => {
     const source = sourceOf("DjStageView.tsx");
-    const mounts = source.match(/<StageBackButton/g) ?? [];
+    const mounts = source.match(/<LeaveStageButton/g) ?? [];
     expect(mounts.length).toBeGreaterThanOrEqual(2);
   });
 });

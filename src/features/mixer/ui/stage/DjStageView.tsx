@@ -14,8 +14,7 @@ import { Fader } from "./Fader";
 import { JogWheel } from "./JogWheel";
 import { PadGrid } from "./PadGrid";
 import { PersonalityPanel } from "./PersonalityPanel";
-import { StageBackButton } from "./StageBackButton";
-import { StageBackCoverProbe } from "./StageBackCoverProbe";
+import { LeaveStageButton } from "./LeaveStageButton";
 import {
   activityLinesForStage,
   deckRoleLabel,
@@ -53,9 +52,9 @@ import { WaveformStrip } from "./WaveformStrip";
 // the manual setters). There is no master control here on
 // purpose: no such seam exists in the manual stage, and the
 // player's own volume lives in the player bar. The stage has its
-// own way back (Note 25): the StageBackButton closes the view
-// from inside it, in both of the stage's states, and closing the
-// view never touches the session.
+// own way back: a plain back button (LeaveStageButton) closes
+// the view from inside it, in both of the stage's states, and
+// closing the view never touches the session.
 
 interface DeckStageData {
   prepared: PreparedTrack | undefined;
@@ -143,10 +142,6 @@ export function DjStageView() {
   statusRef.current = status;
   const [displayPosMs, setDisplayPosMs] = useState(positionMs);
   const jogTargetRef = useRef<number | null>(null);
-  // The Back pill's element, shared with the Note 26 cover probe:
-  // the probe asks the running document what sits on top of the
-  // pill and names it in the header if anything foreign does.
-  const backButtonRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     anchorRef.current = { posMs: positionMs, at: performance.now() };
@@ -221,8 +216,7 @@ export function DjStageView() {
     return (
       <div className="w-full border-t border-border-tertiary bg-bg-primary px-3 py-3 text-text-primary">
         <div className="mb-3 flex flex-wrap items-center gap-3">
-          <StageBackButton buttonRef={backButtonRef} />
-          <StageBackCoverProbe targetRef={backButtonRef} />
+          <LeaveStageButton />
         </div>
         <PersonalityPanel />
       </div>
@@ -344,6 +338,7 @@ export function DjStageView() {
       djSession.setManualRoll(deck, beats);
     },
     onDeckMove: (deck, move) => djSession.triggerDeckMove(deck, move),
+    onJuggle: (deck) => djSession.triggerJuggle(deck),
   };
 
   const renderDeck = (index: DeckIndex) => {
@@ -474,8 +469,7 @@ export function DjStageView() {
     <div className="w-full border-t border-border-tertiary bg-bg-primary px-3 py-3 text-text-primary">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-3">
-          <StageBackButton buttonRef={backButtonRef} />
-          <StageBackCoverProbe targetRef={backButtonRef} />
+          <LeaveStageButton />
         </div>
         <ControlLevelSwitcher level={controlLevel} intents={stageIntents} />
       </div>

@@ -58,9 +58,10 @@ export interface TrackFacts {
   /**
    * The minimum-play floor (Note 19, ruling 1): the second until
    * which a started song is owed before the DJ may move on — the
-   * end of its first big section (see minimumPlayEndSec). Null
-   * when the analysis carries no usable section data; the floor
-   * abstains then rather than inventing a number.
+   * end of its first big section (see minimumPlayEndSec). Without
+   * usable section data the floor is derived from the track's own
+   * proportions (Note 33); null only when the track's length
+   * itself is unknown.
    */
   minimumPlayEndSec: number | null;
   durationSec: number;
@@ -72,6 +73,35 @@ export interface TrackFacts {
 const BIG_SECTION_KINDS: ReadonlySet<string> = new Set(["chorus", "drop"]);
 
 /**
+ * Note 33's derived floor, for the analyses that offer no usable
+ * section evidence — or only a trivially short first section: a
+ * quarter of the track, capped at 90 s. A quarter is the smallest
+ * share that reliably covers a song's opening statement and first
+ * arrival across ordinary structures without reaching the middle
+ * of the track, and because it scales with the track it can never
+ * trap a short one — a 30 s interlude derives 7.5 s, an 8 s sting
+ * 2 s, both far inside the track's own length. The cap keeps very
+ * long tracks from acquiring multi-minute floors out of what is,
+ * after all, a derivation rather than evidence: a genuine section
+ * floor is never capped this way, only the derived one is.
+ */
+const DERIVED_FLOOR_FRACTION = 0.25;
+const DERIVED_FLOOR_CAP_SEC = 90;
+/**
+ * A section floor shorter than this is trivially small — an
+ * analyser artefact (a two-second "intro"), not an opening
+ * statement — and the derived floor replaces it when larger. A
+ * genuine short floor at or above the bound (a 16 s first
+ * section) is evidence and stands untouched.
+ */
+const TRIVIAL_FLOOR_SEC = 10;
+
+function derivedFloorSec(durationSec: number): number | null {
+  if (!(durationSec > 0)) return null;
+  return Math.min(durationSec * DERIVED_FLOOR_FRACTION, DERIVED_FLOOR_CAP_SEC);
+}
+
+/**
  * The minimum-play floor, exactly as ruled (Note 19, ruling 1):
  * a started song is owed at least through its first big section.
  * "First big section" is read from analysis v2's sections as the
@@ -79,21 +109,34 @@ const BIG_SECTION_KINDS: ReadonlySet<string> = new Set(["chorus", "drop"]);
  * arrival a listener is waiting for, sung or instrumental. A
  * track whose sections hold no chorus/drop still has a floor:
  * the end of its first section (the DJ owes the song its opening
- * statement, whatever shape it takes). A track with NO usable
- * section data — an unanalysed shell, a legacy analysis — has no
- * floor: null, and the session plays it under the standing rules
- * (a shell is never blended anyway; the floor binds joins, and
- * there are no joins into or out of a shell).
+ * statement, whatever shape it takes).
+ *
+ * Note 33 closed the floor's two holes. A track with NO usable
+ * section data — a legacy analysis, a partial one — no longer
+ * abstains: its floor is derived from its own proportions (see
+ * derivedFloorSec), so the guarantee holds for every track whose
+ * length is known. And a computed floor that is trivially short
+ * (an artefact first section of a few seconds) is raised to that
+ * same derived floor. The floor is null only when the track's
+ * length itself is unknown — nothing honest can be derived then.
+ * (An unanalysed shell is never blended anyway; the floor binds
+ * joins, and there are no joins into or out of a shell.)
  */
 export function minimumPlayEndSec(analysis: TrackAnalysis): number | null {
+  const duration = analysis.beatMap.durationSec;
+  const derived = derivedFloorSec(duration);
   const sections = analysis.sections;
-  if (!sections || sections.length === 0) return null;
+  if (!sections || sections.length === 0) return derived;
   const first =
     sections.find((section) => BIG_SECTION_KINDS.has(section.kind)) ??
     sections[0];
-  if (!first || !(first.endSec > 0)) return null;
-  const duration = analysis.beatMap.durationSec;
-  return duration > 0 ? Math.min(first.endSec, duration) : first.endSec;
+  if (!first || !(first.endSec > 0)) return derived;
+  const sectionFloor =
+    duration > 0 ? Math.min(first.endSec, duration) : first.endSec;
+  if (derived !== null && sectionFloor < TRIVIAL_FLOOR_SEC) {
+    return Math.max(sectionFloor, derived);
+  }
+  return sectionFloor;
 }
 
 function peakSectionRms(analysis: TrackAnalysis): number {

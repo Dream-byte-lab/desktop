@@ -67,7 +67,8 @@ export function DeckPerformanceControls({
     intents.onTempoBias !== undefined ||
     intents.onManualLoop !== undefined ||
     intents.onManualRoll !== undefined ||
-    intents.onDeckMove !== undefined;
+    intents.onDeckMove !== undefined ||
+    intents.onJuggle !== undefined;
   if (!hasSeams) return null;
 
   const biasPercent = Math.round((snapshot.tempoBias - 1) * 1000) / 10;
@@ -103,6 +104,12 @@ export function DeckPerformanceControls({
     if (!intents.onDeckMove) return;
     const performed = intents.onDeckMove(deck, move);
     setNotice(performed ? null : "That move can't be performed right now.");
+  };
+
+  const handleJuggle = () => {
+    if (!intents.onJuggle) return;
+    const performed = intents.onJuggle(deck);
+    setNotice(performed ? null : "That juggle can't be performed right now.");
   };
 
   const moveButtonClass =
@@ -235,6 +242,26 @@ export function DeckPerformanceControls({
               {label}
             </button>
           ))}
+        </div>
+      ) : null}
+
+      {/* Beat juggling: a two-deck act on the playing track alone
+          (the standby deck is borrowed for the window), so it
+          stands in its own row — not among the deck moves, which
+          all hand over to an incoming track. */}
+      {intents.onJuggle ? (
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            disabled={!live}
+            onClick={handleJuggle}
+            className={moveButtonClass}
+          >
+            Juggle
+          </button>
+          <span className="text-[11px] text-text-secondary">
+            Cut this track's break between its two copies.
+          </span>
         </div>
       ) : null}
 

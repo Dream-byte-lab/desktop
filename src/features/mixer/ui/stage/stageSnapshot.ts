@@ -249,6 +249,17 @@ export interface StageControlIntents {
    * said out loud instead of silently doing nothing.
    */
   onDeckMove?: (deck: StageDeckIndex, move: StageDeckMove) => boolean;
+  /**
+   * Trigger a beat juggle on the playing deck by hand: the
+   * current track's break, cut between two copies of itself (the
+   * standby deck is borrowed for the window). It is NOT a deck
+   * move — it names no incoming and hands nothing over — so it
+   * carries its own intent. Returns whether the act was authored
+   * and performed, so a refusal (the material offering no break,
+   * a join or a juggle already sounding) can be said out loud
+   * instead of silently doing nothing.
+   */
+  onJuggle?: (deck: StageDeckIndex) => boolean;
 }
 
 /** A deck move the stage can trigger by hand: the R1 stops and the R2 scratches. */

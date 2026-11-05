@@ -1,5 +1,6 @@
 import type { TrackAnalysis } from "./analyseTrack";
 import { BASS_CUT_DB, BASS_FLAT_DB, Deck } from "./deck";
+import type { JugglePerformance } from "./juggle";
 import {
   automationValueAt,
   recipeFromPlan,
@@ -1737,6 +1738,9 @@ export class TwoDeckMixer {
    */
   playNow(buffer: AudioBuffer, offsetSec = 0, levelGain = 1): number {
     const deck = this.currentDeck;
+    // A plain start takes the decks over: no juggle segment may
+    // bleed into it (a no-op write-wise when none is sounding).
+    this.stopDeckSegments(this.context.currentTime);
     deck.load(buffer);
     deck.setLevel(levelGain);
     const now = this.context.currentTime;
@@ -1808,6 +1812,9 @@ export class TwoDeckMixer {
   /** Stops both decks and silences them. */
   stopAll(): void {
     const now = this.context.currentTime;
+    // Segment sources are silenced with everything else (the
+    // gains are zeroed for both decks below regardless).
+    this.stopDeckSegments(now);
     for (const deck of this.decks) {
       deck.gain.gain.cancelScheduledValues(now);
       deck.gain.gain.setValueAtTime(0, now);
@@ -1839,6 +1846,200 @@ export class TwoDeckMixer {
   }
 
   /**
+   * Silences any sounding juggle segments (the J1 return
+   * discipline): segment sources are how a juggle sounds, and
+   * every path that takes the decks over — a plain start, a stop,
+   * a recipe — stops them first, so no segment can bleed into
+   * whatever sounds next. When segments were sounding on the
+   * non-current deck (a borrowed deck the juggle left raised), its
+   * fader is also taken to 0: a hot, silent borrowed deck would
+   * otherwise hand its next performer a lie. When no segments are
+   * registered this writes nothing at all — the pre-juggle paths
+   * are untouched, event for event.
+   */
+  private stopDeckSegments(now: number): void {
+    for (const deck of this.decks) {
+      if (deck.stopSegments(now) > 0 && deck !== this.currentDeck) {
+        deck.gain.gain.cancelScheduledValues(now);
+        deck.gain.gain.setValueAtTime(0, now);
+      }
+    }
+  }
+
+  /**
+   * Performs a beat juggle (the revamp's J1 executor): the
+   * CURRENT track, cut between two copies of itself — the one
+   * standing on the playing deck and a second copy of the same
+   * buffer loaded onto the standby deck for the window alone.
+   * The performance's deck numbers are roles: 0 is the playing
+   * deck, 1 the borrowed one. `this.current` never flips — the
+   * borrowed deck is returned exactly as it was borrowed, and the
+   * track resumes on the playing deck from the performance's
+   * exit as an ordinary main source.
+   *
+   * The choreography, exactly: the borrowed copy is level-matched
+   * to the playing deck and its chain neutralised (flat EQ, open
+   * filter, gates home, sends silent — the assisted level's holds
+   * respected exactly as playNow respects them, a held parameter
+   * keeping the hand's value). Both decks' main sources stop at
+   * `startCtxTime`; the segments then sound back-to-back through
+   * segment sources, each on its role deck, the two faders cutting
+   * against each other at every boundary in the gate idiom — an
+   * anchored set, then a GATE_CLICK_SEC ramp — a hard cut with no
+   * click, never a blend: at every instant exactly one copy is
+   * audible, which is what makes the act a juggle and not a mix.
+   * If the last segment sounded on the borrowed deck the faders
+   * cross back at the window's end; the playing deck then resumes
+   * the track from the exit. The playing deck's own chain is never
+   * touched — its segments sound through exactly the chain its
+   * main source was sounding through, so the window opens and
+   * closes without a timbre step.
+   */
+  performJuggle(
+    performance: JugglePerformance,
+    buffer: AudioBuffer,
+    startCtxTime: number,
+  ): { endCtxTime: number } {
+    const home = this.currentDeck;
+    const borrowed = this.nextDeck;
+    const roleDecks: [Deck, Deck] = [home, borrowed];
+    const borrowedIndex = (1 - this.current) as DeckIndex;
+    const t0 = startCtxTime;
+
+    // Defensive: no segment of any earlier act sounds into this
+    // one (the session neutralises on every path already).
+    home.stopSegments();
+    borrowed.stopSegments();
+
+    // The borrowed copy stands at the playing deck's level, chain
+    // neutral, anchored at the window's open (it is silent until
+    // its first segment's boundary raises its fader).
+    borrowed.load(buffer);
+    borrowed.setLevel(home.level.gain.value);
+    const held = (
+      target:
+        | { kind: "eq"; band: "bass" | "mid" | "high" }
+        | { kind: "filter" }
+        | { kind: "send"; effect: RecipeEffectKind },
+    ): boolean => this.manualParamHeld(borrowedIndex, target);
+    if (!held({ kind: "eq", band: "bass" })) {
+      borrowed.bass.gain.setValueAtTime(BASS_FLAT_DB, t0);
+    }
+    if (!held({ kind: "eq", band: "mid" })) {
+      borrowed.mid.gain.setValueAtTime(BASS_FLAT_DB, t0);
+    }
+    if (!held({ kind: "eq", band: "high" })) {
+      borrowed.high.gain.setValueAtTime(BASS_FLAT_DB, t0);
+    }
+    if (!held({ kind: "filter" })) {
+      borrowed.filter.frequency.setValueAtTime(20_000, t0);
+    }
+    borrowed.echoSend.gain.setValueAtTime(0, t0);
+    borrowed.scratchGate.gain.setValueAtTime(1, t0);
+    borrowed.fxGate.gain.setValueAtTime(1, t0);
+    if (!held({ kind: "send", effect: "reverb" })) {
+      borrowed.reverbSend.gain.setValueAtTime(0, t0);
+    }
+    if (!held({ kind: "send", effect: "delay" })) {
+      borrowed.delaySend.gain.setValueAtTime(0, t0);
+    }
+    if (!held({ kind: "send", effect: "flanger" })) {
+      borrowed.flangerSend.gain.setValueAtTime(0, t0);
+    }
+    if (!held({ kind: "send", effect: "phaser" })) {
+      borrowed.phaserSend.gain.setValueAtTime(0, t0);
+    }
+    if (!held({ kind: "send", effect: "distortion" })) {
+      borrowed.distortionSend.gain.setValueAtTime(0, t0);
+    }
+    if (!held({ kind: "send", effect: "spiral" })) {
+      borrowed.spiralSend.gain.setValueAtTime(0, t0);
+    }
+    if (!held({ kind: "send", effect: "roll" })) {
+      borrowed.rollSend.gain.setValueAtTime(0, t0);
+    }
+
+    // Both main sources stop as the window opens; until the exit
+    // the track sounds through segment sources alone.
+    home.stop(t0);
+    borrowed.stop(t0);
+
+    // Each segment's sounding length: a repeat replays the break's
+    // span every time; a continue segment lasts until the next
+    // segment's start (the last, until the exit).
+    const spanSec = (k: number): number => {
+      const segment = performance.segments[k];
+      if (performance.pattern === "repeat") {
+        return performance.exitSec - performance.breakStartSec;
+      }
+      const end =
+        k + 1 < performance.segments.length
+          ? performance.segments[k + 1].startSec
+          : performance.exitSec;
+      return end - segment.startSec;
+    };
+
+    // Faders anchored at the window's open: the first segment's
+    // deck at 1, the other at 0 (an anchored set at the playing
+    // deck's standing value — not a fade — so stale automation
+    // from an earlier act cannot leak into the window).
+    const firstDeck = roleDecks[performance.segments[0].deck];
+    for (const deck of roleDecks) {
+      deck.gain.gain.cancelScheduledValues(t0);
+      deck.gain.gain.setValueAtTime(deck === firstDeck ? 1 : 0, t0);
+    }
+    let cursor = t0;
+    const boundaries: { at: number; leaving: Deck; arriving: Deck }[] = [];
+    performance.segments.forEach((segment, k) => {
+      const deck = roleDecks[segment.deck];
+      const end = cursor + spanSec(k);
+      deck.playSegment(cursor, segment.startSec, end, 1);
+      if (k > 0) {
+        boundaries.push({
+          at: cursor,
+          leaving: roleDecks[performance.segments[k - 1].deck],
+          arriving: deck,
+        });
+      }
+      cursor = end;
+    });
+    const endCtxTime = cursor;
+    for (const boundary of boundaries) {
+      boundary.leaving.gain.gain.setValueAtTime(1, boundary.at);
+      boundary.leaving.gain.gain.linearRampToValueAtTime(
+        0,
+        boundary.at + GATE_CLICK_SEC,
+      );
+      boundary.arriving.gain.gain.setValueAtTime(0, boundary.at);
+      boundary.arriving.gain.gain.linearRampToValueAtTime(
+        1,
+        boundary.at + GATE_CLICK_SEC,
+      );
+    }
+
+    // The return: if the last segment sounded on the borrowed
+    // deck, the faders cross back at the window's end. Either way
+    // the playing deck resumes the track from the exit as its
+    // main source, and the borrowed deck is left silent at fader
+    // 0, holding a copy nobody will play — exactly the state it
+    // was borrowed in, plus a loaded buffer (which every deck
+    // load in this engine already leaves behind).
+    const lastDeck =
+      roleDecks[performance.segments[performance.segments.length - 1].deck];
+    if (lastDeck === borrowed) {
+      borrowed.gain.gain.setValueAtTime(1, endCtxTime);
+      borrowed.gain.gain.linearRampToValueAtTime(
+        0,
+        endCtxTime + GATE_CLICK_SEC,
+      );
+      home.gain.gain.setValueAtTime(0, endCtxTime);
+      home.gain.gain.linearRampToValueAtTime(1, endCtxTime + GATE_CLICK_SEC);
+    }
+    home.play(endCtxTime, performance.exitSec, 1);
+    return { endCtxTime };
+  }
+
+  /**
    * Performs a planned transition into a new track on the idle deck.
    * The legacy seam: the plan is adapted to a recipe and performed by
    * the same executor as authored recipes, so there is one code path
@@ -1863,6 +2064,11 @@ export class TwoDeckMixer {
     recipe: TransitionRecipe,
     options: PerformRecipeOptions = {},
   ): { blendStartCtxTime: number; blendEndCtxTime: number } {
+    // A recipe takes the decks over: no juggle segment may bleed
+    // into it (a no-op write-wise when none is sounding). The
+    // session never commits across a sounding juggle — this is
+    // the executor's own belt under that braces.
+    this.stopDeckSegments(this.context.currentTime);
     let working = recipe;
 
     // A B-side anchor (original track time) as a position in the

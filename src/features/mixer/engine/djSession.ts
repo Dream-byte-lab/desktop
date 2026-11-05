@@ -5,6 +5,8 @@ import { usePlayerStore } from "../../player/store/playerStore";
 import { usePartyStore } from "../store/partyStore";
 import { DjBrain, type BrainDecision, type TrackChoice } from "./brain";
 import { beatsAtTime, timeAtBeat } from "./beatMap";
+import type { DecisionProfile } from "./decisionProfile";
+import { validateJugglePerformance, type JugglePerformance } from "./juggle";
 import type { ManualDeckMove } from "./candidates";
 import {
   assembleSet,
@@ -15,6 +17,7 @@ import { levelGainFor } from "./levelMatch";
 import {
   buildPlaylistIntel,
   buyTimeLoopSpan,
+  minimumPlayEndSec,
   type PlaylistIntel,
   type TrackFacts,
 } from "./playlistIntel";
@@ -236,6 +239,32 @@ interface ActiveJoin {
   pendingSegments: RateSegment[];
   /** Seconds of the outgoing heard at the moment the overlap begins. */
   heardLengthSec: number;
+}
+
+/**
+ * A juggle sounding on the decks (the crab-and-juggling plan's
+ * J2 borrow): the current track cut between two copies of itself,
+ * the standby deck borrowed for the window and returned at its
+ * end. While it sounds, planning is locked exactly as under a
+ * join, and positionNow reads through the segment map the act
+ * appended. Completion is owned by the tick's clock check;
+ * interruption (skip, seek, stop, a new track) clears it
+ * unrecorded — history records completed windows only.
+ */
+interface SoundingJuggle {
+  performance: JugglePerformance;
+  /** The profile the act was admitted under (its history record's). */
+  profile: DecisionProfile;
+  startCtxTime: number;
+  endCtxTime: number;
+  /** Each segment's sounding window, for the borrowed deck's stage truth. */
+  windows: {
+    /** Role deck: 0 = the playing deck, 1 = the borrowed deck. */
+    deck: 0 | 1;
+    startSec: number;
+    fromCtxTime: number;
+    toCtxTime: number;
+  }[];
 }
 
 /** A guest request carrying the playable track the guest chose. */
@@ -475,6 +504,8 @@ export class DjSession {
   } | null = null;
   /** A join currently sounding on the decks (locked; completion-owned). */
   private activeJoin: ActiveJoin | null = null;
+  /** A juggle currently sounding on the decks (locked; tick-owned). */
+  private soundingJuggle: SoundingJuggle | null = null;
   /**
    * The rendition the standing decision calls for, when its recipe
    * carries stretchB: requested the moment the decision is made
@@ -797,6 +828,22 @@ export class DjSession {
         this.current.buffer.duration,
       );
     }
+    const juggle = this.soundingJuggle;
+    if (juggle && index === 1 - this.playingDeckIndex) {
+      // The borrowed deck's playhead exists only while one of
+      // its segments is sounding; between cuts its copy is
+      // parked, and the stage shows no playhead for it — the
+      // same honesty as a prepared track standing in memory.
+      const now = this.context.currentTime;
+      const sounding = juggle.windows.find(
+        (w) => w.deck === 1 && now >= w.fromCtxTime && now < w.toCtxTime,
+      );
+      if (!sounding) return null;
+      return Math.min(
+        Math.max(0, sounding.startSec + (now - sounding.fromCtxTime)),
+        this.current.buffer.duration,
+      );
+    }
     const join = this.activeJoin;
     if (!join || index !== 1 - this.playingDeckIndex) return null;
     const now = this.context.currentTime;
@@ -816,6 +863,12 @@ export class DjSession {
     if (index === this.playingDeckIndex) return this.current.track.id;
     if (this.activeJoin && index === 1 - this.playingDeckIndex) {
       return this.activeJoin.incoming.track.id;
+    }
+    if (this.soundingJuggle && index === 1 - this.playingDeckIndex) {
+      // The borrowed deck holds the current track's second copy
+      // for the juggle's window — the stage says so, exactly as
+      // it names a standing incoming during a join.
+      return this.current.track.id;
     }
     return null;
   }
@@ -858,9 +911,16 @@ export class DjSession {
         ...mixer.stageEffectReadings(kind),
         assign: mixer.manualFxAssign(kind),
       })),
-      currentMove: describeDecisionMove(
-        this.activeJoin?.decision ?? this.decision,
-      ),
+      currentMove: this.soundingJuggle
+        ? {
+            label:
+              this.soundingJuggle.performance.pattern === "repeat"
+                ? "Juggling the break — the same span thrown between two copies"
+                : "Juggling the break — walking it forward between two copies",
+            family: "juggle",
+            technique: this.soundingJuggle.performance.pattern,
+          }
+        : describeDecisionMove(this.activeJoin?.decision ?? this.decision),
       crossfaderCurve: mixer.crossfaderCurveName(),
       controlLevel: this.controlLevelValue,
       cue: { deckIndex: cueDeck, meter: mixer.cueMeterSummary(cueDeck) },
@@ -1227,8 +1287,152 @@ export class DjSession {
       signalEvents: this.brain.signals.journal().length,
     };
     this.noteStretchNeed();
-    this.commitDecision();
+    // The host's own act: the performed-side minimum-play gate
+    // never holds it (Note 33) — the floor binds the DJ, never
+    // the user, here as at the brain's veto.
+    this.commitDecision({ hostAct: true });
     return true;
+  }
+
+  /**
+   * Performs a juggle on the current track through the borrow
+   * protocol (the crab-and-juggling plan's J2): the standby deck
+   * is borrowed for the CURRENT track — loaded with the same
+   * buffer, cut against the playing deck for the window, and
+   * returned at the window's end with the horizon exactly as it
+   * stood (the borrow touches no slot, no index, no preparation;
+   * the mixer's current deck never flips).
+   *
+   * The failure discipline is the protocol's core: EVERY guard
+   * runs before the mixer is told anything, so a borrow that
+   * cannot complete returns the deck state untouched — there is
+   * no half-borrowed state to recover from. The guards, in
+   * order: the track is mixable (never a shell — a shell's
+   * analysis cannot name a break); no join is sounding; no
+   * juggle is already sounding; the timeline runs at rate 1 (a
+   * rendition-performed track refuses — in stretch mode the
+   * deck's loaded buffer is the rendition while the prepared
+   * buffer is the original, so the two "copies" would not be the
+   * same audio and the position map is the original's; an honest
+   * v1 bound, refused rather than fudged); the performance
+   * re-validates against the track as it stands now (the §3
+   * second validation, in the validator's own voice); and the
+   * break still stands ahead of the playhead.
+   *
+   * On the act: any standing decision is cancelled (the tick's
+   * §22 idiom — the join it described is re-planned after the
+   * window, never performed across it), the buy-time loop and
+   * the host's manual loop and roll end exactly as at a commit,
+   * and the position truth is APPENDED to the rate-segment map —
+   * one entry per segment plus the exit resume. positionNow
+   * itself is unchanged: the playhead was always a function of
+   * this list, and a juggle is a discontinuous stretch of it
+   * (J2's answer to the one-playhead assumption — the map, not
+   * the reader, carries the act).
+   */
+  private performJuggleNow(
+    performance: JugglePerformance,
+    profile: DecisionProfile,
+  ): boolean {
+    if (!this.mixer || !this.context || !this.current) return false;
+    if (this.current.mixable === false) return false;
+    if (this.activeJoin) return false;
+    if (this.soundingJuggle) return false;
+    if (this.activeRate() !== 1) return false;
+    if (
+      validateJugglePerformance(performance, this.current.buffer.duration)
+        .length > 0
+    ) {
+      return false;
+    }
+    const position = this.positionNow();
+    if (performance.breakStartSec < position) return false;
+
+    this.decision = null;
+    this.decisionInputs = null;
+    this.renditionRequest = null;
+    this.inspectionNeeded = true;
+    this.disarmBuyTimeLoop();
+    this.disarmManualLoop();
+    this.releaseManualRoll();
+
+    const startCtxTime =
+      this.context.currentTime + (performance.breakStartSec - position);
+    const { endCtxTime } = this.mixer.performJuggle(
+      performance,
+      this.current.buffer,
+      startCtxTime,
+    );
+    // The segment windows, on the same span arithmetic the
+    // executor performs: a repeat's every segment lasts the
+    // break's span; a continue segment lasts until the next
+    // segment's start (the last, until the exit).
+    const windows: SoundingJuggle["windows"] = [];
+    let cursor = startCtxTime;
+    performance.segments.forEach((segment, k) => {
+      const endPos =
+        performance.pattern === "repeat"
+          ? performance.exitSec
+          : k + 1 < performance.segments.length
+            ? performance.segments[k + 1].startSec
+            : performance.exitSec;
+      const toCtxTime = cursor + (endPos - segment.startSec);
+      windows.push({
+        deck: segment.deck,
+        startSec: segment.startSec,
+        fromCtxTime: cursor,
+        toCtxTime,
+      });
+      this.segments.push({
+        fromCtxTime: cursor,
+        trackTimeAtStart: segment.startSec,
+        rate: 1,
+      });
+      cursor = toCtxTime;
+    });
+    this.segments.push({
+      fromCtxTime: endCtxTime,
+      trackTimeAtStart: performance.exitSec,
+      rate: 1,
+    });
+    this.soundingJuggle = {
+      performance,
+      profile,
+      startCtxTime,
+      endCtxTime,
+      windows,
+    };
+    return true;
+  }
+
+  /**
+   * The stage's Juggle control (the plan's step 10): the host
+   * calls for a juggle on the playing deck, by hand. It mirrors
+   * triggerDeckMove's discipline — refused on the standby deck,
+   * during a sounding join, on a shell — with the one deliberate
+   * difference the act's nature demands: NO prepared incoming is
+   * required. A deck move hands over to the next track, so it
+   * needs one standing by; a juggle is performed on the playing
+   * track alone, between its two copies, and requiring a `next`
+   * would refuse the act in exactly the solo moments it exists
+   * for. The brain's manual author keeps every material and
+   * structural gate (no price gate, no lottery — the host named
+   * the act), and the borrow protocol's guards have the last
+   * word, as validateRecipe does for deck moves.
+   */
+  triggerJuggle(index: DeckIndex): boolean {
+    this.inspectionNeeded = true;
+    if (!this.mixer || !this.context || !this.current) return false;
+    if (index !== this.playingDeckIndex) return false;
+    if (this.activeJoin) return false;
+    if (this.soundingJuggle) return false;
+    if (this.current.mixable === false) return false;
+    const manual = this.brain.authorManualJuggleMove({
+      current: this.current,
+      positionSec: this.positionNow(),
+    });
+    if (!manual) return false;
+    return this.performJuggleNow(manual.performance, manual.profile);
   }
 
   async start(
@@ -1664,6 +1868,10 @@ export class DjSession {
     this.finaliseInterruptedJoin();
     this.decision = null;
     this.decisionInputs = null;
+    // A seek cuts any sounding juggle: the act is cleared
+    // unrecorded, and the mixer's stopAll below silences its
+    // segments (the executor's takeover discipline).
+    this.soundingJuggle = null;
     this.clearTimers();
     this.mixer.stopAll();
     const startAt = this.mixer.playNow(
@@ -1719,6 +1927,7 @@ export class DjSession {
     this.decision = null;
     this.decisionInputs = null;
     this.renditionRequest = null;
+    this.soundingJuggle = null;
     this.intelCache = null;
     this.choiceSpentKey = null;
     this.lastTrackChoiceValue = null;
@@ -1818,6 +2027,11 @@ export class DjSession {
     this.decision = null;
     this.decisionInputs = null;
     this.renditionRequest = null;
+    // A landing ends any sounding juggle unrecorded (its window
+    // did not complete), and the new play's breaks are new
+    // windows for the brain's spend.
+    this.soundingJuggle = null;
+    this.brain.resetJuggleWindow();
     this.onBlendChange?.(false);
 
     const startAt = this.mixer.playNow(
@@ -2647,6 +2861,38 @@ export class DjSession {
   }
 
   /**
+   * Considers a beat juggle on the current track (the plan's
+   * step 8 wiring): the brain's admission spend, called by the
+   * tick before the horizon gates — the act needs no pair, so
+   * `next` is never consulted, and its spend lead is its own.
+   * The doors, in order: the manual control level authors
+   * nothing autonomously (the host's triggerJuggle stands
+   * instead); a standing join decision closes the door (the
+   * spend happens when no join decision stands — the brain's
+   * attention is on the exit, and a juggle performed across a
+   * standing decision would have to cancel it, which this door
+   * refuses to do silently); a shell is never juggled. The
+   * brain applies the party ruling and the one-spend-per-window
+   * rule itself. A juggle verdict performs immediately through
+   * the borrow protocol.
+   */
+  private considerJuggle(position: number): void {
+    if (this.controlLevelValue === "manual") return;
+    if (this.decision) return;
+    if (!this.current || this.current.mixable === false) return;
+    const spend = this.brain.considerJuggle({
+      current: this.current,
+      positionSec: position,
+      // The act sits inside the current track's own slot of the
+      // set (a join's midpoint formula has no second track here).
+      arcPosition: this.index / Math.max(1, this.queue.length - 1),
+      partyRequestsPending: this.liveRaveOpenRequests.length > 0,
+    });
+    if (!spend || spend.outcome !== "juggle") return;
+    this.performJuggleNow(spend.authored.performance, spend.profile);
+  }
+
+  /**
    * Declares the standing decision's stretch need to preparation:
    * a recipe carrying stretchB gets its rendition of the incoming
    * track rendering NOW, in the background — the session never
@@ -2688,6 +2934,25 @@ export class DjSession {
     });
   }
 
+  /**
+   * The performed-side minimum-play gate (Note 33): is the
+   * playing track still inside the length it is owed? The floor
+   * is the brain's own number (minimumPlayEndSec — a started song
+   * is owed through its first big section, or the derived floor
+   * when the analysis offers no sections to read). The gate can
+   * never deadlock a set: the floor never exceeds the track's
+   * length, and the position clock integrates past the end while
+   * the end-of-track floor recovers, so at the natural end the
+   * gate stands open and the standing end flow takes over exactly
+   * as before.
+   */
+  private minimumPlayOwed(): boolean {
+    if (!this.current) return false;
+    const floorSec = minimumPlayEndSec(this.current.analysis);
+    if (floorSec === null) return false;
+    return this.positionNow() < floorSec;
+  }
+
   /** Commits the current decision when its anchor is upon us. */
   private maybeCommit(position: number): void {
     const decision = this.decision;
@@ -2707,10 +2972,33 @@ export class DjSession {
    * (earlier) authoring moment. After this call the join is locked:
    * no signal, request or re-plan may alter it (may-not rule).
    */
-  private commitDecision(): void {
+  private commitDecision(options: { hostAct?: boolean } = {}): void {
     const decision = this.decision;
     if (!decision || !this.mixer || !this.context) return;
     if (!this.current || !this.next) return;
+    // The performed-side minimum-play gate (Note 33). The brain's
+    // anchor veto keeps ordinarily-authored joins at or after the
+    // floor, so for them this gate can hold the call only for the
+    // sub-horizon remainder before the anchor — and leadInSec is
+    // re-stamped below, so the audible overlap still begins at
+    // its anchor. What the gate exists for is the decision the
+    // veto could not see: one authored while the outgoing's
+    // analysis was shallower than the one now playing — a legacy
+    // or partial analysis whose floor has since deepened past the
+    // standing anchor (the deepened-outro latch is exactly such a
+    // replacement). The decision stands unperformed; the tick
+    // retries the commit until the floor passes, and the join
+    // then performs with its lead-in re-stamped to the moment it
+    // actually begins. Every performed transition the session
+    // itself begins flows through this door — authored joins,
+    // re-planned joins, and the executor's own fallback cut,
+    // which lives inside performRecipe below it — so the floor
+    // now binds what the room hears, not only what the brain
+    // authors. A host-triggered commit (triggerDeckMove) passes
+    // hostAct and is never held: the floor binds the DJ, never
+    // the user — exactly as the brain's veto exempts the host's
+    // authored moves, and as skipNext stays ungated.
+    if (!options.hostAct && this.minimumPlayOwed()) return;
     const incoming = this.next;
     const landedIndex = this.nextIndex;
     const startAMs = decision.recipe.overlap.startAMs;
@@ -2723,12 +3011,12 @@ export class DjSession {
       leadInSec === decision.recipe.leadInSec
         ? decision.recipe
         : { ...decision.recipe, leadInSec };
-    // No minimum-play re-gate here (Note 19, ruling 1): the
-    // brain's anchor veto already guarantees the recipe's
-    // overlap starts at or after the floor, and a commit fires
-    // up to the horizon BEFORE its anchor precisely so the
-    // audible overlap begins AT the anchor — re-gating the call
-    // would break ripe commits without protecting anything.
+    // (The performed-side minimum-play gate stands at this
+    // method's head — Note 33. It supersedes the older stance
+    // that the commit needed no re-gate because the brain's veto
+    // had already seen the floor: the veto reads the analysis at
+    // authoring time, and the analysis playing now may be a
+    // deeper one.)
     // A stretch recipe performs against the RENDITION, never the
     // original buffer — the two are different timelines, and a
     // mismatch would start B at the wrong musical point at the
@@ -3093,6 +3381,27 @@ export class DjSession {
     // all read the inspected state, never the stale assumption.
     if (this.inspectionNeeded) this.inspectStateBeforePlanning();
 
+    // A sounding juggle completes on the clock: when its window
+    // closes, the completed act — and only a completed one — is
+    // written to history (§28 abstains on its evaluation; see
+    // recordPerformedJuggle). An interrupted juggle never
+    // reaches this line: the path that cut it cleared the state
+    // unrecorded, as history records performances, not attempts.
+    if (
+      this.soundingJuggle &&
+      this.context.currentTime >= this.soundingJuggle.endCtxTime
+    ) {
+      const finished = this.soundingJuggle;
+      this.soundingJuggle = null;
+      if (this.current) {
+        this.brain.recordPerformedJuggle({
+          current: this.current,
+          performance: finished.performance,
+          profile: finished.profile,
+        });
+      }
+    }
+
     if (remaining <= 0.05) {
       // Guarantee 6: while a blend is sounding, its completion owns
       // the landing — the end branch must not fire underneath it.
@@ -3177,6 +3486,14 @@ export class DjSession {
 
     // A sounding blend is locked: no re-planning underneath it.
     if (this.activeJoin) return;
+    // A sounding juggle is locked the same way: nothing is
+    // considered or committed across its window.
+    if (this.soundingJuggle) return;
+    // Beat juggling is considered on the current track alone,
+    // before the horizon gates below: the act needs no pair, and
+    // its window may stand anywhere in the track, not only in
+    // the join-planning stretch.
+    this.considerJuggle(position);
     if (!this.next) {
       this.decision = null;
       this.decisionInputs = null;

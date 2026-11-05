@@ -246,6 +246,27 @@ describe("the minimum-play floor binds the join's ANCHOR (ruling 1)", () => {
     // first section's end (16 s) and the pair decides as before.
     expect(decision).not.toBeNull();
   });
+
+  it("a section-less outgoing still owes its derived floor (Note 33)", async () => {
+    const { brain } = makeBrain();
+    await brain.beginSet();
+    const outgoing = outgoingAnalysis();
+    outgoing.sections = undefined;
+    const decision = brain.consider(
+      {
+        outgoing: prepared("a", outgoing),
+        outgoingPositionSec: 60,
+        incoming: prepared("b", incomingAnalysis()),
+      },
+      0.3,
+    );
+    // No sections to read the floor from: it is derived — a
+    // quarter of the 240 s track, 60 s — and the veto binds the
+    // derived floor exactly as it binds a read one.
+    expect(decision).not.toBeNull();
+    const anchor = decision!.recipe.overlap.startAMs;
+    expect(anchor === null || anchor >= 60_000).toBe(true);
+  });
 });
 
 describe("§28 — performed joins are evaluated and persisted", () => {

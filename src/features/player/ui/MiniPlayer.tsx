@@ -5,7 +5,7 @@ import {
   Sidebar,
   SkipNext,
   SkipPrevious,
-  MaximizeSquare3,
+  SquareArrowRightUp,
   PlaybackSpeed,
   Tuning2,
   VolumeCross,
@@ -37,6 +37,7 @@ import {
 import { VolumeColumn } from "./VolumeColumn";
 import { DjModeButton } from "@/features/mixer/ui/DjModeButton";
 import { DjProToggle } from "@/features/mixer/ui/DjProView";
+import { popOutOverlay } from "@/features/overlay";
 import { SpeedPitchPicker } from "./SpeedPitchPicker";
 import { EqualizerPicker } from "./EqualizerPicker";
 import { isEqActive } from "../engine/equalizer";
@@ -1153,18 +1154,22 @@ function MiniPlayer({
               </button>
               <button
                 type="button"
-                aria-label={t("player.open_player")}
-                title={t("player.open_player")}
+                aria-label={t("player.pop_out")}
+                title={t("player.pop_out")}
                 className={iconButtonClass}
                 onPointerDown={(e) => e.stopPropagation()}
                 onClick={() => {
                   setSpeedOpen(false);
                   setEqOpen(false);
                   setVolumeOpen(false);
-                  onFullscreenOpen?.();
+                  // The pop-out button: the fullscreen player's
+                  // doors are the lyrics button and the track's
+                  // own cover and title now — this one raises
+                  // the small always-on-top overlay window.
+                  void popOutOverlay();
                 }}
               >
-                <MaximizeSquare3 size={18} weight="Outline" />
+                <SquareArrowRightUp size={18} weight="Outline" />
               </button>
               <button
                 ref={volumeToggleRef}

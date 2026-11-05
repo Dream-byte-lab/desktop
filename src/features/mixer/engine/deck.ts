@@ -80,6 +80,17 @@ export class Deck {
 
   private source: AudioBufferSourceNode | null = null;
   private buffer: AudioBuffer | null = null;
+  /**
+   * Segment sources (the revamp's J1): short, pre-scheduled plays
+   * of a defined span of the loaded buffer — the primitive beat
+   * juggling is made of. They sound through the same permanent
+   * chain as the main source, but they are NOT the main source:
+   * play()/stop() discipline is untouched, and the mixer silences
+   * segments explicitly (stopSegments) on every path that takes
+   * the decks over, so a segment can never bleed into whatever
+   * sounds next.
+   */
+  private segmentSources: AudioBufferSourceNode[] = [];
 
   constructor(
     private readonly context: AudioContext,
@@ -217,6 +228,65 @@ export class Deck {
   /** The live playback-rate control of the playing source, if any. */
   get rateControl(): AudioParam | null {
     return this.source ? this.source.playbackRate : null;
+  }
+
+  /**
+   * Plays one defined segment of the loaded track: a fresh source
+   * that starts at audio-clock time `whenCtx` from track position
+   * `offsetSec` and stops at `stopCtxTime`. The segment is
+   * registered so stopSegments can silence it mid-flight. Returns
+   * false when no buffer is loaded (nothing was scheduled).
+   */
+  playSegment(
+    whenCtx: number,
+    offsetSec: number,
+    stopCtxTime: number,
+    rate = 1,
+  ): boolean {
+    if (!this.buffer) return false;
+    const source = this.context.createBufferSource();
+    source.buffer = this.buffer;
+    source.playbackRate.value = rate;
+    source.connect(this.level);
+    source.start(whenCtx, Math.max(0, offsetSec));
+    try {
+      source.stop(stopCtxTime);
+    } catch {
+      // already stopped — nothing to do
+    }
+    this.segmentSources.push(source);
+    return true;
+  }
+
+  /** How many segment sources are currently registered on this deck. */
+  get segmentCount(): number {
+    return this.segmentSources.length;
+  }
+
+  /**
+   * Silences every registered segment source at `when` (default:
+   * now) and forgets them. Returns how many were silenced — the
+   * mixer reads a nonzero count as "a juggle was sounding on this
+   * deck" and restores that deck's fader accordingly.
+   */
+  stopSegments(when?: number): number {
+    const count = this.segmentSources.length;
+    if (count === 0) return 0;
+    const at = when ?? this.context.currentTime;
+    for (const source of this.segmentSources) {
+      try {
+        source.stop(at);
+      } catch {
+        // already stopped — nothing to do
+      }
+      try {
+        source.disconnect();
+      } catch {
+        // already disconnected — nothing to do
+      }
+    }
+    this.segmentSources = [];
+    return count;
   }
 
   /**

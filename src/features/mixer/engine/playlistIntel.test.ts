@@ -130,11 +130,46 @@ describe("minimumPlayEndSec — the musical floor (Note 19, ruling 1)", () => {
     expect(minimumPlayEndSec(a)).toBe(16);
   });
 
-  it("abstains (null) without usable sections — shells and legacy analyses", () => {
-    expect(minimumPlayEndSec(analysis({ sections: [] }))).toBeNull();
-    expect(minimumPlayEndSec(analysis({ sections: undefined }))).toBeNull();
+  it("derives the floor from the track's proportions without usable sections (Note 33)", () => {
+    // The fixture track is 240 s: a quarter of it is the floor.
+    expect(minimumPlayEndSec(analysis({ sections: [] }))).toBe(60);
+    expect(minimumPlayEndSec(analysis({ sections: undefined }))).toBe(60);
     const broken = analysis({ sections: [section("chorus", 0, 0, 0.5)] });
-    expect(minimumPlayEndSec(broken)).toBeNull();
+    expect(minimumPlayEndSec(broken)).toBe(60);
+  });
+
+  it("the derived floor scales with the track and is capped (Note 33)", () => {
+    // A 30 s interlude derives 7.5 s — owed a hearing, never trapped.
+    expect(minimumPlayEndSec(analysis({ durationSec: 30, sections: [] }))).toBe(
+      7.5,
+    );
+    // A 10-minute track derives the 90 s cap, not a quarter of itself.
+    expect(
+      minimumPlayEndSec(analysis({ durationSec: 600, sections: [] })),
+    ).toBe(90);
+  });
+
+  it("a trivially short first section is raised to the derived floor (Note 33)", () => {
+    const a = analysis({
+      sections: [section("intro", 0, 4, 0.15), section("verse", 4, 240, 0.3)],
+    });
+    expect(minimumPlayEndSec(a)).toBe(60);
+  });
+
+  it("a genuine short first section at the trivial bound stands (Note 33)", () => {
+    const a = analysis({
+      sections: [section("intro", 0, 10, 0.15), section("verse", 10, 240, 0.3)],
+    });
+    expect(minimumPlayEndSec(a)).toBe(10);
+  });
+
+  it("abstains (null) only when the track's length itself is unknown", () => {
+    expect(
+      minimumPlayEndSec(analysis({ durationSec: 0, sections: [] })),
+    ).toBeNull();
+    expect(
+      minimumPlayEndSec(analysis({ durationSec: 0, sections: undefined })),
+    ).toBeNull();
   });
 
   it("never exceeds the track's duration", () => {

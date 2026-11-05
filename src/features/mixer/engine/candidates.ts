@@ -37,6 +37,11 @@ import {
   type JoinFamily,
 } from "./decisionProfile";
 import { pairShapeOf } from "./joinHistory";
+import {
+  expandJugglePerformance,
+  validateJugglePerformance,
+  type JugglePerformance,
+} from "./juggle";
 import type { KeyRelation } from "./keyCompatibility";
 import { keyCompatibility } from "./keyCompatibility";
 import { meanVocalActivity } from "./detectVocals";
@@ -1471,6 +1476,281 @@ export function authorManualScratch(
     entryReason: entry.reason,
     exitReason: `the host scratched the outgoing out by hand — a ${technique} across ${shape.beats} beats from here, over witnessed low-vocal material, handed to the incoming's entry`,
   });
+}
+
+// ---------------------------------------------------------------------
+// Beat juggling (the crab-and-juggling plan — the J3 author)
+// ---------------------------------------------------------------------
+
+/**
+ * The juggle author's price ceiling, mirroring the scratch
+ * author's: a profile that prices the family above this does not
+ * author it autonomously at all. STANDARD (0.50) reaches it;
+ * CONSERVATIVE (0.75) prices the act out of its own authoring
+ * reach, as it does scratch. The manual author below is exempt —
+ * the host's hand is never priced out of a move the material
+ * supports (authorManualScratch's stance, exactly).
+ */
+const JUGGLE_AUTHOR_MAX_FAMILY_COST = 0.5;
+
+/**
+ * How far ahead of the playhead, in beats, the author starts
+ * looking for the break: the spend happens as the break approaches
+ * (the session needs the lead to schedule the window on the audio
+ * clock), and the search horizon beyond it is one phrase — a
+ * landing further away than that is a later window's business.
+ */
+const JUGGLE_SPEND_LEAD_BEATS = 2;
+const JUGGLE_LANDING_SEARCH_BEATS = 16;
+/** The shipped segment size, in beats (engine/juggle.ts's default). */
+const JUGGLE_SEGMENT_BEATS = 2;
+
+/**
+ * The evidence a juggle carries into its admission spend, in
+ * scoring.ts's own arithmetic — the six weighed values scoreOne
+ * would compute, derived here because a juggle is not a join
+ * candidate and scoreCandidates cannot see it. The formulas are
+ * scoring's; if its tables move, this mirror must move with them
+ * (the entry/exit quality tables below are entryQuality /
+ * exitQuality, restated for a single track).
+ */
+export interface JuggleEvidence {
+  keyFit: number;
+  vocalClarity: number;
+  stretchFit: number;
+  structureFit: number;
+  loopValue: number;
+  /** The break section's normalised energy (arcFit's input); null = unmeasured. */
+  entryEnergy: number | null;
+}
+
+export interface AuthoredJuggle {
+  performance: JugglePerformance;
+  evidence: JuggleEvidence;
+}
+
+/**
+ * Scoring's entry-quality table, read off one track at the
+ * break's start beat: a drop (strength-weighted), a section
+ * start, the intro's end. Null when the beat is no landing at
+ * all — the author only ever asks about landings, so a null here
+ * means the landing evidence disagreed with itself.
+ */
+function juggleEntryValue(
+  analysis: TrackAnalysis,
+  startBeat: number,
+): number | null {
+  const drop = analysis.drops.find((d) => Math.abs(d.beat - startBeat) <= 0.5);
+  if (drop) return 0.75 + 0.25 * Math.min(1, drop.strength / 3);
+  if (
+    (analysis.sections ?? []).some(
+      (s) => Math.abs(s.startBeat - startBeat) <= 0.5,
+    )
+  ) {
+    return 0.8;
+  }
+  if (analysis.intro && Math.abs(analysis.intro.endBeat - startBeat) <= 0.5) {
+    return 0.7;
+  }
+  return null;
+}
+
+/**
+ * Scoring's exit-quality table at the beat playback resumes: the
+ * outro's first beat is the finest exit a track offers, a section
+ * boundary or a drop next, a bare (beat-aligned, unstructured)
+ * exit last. Never null: every exit lands somewhere on the table.
+ */
+function juggleExitValue(analysis: TrackAnalysis, exitBeat: number): number {
+  if (analysis.outro && Math.abs(analysis.outro.startBeat - exitBeat) <= 0.5) {
+    return 1;
+  }
+  if (
+    analysis.drops.some((d) => Math.abs(d.beat - exitBeat) <= 0.5) ||
+    (analysis.sections ?? []).some(
+      (s) => Math.abs(s.startBeat - exitBeat) <= 0.5,
+    )
+  ) {
+    return 0.85;
+  }
+  return 0.4;
+}
+
+/** Whether a beat closes a structural unit — a landing in its own right. */
+function beatClosesUnit(analysis: TrackAnalysis, beat: number): boolean {
+  return juggleExitValue(analysis, beat) >= 0.85;
+}
+
+/**
+ * The juggle author, shared by the autonomous and manual doors
+ * (the `priced` flag is the only difference, as with scratch):
+ * find the break, prove the material, pick the pattern, prove
+ * the runway — every gate fail-closed, every refusal a null.
+ *
+ * The break is the first landing (a drop, a section start, the
+ * intro's end, on the track's own grid) at or after the spend
+ * lead whose whole act checks out; landings that fail are passed
+ * over for the next inside the horizon, never bent to fit. The
+ * material gates are the scratch family's, on the span the
+ * pattern will actually cut: witnessed vocal evidence with a
+ * mean at or under SCRATCH_MAX_VOCAL_ACTIVITY (a break is
+ * instrumental material — a voice is not chopped), and transient
+ * riches (a drop at the span's edge, or stabbing energy) — a
+ * flat, unwitnessed window is not a break, whatever its grid
+ * says. The pattern is read off the material: when the segment's
+ * end closes a structural unit, the unit is the thing thrown
+ * back and forth (REPEAT); otherwise the segments walk forward
+ * through the break's continuation (CONTINUE). The runway is
+ * the profile's own: the act must leave minLeadBeats of track
+ * after the exit, or the moment is not the act's to take. The
+ * authored performance is finally re-validated in the
+ * validator's voice (the §3 discipline) before it leaves.
+ */
+function authorJuggleCore(
+  analysis: TrackAnalysis,
+  profile: DecisionProfile,
+  positionSec: number,
+  priced: boolean,
+): AuthoredJuggle | null {
+  if (priced && profile.familyCosts.juggle > JUGGLE_AUTHOR_MAX_FAMILY_COST) {
+    return null;
+  }
+  const map = analysis.beatMap;
+  const spb = secondsPerBeat(map.bpm);
+  const durationSec = map.durationSec;
+  const bold = profile.familyCosts.juggle <= 0.4;
+  const segmentCounts = bold ? [4, 3] : [3];
+
+  const fromBeat = beatsAtTime(map, positionSec) + JUGGLE_SPEND_LEAD_BEATS;
+  const landingBeats = new Set<number>();
+  for (const drop of analysis.drops) landingBeats.add(drop.beat);
+  for (const section of analysis.sections ?? []) {
+    landingBeats.add(section.startBeat);
+  }
+  if (analysis.intro) landingBeats.add(analysis.intro.endBeat);
+  const candidates = [...landingBeats]
+    .filter(
+      (beat) =>
+        beat >= fromBeat - 0.5 &&
+        beat <= fromBeat + JUGGLE_LANDING_SEARCH_BEATS,
+    )
+    .sort((a, b) => a - b);
+
+  for (const startBeat of candidates) {
+    const entryValue = juggleEntryValue(analysis, startBeat);
+    if (entryValue === null) continue;
+    const segmentEndBeat = startBeat + JUGGLE_SEGMENT_BEATS;
+    const pattern: JugglePerformance["pattern"] = beatClosesUnit(
+      analysis,
+      segmentEndBeat,
+    )
+      ? "repeat"
+      : "continue";
+    for (const segmentCount of segmentCounts) {
+      const exitBeat =
+        pattern === "repeat"
+          ? segmentEndBeat
+          : startBeat + segmentCount * JUGGLE_SEGMENT_BEATS;
+      const exitSec = timeAtBeat(map, exitBeat);
+      // The runway: the act leaves the profile's minimum lead of
+      // track after the exit.
+      if (exitSec + profile.minLeadBeats * spb > durationSec) {
+        if (pattern === "repeat") break;
+        continue;
+      }
+      // The material span the pattern will actually cut.
+      const materialEndBeat = pattern === "repeat" ? segmentEndBeat : exitBeat;
+      const startSec = timeAtBeat(map, startBeat);
+      const materialEndSec = timeAtBeat(map, materialEndBeat);
+      // A refused window yields to the next shape before it
+      // yields the landing (the scratch authors' idiom): for a
+      // continue, a shorter walk cuts a shorter span, which may
+      // pass where the longer refused; for a repeat the span is
+      // the segment's own at every count, so refusal is final.
+      const yieldLanding = pattern === "repeat";
+      const vocal = windowVocalReading(
+        analysis,
+        startSec,
+        materialEndSec,
+        profile,
+      );
+      if (!vocal.witnessed || vocal.mean > SCRATCH_MAX_VOCAL_ACTIVITY) {
+        if (yieldLanding) break;
+        continue;
+      }
+      if (
+        !windowTransientRich(
+          analysis,
+          startBeat,
+          materialEndBeat,
+          startSec,
+          materialEndSec,
+        )
+      ) {
+        if (yieldLanding) break;
+        continue;
+      }
+      const performance = expandJugglePerformance({
+        pattern,
+        breakStartBeat: startBeat,
+        segmentBeats: JUGGLE_SEGMENT_BEATS,
+        segmentCount,
+        firstDeck: 0,
+        beatMap: map,
+      });
+      if (validateJugglePerformance(performance, durationSec).length > 0) {
+        if (yieldLanding) break;
+        continue;
+      }
+      const keyFit = keyCompatibility(analysis.key, analysis.key)?.score ?? 0.5;
+      return {
+        performance,
+        evidence: {
+          keyFit,
+          // The reading was witnessed (the gate above), so the
+          // trusted formula applies: clarity is what the voice
+          // in the material leaves behind.
+          vocalClarity: 1 - vocal.mean,
+          // Rate 1 throughout — no stretch is spent, as scoring
+          // reads every unbeamed candidate.
+          stretchFit: 1,
+          structureFit:
+            0.5 * entryValue + 0.5 * juggleExitValue(analysis, exitBeat),
+          // No loop is involved; scoring's neutral.
+          loopValue: 0.5,
+          entryEnergy: entryEnergyOf(analysis, startBeat),
+        },
+      };
+    }
+  }
+  return null;
+}
+
+/**
+ * Author a juggle for the brain's admission spend: the priced
+ * door. A profile that prices the family out of reach authors
+ * nothing, and every structural and material gate stands.
+ */
+export function authorJuggle(
+  analysis: TrackAnalysis,
+  profile: DecisionProfile,
+  positionSec: number,
+): AuthoredJuggle | null {
+  return authorJuggleCore(analysis, profile, positionSec, true);
+}
+
+/**
+ * Author a juggle for the host's hand (the stage's Juggle
+ * control): the same break, the same material and structural
+ * gates — but no price gate and no lottery. What the host names,
+ * the decks attempt, when the track honestly offers it.
+ */
+export function authorManualJuggle(
+  analysis: TrackAnalysis,
+  profile: DecisionProfile,
+  positionSec: number,
+): AuthoredJuggle | null {
+  return authorJuggleCore(analysis, profile, positionSec, false);
 }
 
 // ---------------------------------------------------------------------

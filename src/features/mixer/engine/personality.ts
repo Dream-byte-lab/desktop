@@ -200,6 +200,7 @@ export const PERSONALITIES: Record<PersonalityId, PersonalitySpec> = {
     },
     costOverrides: {
       scratch: 0.18,
+      juggle: 0.18,
       spinback: 0.2,
       "vinyl-stop": 0.2,
       "drop-cut": 0.01,
@@ -228,6 +229,7 @@ export const PERSONALITIES: Record<PersonalityId, PersonalitySpec> = {
       "loop-extended-blend": 0.01,
       "long-blend": 0,
       scratch: 0.65,
+      juggle: 0.65,
       spinback: 0.6,
       "vinyl-stop": 0.6,
       fx: 0.35,
@@ -274,6 +276,7 @@ export const PERSONALITIES: Record<PersonalityId, PersonalitySpec> = {
     costOverrides: {
       fx: 0.18,
       scratch: 0.25,
+      juggle: 0.25,
       "loop-extended-blend": 0,
       "section-swap": 0.01,
       "filter-fade": 0.02,
@@ -410,8 +413,13 @@ export function resolveDecisionSettings(
   profile.nearEqualBand = profile.nearEqualBand * (1 + 1.2 * dCreativity);
 
   // 3. Scratching: the theatre families get cheaper or dearer.
+  // Juggle bends by the scratch amount (the parent ruling: the
+  // two hands-on theatre families share the slider's hand).
   profile.familyCosts.scratch = clampCost(
     profile.familyCosts.scratch - 0.3 * dScratching,
+  );
+  profile.familyCosts.juggle = clampCost(
+    profile.familyCosts.juggle - 0.3 * dScratching,
   );
   profile.familyCosts.spinback = clampCost(
     profile.familyCosts.spinback - 0.2 * dScratching,
