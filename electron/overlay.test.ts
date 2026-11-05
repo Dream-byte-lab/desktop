@@ -407,4 +407,69 @@ describe("OverlayManager", () => {
     await vi.advanceTimersByTimeAsync(10 * 60_000);
     expect(overlay.isDestroyed()).toBe(false);
   });
+
+  it("creates the overlay at the default card size, centred on top", async () => {
+    const { overlays } = setup();
+    await vi.advanceTimersByTimeAsync(600);
+    const [overlay] = overlays();
+    expect(overlay.getBounds()).toEqual({
+      x: 776,
+      y: 20,
+      width: 368,
+      height: 168,
+    });
+  });
+
+  it("creates the overlay at the size chosen in settings", async () => {
+    const { overlays } = setup();
+    electron.ipcOn.get("overlay:update-settings")?.(
+      {},
+      { size: { width: 480, height: 360 } },
+    );
+    await vi.advanceTimersByTimeAsync(600);
+    const [overlay] = overlays();
+    expect(overlay.getBounds()).toEqual({
+      x: 720,
+      y: 20,
+      width: 480,
+      height: 360,
+    });
+  });
+
+  it("streams clamped grip resizes live and commits a sizeChanged notice", async () => {
+    const { main, overlays } = setup();
+    await vi.advanceTimersByTimeAsync(600);
+    const [overlay] = overlays();
+    const before = overlay.getBounds();
+
+    electron.ipcOn.get("overlay:send-action")?.(
+      {},
+      { type: "resizeOverlay", payload: { width: 9999, height: 100 } },
+    );
+    expect(overlay.getBounds()).toEqual({
+      x: before.x,
+      y: before.y,
+      width: 560,
+      height: 100,
+    });
+    expect(main.webContents.send).not.toHaveBeenCalledWith(
+      "overlay:action",
+      expect.objectContaining({ type: "sizeChanged" }),
+    );
+
+    electron.ipcOn.get("overlay:send-action")?.(
+      {},
+      { type: "resizeOverlayCommit", payload: { width: 400, height: 200 } },
+    );
+    expect(overlay.getBounds()).toEqual({
+      x: before.x,
+      y: before.y,
+      width: 400,
+      height: 200,
+    });
+    expect(main.webContents.send).toHaveBeenCalledWith("overlay:action", {
+      type: "sizeChanged",
+      payload: { width: 400, height: 200 },
+    });
+  });
 });

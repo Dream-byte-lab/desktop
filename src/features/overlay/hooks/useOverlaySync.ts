@@ -1,7 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { playerEngine } from "@/features/player/engine/playerEngine";
 import { usePlayerStore } from "@/features/player/store/playerStore";
-import { toVolumeGain, toVolumeLevel } from "@/features/player/engine/volume";
+import {
+  clampUserVolume,
+  toVolumeGain,
+  toVolumeLevel,
+} from "@/features/player/engine/volume";
 import {
   useIsTrackLiked,
   useLikeTrack,
@@ -180,9 +184,26 @@ export function useOverlaySync() {
             break;
           }
           case "setVolume": {
+            // Payload is a user gain, the same domain the main player's
+            // slider speaks (0..MAX_USER_VOLUME, boost included) — clamping
+            // to 0..1 here would silently cap the overlay's slider at 100%
+            // and snap a boosted volume down on first touch.
             if (typeof action.payload?.volume === "number") {
-              const next = Math.min(1, Math.max(0, action.payload.volume));
-              playerEngine.setVolume(next);
+              playerEngine.setVolume(clampUserVolume(action.payload.volume));
+            }
+            break;
+          }
+          case "sizeChanged": {
+            // Electron applied + persisted a corner-grip resize; mirror it
+            // into the settings store so Settings shows the true size.
+            const { width, height } = action.payload ?? {};
+            if (
+              typeof width === "number" &&
+              typeof height === "number" &&
+              Number.isFinite(width) &&
+              Number.isFinite(height)
+            ) {
+              useOverlaySettingsStore.getState().hydrateSize({ width, height });
             }
             break;
           }

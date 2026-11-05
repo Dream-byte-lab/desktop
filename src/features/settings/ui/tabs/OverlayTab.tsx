@@ -5,6 +5,9 @@ import { useTranslation } from "@/languages";
 import {
   useOverlaySettingsStore,
   type OverlayPosition,
+  type OverlaySizePreset,
+  OVERLAY_SIZE_PRESETS,
+  matchOverlaySizePreset,
   getEnglishKeyFromEvent,
   normalizeShortcutToEnglish,
 } from "@/features/overlay";
@@ -30,6 +33,31 @@ const POSITION_CONFIG = [
     fallback: "Top Right",
   },
 ] as const;
+
+const SIZE_CONFIG = [
+  {
+    value: "small" as const,
+    key: "settings.overlay.size.small",
+    fallback: "Small",
+  },
+  {
+    value: "default" as const,
+    key: "settings.overlay.size.default",
+    fallback: "Default",
+  },
+  {
+    value: "large" as const,
+    key: "settings.overlay.size.large",
+    fallback: "Large",
+  },
+  {
+    value: "custom" as const,
+    key: "settings.overlay.size.custom",
+    fallback: "Custom",
+  },
+] as const;
+
+type SizeChoice = OverlaySizePreset | "custom";
 
 const DEFAULT_SHORTCUT = "Alt+Shift+O";
 
@@ -62,6 +90,20 @@ export function OverlayTab({ searchQuery }: { searchQuery?: string }) {
       })),
     [t],
   );
+
+  const size = useOverlaySettingsStore((s) => s.size);
+  const setSize = useOverlaySettingsStore((s) => s.setSize);
+
+  const sizeOptions = useMemo(
+    () =>
+      SIZE_CONFIG.map((opt) => ({
+        value: opt.value,
+        label: t(opt.key) || opt.fallback,
+      })),
+    [t],
+  );
+
+  const sizeChoice: SizeChoice = matchOverlaySizePreset(size);
 
   const shortcut = useOverlaySettingsStore((s) => s.shortcut);
   const setShortcut = useOverlaySettingsStore((s) => s.setShortcut);
@@ -226,6 +268,32 @@ export function OverlayTab({ searchQuery }: { searchQuery?: string }) {
               onChange={setPosition}
               disabled={!enabled}
               ariaLabel="Overlay Position"
+            />
+          }
+        />
+
+        <SettingRow
+          title={t("settings.overlay.size.title") || "Size"}
+          description={
+            t("settings.overlay.size.description") ||
+            "Pick a size, or drag the overlay's bottom-right corner to resize it freely."
+          }
+          titleKey="settings.overlay.size.title"
+          descKey="settings.overlay.size.description"
+          searchQuery={searchQuery}
+          control={
+            <SegmentedControl<SizeChoice>
+              options={sizeOptions}
+              value={sizeChoice}
+              onChange={(choice) => {
+                // "Custom" is a display state (reached by dragging the
+                // overlay's corner grip), not a size of its own.
+                if (choice !== "custom") {
+                  setSize({ ...OVERLAY_SIZE_PRESETS[choice] });
+                }
+              }}
+              disabled={!enabled}
+              ariaLabel="Overlay Size"
             />
           }
         />

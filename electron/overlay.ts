@@ -37,6 +37,11 @@ const MEDIA_OVERLAY_ACTIONS: Record<
   toggleMute: { type: "toggleMute" },
 };
 
+export interface OverlaySize {
+  width: number;
+  height: number;
+}
+
 export interface OverlaySettings {
   enabled: boolean;
   position: OverlayPosition;
@@ -45,6 +50,43 @@ export interface OverlaySettings {
   mediaShortcuts?: MediaShortcutBindings;
   autoShowOnMinimize: boolean;
   alwaysOnTop: boolean;
+  size?: OverlaySize;
+}
+
+// The overlay's size anchors and drag limits. These mirror
+// src/features/overlay/lib/overlaySize.ts (electron cannot import from
+// the renderer tree); keep the numbers in step.
+const DEFAULT_OVERLAY_SIZE: OverlaySize = { width: 368, height: 168 };
+const OVERLAY_MIN_SIZE: OverlaySize = { width: 280, height: 56 };
+const OVERLAY_MAX_SIZE: OverlaySize = { width: 560, height: 440 };
+
+function clampOverlaySize(size: OverlaySize): OverlaySize {
+  const clamp = (value: number, min: number, max: number) =>
+    Math.round(
+      Math.min(max, Math.max(min, Number.isFinite(value) ? value : min)),
+    );
+  return {
+    width: clamp(size.width, OVERLAY_MIN_SIZE.width, OVERLAY_MAX_SIZE.width),
+    height: clamp(
+      size.height,
+      OVERLAY_MIN_SIZE.height,
+      OVERLAY_MAX_SIZE.height,
+    ),
+  };
+}
+
+function asOverlaySize(value: unknown): OverlaySize | null {
+  if (!value || typeof value !== "object") return null;
+  const { width, height } = value as Partial<OverlaySize>;
+  if (
+    typeof width !== "number" ||
+    !Number.isFinite(width) ||
+    typeof height !== "number" ||
+    !Number.isFinite(height)
+  ) {
+    return null;
+  }
+  return clampOverlaySize({ width, height });
 }
 
 const CYRILLIC_TO_QWERTY: Record<string, string> = {
@@ -165,6 +207,7 @@ export class OverlayManager {
   );
   private autoShowOnMinimize = true;
   private alwaysOnTop = true;
+  private size: OverlaySize = { ...DEFAULT_OVERLAY_SIZE };
   private wasAutoOpened = false;
   private isAuthenticated = false;
   // set once the app is quitting: nothing may create a window or grab a shortcut again
@@ -326,6 +369,10 @@ export class OverlayManager {
         if (typeof data.alwaysOnTop === "boolean") {
           this.alwaysOnTop = data.alwaysOnTop;
         }
+        const persistedSize = asOverlaySize(data.size);
+        if (persistedSize) {
+          this.size = persistedSize;
+        }
       }
     } catch (e) {
       console.warn("[overlay] Could not read overlay-settings.json:", e);
@@ -344,6 +391,7 @@ export class OverlayManager {
         mediaShortcuts: this.mediaShortcuts.getBindings(),
         autoShowOnMinimize: this.autoShowOnMinimize,
         alwaysOnTop: this.alwaysOnTop,
+        size: { ...this.size },
       };
       fs.writeFileSync(filePath, JSON.stringify(data, null, 2), "utf-8");
     } catch (e) {
@@ -561,10 +609,10 @@ export class OverlayManager {
   }
 
   private getTargetHeight(): number {
-    return 56;
+    return this.size.height;
   }
 
-  private getWindowBounds(width = 320, height?: number) {
+  private getWindowBounds(width = this.size.width, height?: number) {
     let targetDisplay = screen.getPrimaryDisplay();
     try {
       if (this.overlayWindow && !this.overlayWindow.isDestroyed()) {
@@ -599,6 +647,40 @@ export class OverlayManager {
     }
 
     return { x, y, width, height: finalHeight };
+  }
+
+  /**
+   * Applies a user-chosen overlay size. Live grip drags (commit=false)
+   * only move the window; the commit at drag end persists the size and
+   * notifies the main window so its settings store mirrors the truth.
+   * The window grows from its current top-left corner — the corner
+   * opposite the grip — while the position setting keeps governing
+   * placement whenever the overlay is (re)shown or moved.
+   */
+  private applyOverlaySize(size: OverlaySize, commit: boolean) {
+    this.size = clampOverlaySize(size);
+    const win = this.overlayWindow;
+    if (win && !win.isDestroyed()) {
+      const current = win.getBounds();
+      win.setBounds({
+        x: current.x,
+        y: current.y,
+        width: this.size.width,
+        height: this.size.height,
+      });
+      if (this.compositor && win.isVisible()) {
+        void this.placeWithCompositor();
+      }
+    }
+    if (commit) {
+      this.savePersistedSettings();
+      if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+        this.mainWindow.webContents.send("overlay:action", {
+          type: "sizeChanged",
+          payload: { ...this.size },
+        });
+      }
+    }
   }
 
   private stopMoveAnimation() {
@@ -1221,6 +1303,16 @@ export class OverlayManager {
         this.focusMainWindow();
         return;
       }
+      if (
+        action.type === "resizeOverlay" ||
+        action.type === "resizeOverlayCommit"
+      ) {
+        const size = asOverlaySize(action.payload);
+        if (size) {
+          this.applyOverlaySize(size, action.type === "resizeOverlayCommit");
+        }
+        return;
+      }
       if (this.mainWindow && !this.mainWindow.isDestroyed()) {
         this.mainWindow.webContents.send("overlay:action", action);
       }
@@ -1334,6 +1426,11 @@ export class OverlayManager {
         if (typeof settings.alwaysOnTop === "boolean") {
           this.alwaysOnTop = settings.alwaysOnTop;
           this.applyAlwaysOnTop();
+        }
+
+        const nextSize = asOverlaySize(settings.size);
+        if (nextSize) {
+          this.size = nextSize;
         }
 
         if (this.compositor) {

@@ -5,6 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 vi.mock("@/features/covers/ui/CoverImage", () => ({ default: () => null }));
 
 import { OverlayPlayer } from "./OverlayPlayer";
+import type { OverlaySize } from "../contracts";
 
 const playingState = {
   status: "playing",
@@ -15,15 +16,18 @@ const playingState = {
   isLiked: false,
 };
 
-describe("OverlayPlayer animation loop", () => {
+const DEFAULT_BAND: OverlaySize = { width: 368, height: 168 };
+
+describe("OverlayPlayer", () => {
   let container: HTMLDivElement;
   let root: Root;
   let rafCalls: number;
   let visibility: ((visible: boolean) => void) | null;
   let pushState: ((state: unknown) => void) | null;
   let initialState: Record<string, unknown>;
+  let sentActions: Array<{ type: string; payload?: unknown }>;
 
-  async function mount() {
+  async function mount(windowSize: OverlaySize = DEFAULT_BAND) {
     window.linerElectron = {
       platform: "win32",
       getOverlayInitialState: () => Promise.resolve(initialState),
@@ -36,10 +40,12 @@ describe("OverlayPlayer animation loop", () => {
         return () => {};
       },
       overlayReady: () => {},
-      sendOverlayAction: () => {},
+      sendOverlayAction: (action: { type: string; payload?: unknown }) => {
+        sentActions.push(action);
+      },
     } as never;
     await act(async () => {
-      root.render(<OverlayPlayer />);
+      root.render(<OverlayPlayer initialWindowSize={windowSize} />);
     });
     await act(async () => {
       await Promise.resolve();
@@ -64,6 +70,7 @@ describe("OverlayPlayer animation loop", () => {
     rafCalls = 0;
     visibility = null;
     pushState = null;
+    sentActions = [];
     initialState = { ...playingState };
     vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
       rafCalls += 1;
@@ -128,5 +135,49 @@ describe("OverlayPlayer animation loop", () => {
     await advance(100);
     expect(progressPercent()).toBeGreaterThan(24.9);
     expect(progressPercent()).toBeLessThan(25.5);
+  });
+
+  it("micro band keeps cover, transport and progress but drops seek and volume controls", async () => {
+    await mount({ width: 320, height: 64 });
+    expect(container.querySelector('[aria-label="Pause"]')).not.toBeNull();
+    expect(container.querySelector('[aria-label="Previous"]')).not.toBeNull();
+    expect(container.querySelector('[aria-label="Next"]')).not.toBeNull();
+    expect(container.querySelector('[aria-label="Seek"]')).toBeNull();
+    expect(container.querySelector('[aria-label="Volume"]')).toBeNull();
+    expect(container.textContent).toContain("Song");
+    expect(progressPercent()).toBeGreaterThan(14);
+    expect(progressPercent()).toBeLessThan(16);
+  });
+
+  it("large band shows the full player: seek, volume and artwork hero", async () => {
+    await mount({ width: 480, height: 360 });
+    expect(container.querySelector('[aria-label="Seek"]')).not.toBeNull();
+    expect(container.querySelector('[aria-label="Volume"]')).not.toBeNull();
+    expect(
+      container.querySelector('[aria-label="Open main window"]'),
+    ).not.toBeNull();
+    expect(
+      container.querySelector('[aria-label="Resize overlay"]'),
+    ).not.toBeNull();
+  });
+
+  it("mute button in the volume pill sends toggleMute", async () => {
+    await mount();
+    const mute = container.querySelector<HTMLElement>('[aria-label="Mute"]');
+    expect(mute).not.toBeNull();
+    await act(async () => {
+      mute!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(sentActions).toContainEqual({ type: "toggleMute" });
+  });
+
+  it("play button sends togglePlay in every band", async () => {
+    await mount({ width: 320, height: 64 });
+    const play = container.querySelector<HTMLElement>('[aria-label="Pause"]');
+    expect(play).not.toBeNull();
+    await act(async () => {
+      play!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(sentActions).toContainEqual({ type: "togglePlay" });
   });
 });

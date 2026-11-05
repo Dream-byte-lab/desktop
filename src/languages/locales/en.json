@@ -863,6 +863,14 @@
       "always_on_top": {
         "title": "Always on top",
         "description": "Keep the overlay floating above other windows."
+      },
+      "size": {
+        "title": "Size",
+        "description": "Pick a size, or drag the overlay's bottom-right corner to resize it freely.",
+        "small": "Small",
+        "default": "Default",
+        "large": "Large",
+        "custom": "Custom"
       }
     },
     "youtube": {

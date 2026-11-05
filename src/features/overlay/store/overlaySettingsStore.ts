@@ -1,7 +1,12 @@
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
-import type { OverlayPosition, OverlaySettings } from "../contracts";
+import type {
+  OverlayPosition,
+  OverlaySettings,
+  OverlaySize,
+} from "../contracts";
 import { normalizeShortcutToEnglish } from "../lib/shortcutUtils";
+import { clampOverlaySize, OVERLAY_SIZE_PRESETS } from "../lib/overlaySize";
 
 interface OverlaySettingsState extends OverlaySettings {
   setEnabled: (enabled: boolean) => void;
@@ -9,6 +14,10 @@ interface OverlaySettingsState extends OverlaySettings {
   setShortcut: (shortcut: string) => void;
   setAutoShowOnMinimize: (autoShowOnMinimize: boolean) => void;
   setAlwaysOnTop: (alwaysOnTop: boolean) => void;
+  setSize: (size: OverlaySize) => void;
+  /** Mirrors a size electron already applied and persisted (corner-grip
+   *  drags): updates the store without echoing it back to electron. */
+  hydrateSize: (size: OverlaySize) => void;
 }
 
 const DEFAULT_SETTINGS: OverlaySettings = {
@@ -17,6 +26,7 @@ const DEFAULT_SETTINGS: OverlaySettings = {
   shortcut: "Alt+Shift+O",
   autoShowOnMinimize: true,
   alwaysOnTop: true,
+  size: { ...OVERLAY_SIZE_PRESETS.default },
 };
 
 function notifyElectron(patch: Partial<OverlaySettings>) {
@@ -53,6 +63,14 @@ export const useOverlaySettingsStore = create<OverlaySettingsState>()(
       setAlwaysOnTop: (alwaysOnTop) => {
         set({ alwaysOnTop });
         notifyElectron({ alwaysOnTop });
+      },
+      setSize: (size) => {
+        const clamped = clampOverlaySize(size);
+        set({ size: clamped });
+        notifyElectron({ size: clamped });
+      },
+      hydrateSize: (size) => {
+        set({ size: clampOverlaySize(size) });
       },
     }),
     {
