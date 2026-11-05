@@ -142,7 +142,6 @@ Upstream changes are never taken automatically. They are reviewed, folded in del
 
 Vulnerabilities in Linerave are reported to this fork, not to upstream — see [SECURITY.md](./SECURITY.md).
 
-
 ---
 
 ## Contributing
