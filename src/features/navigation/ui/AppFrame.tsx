@@ -423,9 +423,28 @@ export default function AppFrame({ children }: AppFrameProps) {
               // popups, which live in this stacking context, aren't hidden by it.
               className={`relative z-[55] w-full shrink-0 ${hasPageBackdrop ? "-mt-[70px]" : ""}`}
             >
-              <DjProView />
-              <DjSimpleView />
-              <DjPartyPanel />
+              <div
+                data-dj-stack
+                // The DJ stack (stage + simple view + party panel)
+                // grows upward from the bottom bar and is tall — the
+                // stage alone can exceed a short window. Uncapped, it
+                // crushes main (flex-1, automatic min-height 0) to
+                // nothing and the stage's header rises into the
+                // floating header's band (top 6..56px, z-45 above this
+                // row), where clicks land on the header's window-drag
+                // surface and the stage's Back button dies (Note 35).
+                // The cap reserves, from the window height: the shell
+                // padding and gaps, the bar below (64), and 128px of
+                // main — enough that the stage header stays below the
+                // header band even with the container's -mt-[70px]
+                // backdrop pull-up. Past the cap the stack scrolls;
+                // the bar itself stays outside, never scrolled away.
+                className="max-h-[max(140px,calc(100dvh-210px))] overflow-y-auto"
+              >
+                <DjProView />
+                <DjSimpleView />
+                <DjPartyPanel />
+              </div>
               <MiniPlayer
                 embedded
                 onQueueOpenChange={handleQueuePopupToggle}
