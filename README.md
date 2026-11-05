@@ -30,7 +30,7 @@ Everything below is additive. With the DJ switched off, playback is the upstream
 
 ## Preview
 
-_Screenshots are being refreshed. The interface has been redesigned since the upstream captures were taken — a deep-indigo design system from the app's own icon, a frosted inset sidebar that collapses to a rail, a capsule player, the DJ stage and the For You feed — and this section will show the current build rather than pictures of a different app._
+_No screenshots are available. The app has changed a great deal and is still being worked on: the redesign is not finished, and not close to finished, to the state it is meant to reach — so screenshots are not expected anytime soon._
 
 ---
 
@@ -120,7 +120,7 @@ pnpm electron:build:mac
 
 The macOS build produces `x64` (Intel) and `arm64` (Apple Silicon) packages. To build only one, add `--arm64` or `--x64`. Packages are placed in the `release/` directory.
 
-Release installers for this fork are currently built for Windows (ARM64 + x64) and Linux (AppImage) and published to a private channel for the author's own devices; macOS is not in the release channel at the moment.
+Release installers for this fork are currently built for Windows (ARM64 + x64) and Linux (AppImage) and published to a private channel for the author's own devices. Linerave remains compatible with macOS at the current version — the source still builds and runs on a Mac (see the macOS build command above), for anyone who wants to try it — but no macOS build is published for the current version. macOS releases are not a priority at the moment; the owner may consider them later, including if there is public demand, but for now they remain off the table.
 
 ---
 
@@ -138,11 +138,10 @@ Release installers for this fork are currently built for Windows (ARM64 + x64) a
 
 Linerave is maintained independently of upstream Liner, including for security. This fork does not rely on upstream for security updates and does not receive them: upstream's over-the-air bundle channel is disabled in Linerave, and the app updates only from this fork's own release channel — built from this repository and published to the fork's own private releases repository.
 
-Upstream changes are never taken automatically. They are reviewed, folded in deliberately, and verified against the fork's full test battery before they ship, and anything touching dependencies or security-sensitive code is held for individual review. The fork runs its own security audits on its own schedule — the most recent full audit (November 2026) covered the dependency tree (no known vulnerabilities found), a sweep for secrets in the tree, and the app's update and network surfaces — and security fixes ship in this fork's own releases, on the fork's cadence, without waiting for an upstream release.
+Upstream changes are never taken automatically. They are reviewed, folded in deliberately, and verified against the fork's full test battery before they ship, and anything touching dependencies or security-sensitive code is held for individual review. The fork runs its own security audits on its own schedule, and security fixes ship in this fork's own releases, on the fork's cadence, without waiting for an upstream release.
 
 Vulnerabilities in Linerave are reported to this fork, not to upstream — see [SECURITY.md](./SECURITY.md).
 
-One boundary, stated plainly: Linerave remains a client of the official Liner API for music data. That is a service relationship, not a code or update channel — no code, bundles, or fixes arrive through it.
 
 ---
 
@@ -162,7 +161,7 @@ This is a personal fork, maintained for its author's own use. Bug reports and di
 
 ## License
 
-Liner is distributed under the **Liner Source-Available & Non-Commercial Contribution License**.
+Linerave is distributed under the **Liner Source-Available & Non-Commercial Contribution License**.
 
 - **Allowed**: Personal non-commercial usage, local builds, and upstream contributions.
 - **Prohibited**: Commercial distribution, public competing forks, or extracting core algorithms for third-party products.
