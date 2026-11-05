@@ -31,10 +31,10 @@ import { NOW_PLAYING_MORPH_DURATION_S } from "@/features/player/ui/nowPlayingMor
 import { WelcomeGreeting } from "@/features/greeting/ui/WelcomeGreeting";
 import { FocusMode, useFocusModeStore } from "@/features/focus";
 import { PANEL_GLASS_CLASS } from "@/shared/ui/Panel";
-import { useDjModeStore } from "@/features/mixer/store/djModeStore";
-import { DjPartyPanel } from "@/features/mixer/ui/DjPartyPanel";
-import { DjProView } from "@/features/mixer/ui/DjProView";
-import { DjSimpleView } from "@/features/mixer/ui/DjSimpleView";
+import { useDjState } from "@/features/mixer/liverave/state";
+import { Booth } from "@/features/mixer/ui/Booth";
+import { PartyPanel } from "@/features/mixer/ui/PartyPanel";
+import { PerformanceRibbon } from "@/features/mixer/ui/PerformanceRibbon";
 import { useTranslation } from "@/languages";
 import { useTheme } from "next-themes";
 import {
@@ -240,14 +240,14 @@ export default function AppFrame({ children }: AppFrameProps) {
     navigate("/search");
   }, [navigate]);
 
-  // The DJ stage's Escape slot (Note 26): the stage's open state
-  // is a view fact in the mixer store, not frame-local state, so
-  // the frame reads it from there and hands the shortcut chain
-  // the open/close pair the stage-engine seams report prescribed
-  // — the stage ranked above the route-back fallback, below the
-  // transient layers (Focus, Search, right panel, fullscreen).
-  const stageOpen = useDjModeStore((state) => state.proOpen);
-  const setProOpen = useDjModeStore((state) => state.setProOpen);
+  // The Booth's Escape slot (Note 26): the Booth's open state
+  // is a view fact in the DJ state store (liverave/state), not
+  // frame-local state, so the frame reads it from there and hands
+  // the shortcut chain the open/close pair — the Booth ranked
+  // above the route-back fallback, below the transient layers
+  // (Focus, Search, right panel, fullscreen).
+  const stageOpen = useDjState((state) => state.proOpen);
+  const setProOpen = useDjState((state) => state.setProOpen);
   const closeStage = useCallback(() => {
     setProOpen(false);
   }, [setProOpen]);
@@ -423,27 +423,22 @@ export default function AppFrame({ children }: AppFrameProps) {
               // popups, which live in this stacking context, aren't hidden by it.
               className={`relative z-[55] w-full shrink-0 ${hasPageBackdrop ? "-mt-[70px]" : ""}`}
             >
-              <div
-                data-dj-stack
-                // The DJ stack (stage + simple view + party panel)
-                // grows upward from the bottom bar and is tall — the
-                // stage alone can exceed a short window. Uncapped, it
-                // crushes main (flex-1, automatic min-height 0) to
-                // nothing and the stage's header rises into the
-                // floating header's band (top 6..56px, z-45 above this
-                // row), where clicks land on the header's window-drag
-                // surface and the stage's Back button dies (Note 35).
-                // The cap reserves, from the window height: the shell
-                // padding and gaps, the bar below (64), and 128px of
-                // main — enough that the stage header stays below the
-                // header band even with the container's -mt-[70px]
-                // backdrop pull-up. Past the cap the stack scrolls;
-                // the bar itself stays outside, never scrolled away.
-                className="max-h-[max(140px,calc(100dvh-210px))] overflow-y-auto"
-              >
-                <DjProView />
-                <DjSimpleView />
-                <DjPartyPanel />
+              {/* The DJ region (Note 35): the Ribbon (default face)
+                  and the Booth (take-over) live in this capped
+                  scroll region — max-h + overflow — so the header
+                  band can never cover their controls, and with DJ
+                  off both render nothing and the plain player
+                  stands alone, unchanged. The Booth, when open,
+                  takes the region over from the Ribbon. */}
+              <div className="max-h-[72vh] shrink-0 overflow-y-auto">
+                {stageOpen ? <Booth /> : <PerformanceRibbon />}
+                {/* The party surface is a sibling of both faces,
+                    not part of either: the Booth swaps in and out,
+                    and a live party must stay visible — and its
+                    End control reachable — whichever face is up.
+                    With DJ off and no party running it renders
+                    nothing, like the faces above it. */}
+                <PartyPanel />
               </div>
               <MiniPlayer
                 embedded

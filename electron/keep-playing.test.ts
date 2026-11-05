@@ -42,7 +42,7 @@ describe("createKeepPlayingController", () => {
 
     keepPlaying.update({ status: "idle" });
     keepPlaying.update({ status: "paused" });
-    keepPlaying.update({ djSessionActive: false });
+    keepPlaying.update({ djActive: false });
 
     expect(blocker.start).not.toHaveBeenCalled();
     expect(blocker.stop).not.toHaveBeenCalled();
@@ -71,13 +71,13 @@ describe("createKeepPlayingController", () => {
 
     // During a set the decks own the audio; the plain player element
     // sits paused. The running session is the playback.
-    keepPlaying.update({ status: "paused", djSessionActive: true });
+    keepPlaying.update({ status: "paused", djActive: true });
     expect(blocker.start).toHaveBeenCalledTimes(1);
     expect(blocker.start).toHaveBeenCalledWith("prevent-app-suspension");
     expect(keepPlaying.isHolding()).toBe(true);
 
     // The session ending releases the blocker (player still paused).
-    keepPlaying.update({ djSessionActive: false });
+    keepPlaying.update({ djActive: false });
     expect(blocker.stop).toHaveBeenCalledTimes(1);
     expect(keepPlaying.isHolding()).toBe(false);
   });
@@ -89,7 +89,7 @@ describe("createKeepPlayingController", () => {
     keepPlaying.update({
       keepPlayingEnabled: false,
       status: "paused",
-      djSessionActive: true,
+      djActive: true,
     });
     expect(blocker.start).not.toHaveBeenCalled();
   });

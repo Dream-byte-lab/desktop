@@ -134,6 +134,31 @@ export class PlayerRuntime {
   private crossfadeGeneration = 0;
   public onEnded?: () => void;
   public onError?: (info: { trackId: string; message: string }) => void;
+  /**
+   * DJ-session authority (fix2-0119): while a liveRave session
+   * runs, its decks are the ONLY sounding source and the only
+   * timeline. The engine wires this predicate (it owns the
+   * session import, exactly as it wires onEnded/onError); while
+   * it returns true this runtime is fully subordinated — no
+   * crossfade arms, loads into sound, or promotes; no element
+   * end-of-track advance; no element-driven store writes
+   * (position, duration, status); loadAndPlay/resume stand
+   * down. Transport commands never reach here in that state
+   * anyway (the store channel routes them to the session, and
+   * a track pick stops the session BEFORE the engine acts), so
+   * standing down costs plain playback nothing. Undefined = no
+   * session machinery (unit tests, plain use): unchanged.
+   */
+  public sessionLive?: () => boolean;
+
+  /** True while a DJ session owns playback (see sessionLive). */
+  private sessionOwnsPlayback(): boolean {
+    try {
+      return this.sessionLive?.() === true;
+    } catch {
+      return false;
+    }
+  }
 
   constructor() {
     const win = typeof window !== "undefined" ? (window as any) : null;
@@ -351,6 +376,10 @@ export class PlayerRuntime {
       if (!this.currentTrackId) return;
       if (usePlayerStore.getState().status === "loading") return;
       if (Number.isNaN(audioEl.currentTime)) return;
+      // A live DJ session owns the store's position and the
+      // boundary machinery: the element (silenced at takeover)
+      // writes nothing and arms nothing (fix2-0119).
+      if (this.sessionOwnsPlayback()) return;
 
       const posMs = Math.round(audioEl.currentTime * 1000);
       usePlayerStore.getState().setPosition(posMs);
@@ -368,6 +397,7 @@ export class PlayerRuntime {
     audioEl.addEventListener("durationchange", () => {
       if (this.isResetting || audioEl !== this.audio) return;
       if (!this.currentTrackId) return;
+      if (this.sessionOwnsPlayback()) return;
       if (Number.isNaN(audioEl.duration) || audioEl.duration <= 0) return;
 
       usePlayerStore
@@ -385,6 +415,7 @@ export class PlayerRuntime {
     ]) {
       audioEl.addEventListener(type, () => {
         if (this.isResetting || audioEl !== this.audio) return;
+        if (this.sessionOwnsPlayback()) return;
         this.syncMediaSessionPosition();
       });
     }
@@ -418,6 +449,10 @@ export class PlayerRuntime {
       if (this.isResetting || audioEl !== this.audio) return;
       if (!this.currentTrackId) return;
       if (this.attachedTrackId !== this.currentTrackId) return;
+      // A live DJ session advances on its own decks' ends; the
+      // silenced element reaching its end is inert — it must
+      // never skip the session's track (fix2-0119).
+      if (this.sessionOwnsPlayback()) return;
 
       // Ensure the track truly finished playing (not an empty media load or teardown artefact)
       const duration = audioEl.duration;
@@ -432,6 +467,7 @@ export class PlayerRuntime {
 
     audioEl.addEventListener("playing", () => {
       if (this.isResetting || audioEl !== this.audio) return;
+      if (this.sessionOwnsPlayback()) return;
       log("green", "audio", "playing");
       if (this.recoveryHoldUntilMs === null) this.recoveryAttempts = 0;
       this.applyPlaybackRateAndPitch();
@@ -445,6 +481,10 @@ export class PlayerRuntime {
 
     audioEl.addEventListener("pause", () => {
       if (this.isResetting || audioEl !== this.audio) return;
+      // The session silences this element at takeover on
+      // purpose: its pause event must not flip the store to
+      // "paused" under a playing set (fix2-0119).
+      if (this.sessionOwnsPlayback()) return;
       log("cyan", "audio", "paused");
       const st = usePlayerStore.getState().status;
       if (st === "playing") {
@@ -783,6 +823,9 @@ export class PlayerRuntime {
    */
   private maybeCrossfade(audioEl: HTMLAudioElement): void {
     if (this.crossfade) return;
+    // A live DJ session owns every boundary: never arm an
+    // overlap under it (fix2-0119).
+    if (this.sessionOwnsPlayback()) return;
     if (!this.currentTrackId || this.attachedTrackId !== this.currentTrackId)
       return;
     const store = usePlayerStore.getState();
@@ -950,6 +993,12 @@ export class PlayerRuntime {
       fail(el.error.message || "incoming media error");
       return;
     }
+    // A DJ session went live while this incoming leg loaded:
+    // it must never sound (fix2-0119).
+    if (this.sessionOwnsPlayback()) {
+      this.cancelCrossfade(false);
+      return;
+    }
 
     try {
       await el.play();
@@ -964,6 +1013,12 @@ export class PlayerRuntime {
       return;
     }
     if (!this.crossfade) return;
+    // …or went live during the play() itself: cancel before the
+    // overlap can begin (cancelCrossfade releases the standby).
+    if (this.sessionOwnsPlayback()) {
+      this.cancelCrossfade(false);
+      return;
+    }
     // The listener switched the preference off while this loaded:
     // honour it rather than starting an overlap they just cancelled.
     if (usePlayerStore.getState().crossfadeSeconds <= 0) {
@@ -1034,6 +1089,12 @@ export class PlayerRuntime {
       this.crossfadeTimer = null;
       const cf = this.crossfade;
       if (!cf || cf.phase !== "overlapping") return;
+      // A DJ session went live mid-overlap: the overlap is
+      // cancelled, never promoted (fix2-0119).
+      if (this.sessionOwnsPlayback()) {
+        this.cancelCrossfade(false);
+        return;
+      }
       // The preference was switched off mid-overlap: end it cleanly.
       if (usePlayerStore.getState().crossfadeSeconds <= 0) {
         this.cancelCrossfade(true);
@@ -1109,6 +1170,12 @@ export class PlayerRuntime {
    * broken source is never given the recovery reload.
    */
   private completeCrossfadeEarly(): void {
+    // Under a live DJ session there is no hand-off to complete
+    // (fix2-0119); the gates above cancel any live crossfade.
+    if (this.sessionOwnsPlayback()) {
+      this.cancelCrossfade(false);
+      return;
+    }
     log(
       "yellow",
       "crossfade",
@@ -1129,6 +1196,14 @@ export class PlayerRuntime {
    * paused, unloaded and parked as the new standby.
    */
   private promoteCrossfade(track: Track): void {
+    // A hand-off under a live DJ session would seize the store
+    // (track, position, status) from the decks: forbidden
+    // (fix2-0119). The ramp/loading gates cancel the crossfade
+    // first; this is the last line of defence.
+    if (this.sessionOwnsPlayback()) {
+      this.cancelCrossfade(false);
+      return;
+    }
     const cf = this.crossfade;
     const standby = this.standbyAudio;
     if (!cf || !standby) return;
@@ -1419,6 +1494,11 @@ export class PlayerRuntime {
     startPositionMs: number = 0,
     bypassCache: boolean = false,
   ) {
+    // A live DJ session owns playback: a plain load stands down
+    // (fix2-0119). Callers acting on a user's track pick reach
+    // here only after the pick stopped the session, so this
+    // never eats a deliberate play.
+    if (this.sessionOwnsPlayback()) return;
     // Crossfade hand-off: the engine advanced to the very track that
     // is already sounding on the standby element — promote it instead
     // of loading it again. Any other load (a different track, a seeked
@@ -1726,6 +1806,9 @@ export class PlayerRuntime {
   }
 
   public resume() {
+    // Subordinated while a DJ session runs (fix2-0119): the
+    // session's own resume owns the transport in that state.
+    if (this.sessionOwnsPlayback()) return;
     const epoch = ++this.loadEpoch;
     this.loadAbortController?.abort();
     this.loadAbortController = null;

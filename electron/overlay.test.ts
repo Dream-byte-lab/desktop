@@ -408,15 +408,15 @@ describe("OverlayManager", () => {
     expect(overlay.isDestroyed()).toBe(false);
   });
 
-  it("creates the overlay at the default card size, centred on top", async () => {
+  it("creates the overlay at the default panel size, centred on top", async () => {
     const { overlays } = setup();
     await vi.advanceTimersByTimeAsync(600);
     const [overlay] = overlays();
     expect(overlay.getBounds()).toEqual({
-      x: 776,
+      x: 660,
       y: 20,
-      width: 368,
-      height: 168,
+      width: 600,
+      height: 344,
     });
   });
 
@@ -449,7 +449,7 @@ describe("OverlayManager", () => {
     expect(overlay.getBounds()).toEqual({
       x: before.x,
       y: before.y,
-      width: 560,
+      width: 820,
       height: 100,
     });
     expect(main.webContents.send).not.toHaveBeenCalledWith(

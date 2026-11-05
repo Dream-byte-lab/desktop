@@ -11,7 +11,7 @@ export interface KeepPlayingState {
    * set the decks own the audio, and a hosted party runs on the session.
    * The session being alive IS the playback.
    */
-  djSessionActive: boolean;
+  djActive: boolean;
   /** The user's "Keep playing when the screen turns off" setting. */
   keepPlayingEnabled: boolean;
 }
@@ -46,7 +46,7 @@ export function createKeepPlayingController(blocker: Blocker) {
   let id: number | null = null;
   const state: KeepPlayingState = {
     status: "idle",
-    djSessionActive: false,
+    djActive: false,
     // Matches the settings default (on). The renderer's first state
     // sync carries the persisted value, so a user who turned the
     // setting off corrects this before anything can be playing.
@@ -55,7 +55,7 @@ export function createKeepPlayingController(blocker: Blocker) {
 
   const shouldHold = () =>
     state.keepPlayingEnabled &&
-    (PLAYING_STATUSES.has(state.status) || state.djSessionActive);
+    (PLAYING_STATUSES.has(state.status) || state.djActive);
 
   const reconcile = () => {
     if (shouldHold() && id === null) {

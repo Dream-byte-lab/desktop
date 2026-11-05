@@ -53,10 +53,14 @@ function formatMs(durationMs: number): string {
 function TrackRow({
   track,
   onPlay,
+  guest,
 }: {
   track: Track;
   onPlay?: (track: Track) => void;
+  /** Smart Shuffle guest: labelled, never disguised (2026-11-05). */
+  guest?: boolean;
 }) {
+  const { t } = useTranslation();
   const content = (
     <>
       <img
@@ -73,6 +77,14 @@ function TrackRow({
           {track.artists}
         </span>
       </span>
+      {guest && (
+        <span
+          title={t("player.smart_guest_hint")}
+          className="shrink-0 rounded-full border border-white/25 px-2 py-[2px] text-[10px] font-medium tracking-wide text-white/60 uppercase"
+        >
+          {t("player.smart_guest")}
+        </span>
+      )}
       <span className="shrink-0 text-[13px] text-white/45 tabular-nums">
         {formatMs(track.durationMs)}
       </span>
@@ -102,6 +114,7 @@ export function LyricsFullscreenView({ onExit }: LyricsFullscreenViewProps) {
   const currentTrack = usePlayerStore((s) => s.currentTrack);
   const queue = usePlayerStore((s) => s.queue);
   const currentIndex = usePlayerStore((s) => s.currentIndex);
+  const smartGuestIds = usePlayerStore((s) => s.smartGuestIds);
   const {
     braccatoLyrics,
     lyricsLoading,
@@ -345,6 +358,14 @@ export function LyricsFullscreenView({ onExit }: LyricsFullscreenViewProps) {
                       <p className="truncate text-sm text-white/60">
                         {nextTrack.artists}
                       </p>
+                      {smartGuestIds.includes(nextTrack.id) && (
+                        <span
+                          title={t("player.smart_guest_hint")}
+                          className="mt-1 inline-block rounded-full border border-white/25 px-2 py-[2px] text-[10px] font-medium tracking-wide text-white/60 uppercase"
+                        >
+                          {t("player.smart_guest")}
+                        </span>
+                      )}
                       {nextTrack.album && (
                         <p className="truncate text-sm text-white/40">
                           {nextTrack.album.title}
@@ -365,7 +386,11 @@ export function LyricsFullscreenView({ onExit }: LyricsFullscreenViewProps) {
                         )}
                       </p>
                       {upNext.slice(1).map((track) => (
-                        <TrackRow key={track.id} track={track} />
+                        <TrackRow
+                          key={track.id}
+                          track={track}
+                          guest={smartGuestIds.includes(track.id)}
+                        />
                       ))}
                     </>
                   )}

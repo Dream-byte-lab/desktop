@@ -231,12 +231,26 @@ describe("loadListeningStats (the loader)", () => {
               nextCursor: "more",
             },
       readDevice: async () => [],
-      readJoins: async () => ({ performed: 4, graded: 2, averageGrade: 0.8 }),
+      readJoins: async () => ({
+        performed: 3,
+        userAct: 1,
+        fallbackUnprepared: 1,
+        fallbackInvalid: 0,
+        degradedUntrusted: 0,
+        setEnd: 0,
+      }),
       nowMs: NOW,
     });
     // The second page ends the walk: complete, one event.
     expect(stats.coverage.complete).toBe(true);
     expect(stats.totalEvents).toBe(1);
-    expect(stats.joins).toEqual({ performed: 4, graded: 2, averageGrade: 0.8 });
+    expect(stats.joins).toEqual({
+      performed: 3,
+      userAct: 1,
+      fallbackUnprepared: 1,
+      fallbackInvalid: 0,
+      degradedUntrusted: 0,
+      setEnd: 0,
+    });
   });
 });

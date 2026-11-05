@@ -103,7 +103,24 @@ export function OverlayTab({ searchQuery }: { searchQuery?: string }) {
     [t],
   );
 
-  const sizeChoice: SizeChoice = matchOverlaySizePreset(size);
+  // "Custom" as a real choice (fix-0119): the matched preset is
+  // the display default, but the user can explicitly hold the
+  // current size AS a custom size — selecting Custom re-asserts
+  // the current size through setSize (a real store write, not a
+  // silent no-op) and the hold keeps the control reading Custom
+  // while the size is exactly the held one. A grip drag or a
+  // preset pick moves the size and the matched display governs
+  // again.
+  const [customHold, setCustomHold] = useState<{
+    width: number;
+    height: number;
+  } | null>(null);
+  const sizeChoice: SizeChoice =
+    customHold &&
+    customHold.width === size.width &&
+    customHold.height === size.height
+      ? "custom"
+      : matchOverlaySizePreset(size);
 
   const shortcut = useOverlaySettingsStore((s) => s.shortcut);
   const setShortcut = useOverlaySettingsStore((s) => s.setShortcut);
@@ -286,9 +303,15 @@ export function OverlayTab({ searchQuery }: { searchQuery?: string }) {
               options={sizeOptions}
               value={sizeChoice}
               onChange={(choice) => {
-                // "Custom" is a display state (reached by dragging the
-                // overlay's corner grip), not a size of its own.
-                if (choice !== "custom") {
+                if (choice === "custom") {
+                  // Hold the current size as the custom size:
+                  // the write goes through setSize like any
+                  // other choice, and the hold above keeps the
+                  // control reading Custom for exactly this size.
+                  setCustomHold({ width: size.width, height: size.height });
+                  setSize({ width: size.width, height: size.height });
+                } else {
+                  setCustomHold(null);
                   setSize({ ...OVERLAY_SIZE_PRESETS[choice] });
                 }
               }}

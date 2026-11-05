@@ -2,13 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { usePlayerStore } from "../store/playerStore";
 import { createMediaClock } from "./mediaClock";
 
-// The session-liveness predicate is the mixer's own (djSession.isRunning).
-// It is mocked here so each test decides whether a session is live; the
-// clock's session branch must consult it on every call.
+// The session-liveness predicate is the mixer's own
+// (liveRaveSession.isRunning). It is mocked here so each test
+// decides whether a session is live; the clock's session branch
+// must consult it on every call.
 const sessionMock = vi.hoisted(() => ({ running: false }));
 
-vi.mock("@/features/mixer/engine/djSession", () => ({
-  djSession: {
+vi.mock("@/features/mixer/liverave/session", () => ({
+  liveRaveSession: {
     get isRunning() {
       return sessionMock.running;
     },

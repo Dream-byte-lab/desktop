@@ -63,7 +63,9 @@ describe("soundcloudCatalog.getArtist", () => {
   it("builds an artist page from the user, top tracks, uploads and releases", async () => {
     installFetch({
       "/users/42": () => USER,
-      "/users/42/toptracks": () => ({ collection: [track(2), track(1)] }),
+      "/users/42/toptracks": () => ({
+        collection: [track(2, { playback_count: 1234567 }), track(1)],
+      }),
       "/users/42/tracks": () => ({ collection: [track(1), track(3)] }),
       "/users/42/albums": () => ({
         collection: [
@@ -98,6 +100,11 @@ describe("soundcloudCatalog.getArtist", () => {
     expect(artist.tracks[0].artists).toEqual([
       { id: "sc_user_42", name: "label-upload" },
     ]);
+    // SoundCloud publishes a playback_count; it rides the track as
+    // playCount. A track whose payload carries none stays without
+    // the field — absent, never zero-filled.
+    expect(artist.tracks[0].playCount).toBe(1234567);
+    expect(artist.tracks[1].playCount).toBeUndefined();
     expect(artist.albums).toEqual([
       expect.objectContaining({
         id: "sc_playlist_7",
@@ -108,6 +115,52 @@ describe("soundcloudCatalog.getArtist", () => {
     expect(artist.singles).toEqual([
       expect.objectContaining({ id: "sc_playlist_8", releaseType: "ep" }),
     ]);
+  });
+
+  it("derives similar artists from the related tracks of the top tracks", async () => {
+    const otherUser = (id: number, username: string) => ({
+      id,
+      username,
+      full_name: username,
+      avatar_url: `https://i1.sndcdn.com/avatars-${username}-large.jpg`,
+    });
+    const otherTrack = (id: number, user: Record<string, unknown>) => ({
+      id,
+      title: `Other ${id}`,
+      duration: 1000,
+      user,
+    });
+    installFetch({
+      "/users/42": () => USER,
+      "/users/42/toptracks": () => ({ collection: [track(2), track(1)] }),
+      "/users/42/tracks": () => ({ collection: [] }),
+      "/users/42/albums": () => ({ collection: [] }),
+      "/tracks/2/related": () => ({
+        collection: [
+          otherTrack(21, otherUser(7, "seven")),
+          otherTrack(22, otherUser(9, "nine")),
+          track(23),
+        ],
+      }),
+      "/tracks/1/related": () => ({
+        collection: [otherTrack(24, otherUser(7, "seven"))],
+      }),
+    });
+
+    const artist = await soundcloudCatalog.getArtist("sc_user_42");
+
+    // Ranked by appearances across both related lists; the
+    // artist's own uploads in the lists never appear; the cover
+    // is the avatar SoundCloud serves for that uploader.
+    expect(artist.similarArtistsBasis).toBe("related");
+    expect(artist.similarArtists?.map((entry) => entry.id)).toEqual([
+      "sc_user_7",
+      "sc_user_9",
+    ]);
+    expect(artist.similarArtists?.[0].name).toBe("seven");
+    expect(artist.similarArtists?.[0].cover?.url).toBe(
+      "https://i1.sndcdn.com/avatars-seven-t500x500.jpg",
+    );
   });
 
   it("still opens the artist when a secondary listing fails", async () => {

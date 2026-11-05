@@ -52,15 +52,23 @@ export function FullscreenTransportControls() {
       <button
         type="button"
         aria-label={
-          player.shuffle ? t("player.shuffle_on") : t("player.shuffle_off")
+          player.shuffleMode === "smart"
+            ? t("player.shuffle_smart")
+            : player.shuffle
+              ? t("player.shuffle_on")
+              : t("player.shuffle_off")
         }
-        onClick={() => playerEngine.setShuffle(!player.shuffle)}
+        onClick={() => playerEngine.cycleShuffleMode()}
         className={cn(
           iconButtonClass,
+          "relative",
           player.shuffle ? "!opacity-100" : "!opacity-60",
         )}
       >
         <Shuffle size={24} weight="Outline" />
+        {player.shuffleMode === "smart" && (
+          <span className="absolute top-[4px] right-[4px] h-[6px] w-[6px] rounded-full bg-current" />
+        )}
       </button>
 
       <button

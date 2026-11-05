@@ -7,7 +7,11 @@
 
 import type { ListeningStats } from "./listeningStats";
 
-const CACHE_KEY_PREFIX = "liner_space_stats_cache_v1:";
+// v2: the JoinSummary shape changed (the grade fields retired in
+// favour of per-reason counts); a v1 entry would render counts the
+// new shape cannot supply, so old entries are simply abandoned —
+// this is a render cache and the walk re-runs on mount regardless.
+const CACHE_KEY_PREFIX = "liner_space_stats_cache_v2:";
 
 export interface CachedStats {
   savedAtMs: number;

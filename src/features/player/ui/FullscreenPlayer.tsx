@@ -2,7 +2,6 @@ import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { usePlayerStore } from "../store/playerStore";
 import { useGlassBlur, useKawarpEnabled } from "../store/visualModeStore";
-import { cn } from "@/shared/lib";
 import { Notch } from "@/shared/ui";
 import { FullscreenTopNotch } from "./FullscreenTopNotch";
 import { LyricsNotchStatus } from "./LyricsNotchStatus";
@@ -17,9 +16,7 @@ import { preloadCoverArt, useCoverSrc } from "@/features/covers";
 import KawarpWrapper from "./KawarpWrapper";
 import AmbientLayer from "./AmbientLayer";
 import { BetaVisualsWarning } from "./BetaVisualsWarning";
-import { CanvasLyricsView } from "./CanvasLyricsView";
 import { useTranslation } from "@/languages";
-import { useSettledLyricsLayout } from "../hooks/useSettledLyricsLayout";
 import { NOW_PLAYING_MORPH_TRANSITION } from "./nowPlayingMorph";
 import { consumeLyricsViewOpenRequest } from "./lyricsOpenIntent";
 
@@ -112,15 +109,12 @@ export function FullscreenPlayer({
     (instrumental || plainLyrics === "[INSTRUMENTAL]");
   const isLyricsLoading = !hasLyrics && lyricsLoading;
   const isLyricsMissing = isMatchingTrack && !hasLyrics && !lyricsLoading;
-  const isCompactLayout = useSettledLyricsLayout({
-    isMatchingTrack,
-    lyricsLoading,
-    hasLyrics,
-  });
 
-  // The full-screen Lyrics view (reference 27) replaces the split
-  // Now Playing surface while it is open; playback, lyrics state
-  // and the sync renderer are shared with it.
+  // The full-screen Lyrics view (reference 27) is the only lyrics
+  // surface: it replaces the Now Playing surface while it is open.
+  // The split view carries no lyrics column of its own anymore —
+  // lyrics live in the dedicated view, reached from here by the
+  // lyrics button or by the playback bar's one-shot intent.
   if (lyricsViewOpen && currentTrack) {
     return <LyricsFullscreenView onExit={() => setLyricsViewOpen(false)} />;
   }
@@ -183,39 +177,10 @@ export function FullscreenPlayer({
         <div className="flex-1 flex flex-col items-center justify-center gap-5">
           <PlayerUiElements
             onClose={onClose}
-            layout={isCompactLayout ? "horizontal" : "vertical"}
+            layout="horizontal"
             onQueueToggle={toggleQueue}
             queueOpen={queueOpen}
           />
-        </div>
-
-        <div
-          className={cn(
-            "h-full min-h-0 flex flex-col relative overflow-hidden",
-            isCompactLayout ? "grow-0 basis-0 px-0" : "grow basis-0 pl-2 pr-6",
-          )}
-        >
-          <div
-            className="flex-1 min-h-0 relative w-full h-full"
-            style={{
-              display: hasLyrics ? "flex" : "none",
-            }}
-          >
-            <AnimatePresence initial={false}>
-              {hasLyrics && (
-                <motion.div
-                  key={`lyrics-${currentTrackId}`}
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0, pointerEvents: "none" }}
-                  transition={{ duration: 0.22, ease: "easeInOut" }}
-                  className="absolute inset-0 flex flex-col"
-                >
-                  <CanvasLyricsView lyrics={braccatoLyrics} />
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </div>
         </div>
       </motion.div>
 

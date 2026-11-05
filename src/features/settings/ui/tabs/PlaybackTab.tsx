@@ -13,6 +13,12 @@ export function PlaybackTab({ searchQuery }: { searchQuery?: string }) {
   const setAutoplaySimilar = usePlayerStore(
     (state) => state.setAutoplaySimilar,
   );
+  const smartShuffleEnabled = usePlayerStore(
+    (state) => state.smartShuffleEnabled,
+  );
+  const setSmartShuffleEnabled = usePlayerStore(
+    (state) => state.setSmartShuffleEnabled,
+  );
   const trackDoubleClickBehavior = usePlayerStore(
     (state) => state.trackDoubleClickBehavior,
   );
@@ -68,6 +74,20 @@ export function PlaybackTab({ searchQuery }: { searchQuery?: string }) {
           <ToggleSwitch
             checked={autoplaySimilar}
             onChange={setAutoplaySimilar}
+          />
+        }
+      />
+
+      <SettingRow
+        title={t("settings.playback.smart_shuffle.title")}
+        description={t("settings.playback.smart_shuffle.description")}
+        titleKey="settings.playback.smart_shuffle.title"
+        descKey="settings.playback.smart_shuffle.description"
+        searchQuery={searchQuery}
+        control={
+          <ToggleSwitch
+            checked={smartShuffleEnabled}
+            onChange={setSmartShuffleEnabled}
           />
         }
       />

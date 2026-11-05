@@ -4,6 +4,7 @@ import { LuShuffle } from "react-icons/lu";
 import CoverImage from "@/features/covers/ui/CoverImage";
 import { playerEngine } from "@/features/player";
 import { useArtist } from "@/features/artist/hooks/useArtist";
+import { artistAudience } from "@/features/artist/lib/audience";
 import { useExternalItems } from "@/features/library/hooks/useExternalItems";
 import { useModalStore } from "@/features/library/store/modalStore";
 import { useTranslation } from "@/languages";
@@ -15,11 +16,15 @@ import type { SearchRowItem } from "../lib/searchPageItems";
 // smaller circles with Follow pills.
 //
 // Two honesty rules govern this component:
-//  - NO STAT LINE. The reference image shows "monthly listeners"
-//    under the name; the data register rules that figure honestly
-//    absent, and the register overrules the image. useArtist's data
-//    does carry monthlyListeners — it is deliberately never read
-//    here, and a test pins the absence.
+//  - THE STAT LINE IS THE ARTIST PAGE'S OWN. Under the name sits
+//    the audience figure, produced by the artist page's standing
+//    rule (artistAudience): the source's monthly-audience figure
+//    where the source publishes one, otherwise the follower
+//    count — source-labelled identically in both places, never
+//    both, never invented. (An earlier register pinned this
+//    figure's ABSENCE here; the user's order of 2026-11-05 to add
+//    the omitted sections superseded that pin, and the tests now
+//    pin the labelled presence instead.)
 //  - ONE FOLLOW MECHANISM. The follow state and its toggle are the
 //    artist page's own: saved state from useExternalItems("artist"),
 //    changes through the library modal store's add/remove flow.
@@ -136,6 +141,12 @@ export const SearchHeroArtist = memo(function SearchHeroArtist({
   const { t } = useTranslation();
   const { data } = useArtist(hero.id);
   const { following, toggleFollow } = useFollowToggle(hero);
+  const audience = data ? artistAudience(data) : null;
+  const audienceLabel = audience
+    ? audience.kind === "monthly"
+      ? t("artist.monthly_audience", { count: audience.count })
+      : `${audience.count} ${t("artist.followers")}`
+    : null;
 
   const canShuffle = Boolean(data && data.tracks.length > 0);
   const handleShufflePlay = useCallback(() => {
@@ -179,7 +190,11 @@ export const SearchHeroArtist = memo(function SearchHeroArtist({
               {hero.title}
             </span>
           </button>
-          {/* No stat line renders here — see the header comment. */}
+          {audienceLabel ? (
+            <span className="text-label font-[500] text-text-secondary">
+              {audienceLabel}
+            </span>
+          ) : null}
           <div className="flex items-center gap-[8px]">
             <button
               type="button"

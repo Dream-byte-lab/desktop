@@ -11,16 +11,40 @@ import type { OverlaySize } from "../contracts";
 export const OVERLAY_SIZE_PRESETS = {
   /** Micro strip: at/below the footprint of the original 320x56 pill. */
   small: { width: 320, height: 64 },
-  /** The glass mini-player card; the default. */
-  default: { width: 368, height: 168 },
-  /** Expanded glass panel: player strip on top, roomier body below. */
-  large: { width: 480, height: 360 },
+  /**
+   * The glass player panel (the reference card's composition): a
+   * full-height cover panel on the left, the player column on the right.
+   * 600x344 leaves a 584x328 visible card inside the shadow margin —
+   * wide enough for the cover to take its ~43% and the transport row
+   * to breathe, small enough to live over other apps.
+   */
+  default: { width: 600, height: 344 },
+  /** The same panel with air: roomier spacing, deeper translucency. */
+  large: { width: 760, height: 456 },
 } as const satisfies Record<string, OverlaySize>;
 
 export type OverlaySizePreset = keyof typeof OVERLAY_SIZE_PRESETS;
 
+/**
+ * The pre-panel default anchor (368x168). A persisted size matching it
+ * exactly is treated as "the old default", not a deliberate custom
+ * choice, and migrates to the new default — the old mini card's bones
+ * are gone, and 368x168 would otherwise fall into the micro band.
+ */
+export const LEGACY_DEFAULT_OVERLAY_SIZE: OverlaySize = {
+  width: 368,
+  height: 168,
+};
+
+export function isLegacyDefaultOverlaySize(size: OverlaySize): boolean {
+  return (
+    size.width === LEGACY_DEFAULT_OVERLAY_SIZE.width &&
+    size.height === LEGACY_DEFAULT_OVERLAY_SIZE.height
+  );
+}
+
 export const OVERLAY_MIN_SIZE: OverlaySize = { width: 280, height: 56 };
-export const OVERLAY_MAX_SIZE: OverlaySize = { width: 560, height: 440 };
+export const OVERLAY_MAX_SIZE: OverlaySize = { width: 820, height: 520 };
 
 export function clampOverlaySize(size: OverlaySize): OverlaySize {
   const clamp = (value: number, min: number, max: number) =>
@@ -61,14 +85,15 @@ export function matchOverlaySizePreset(
 }
 
 /**
- * Layout bands. A short window is always the micro strip, however wide it
- * is dragged; the expanded panel needs both the width and the height to
- * breathe, anything else gets the default card.
+ * Layout bands. The panel composition needs real height — below the
+ * floor a window is always the micro strip, however wide it is dragged;
+ * the large panel needs both the width and the height to breathe;
+ * everything else gets the default panel.
  */
 export type OverlaySizeBand = "micro" | "default" | "large";
 
 export function overlaySizeBand(size: OverlaySize): OverlaySizeBand {
-  if (size.height < 110) return "micro";
-  if (size.width >= 424 && size.height >= 264) return "large";
+  if (size.height < 244) return "micro";
+  if (size.width >= 700 && size.height >= 392) return "large";
   return "default";
 }

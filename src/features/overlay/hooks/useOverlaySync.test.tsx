@@ -38,6 +38,12 @@ vi.mock("@/features/player/engine/playerEngine", async () => {
       skipPrevious: vi.fn(),
       seek: vi.fn(),
       setVolume: vi.fn(),
+      setShuffle: vi.fn((enabled: boolean) =>
+        usePlayerStore.getState().setShuffle(enabled),
+      ),
+      setRepeat: vi.fn((mode: "off" | "all" | "one") =>
+        usePlayerStore.getState().setRepeat(mode),
+      ),
     },
   };
 });
@@ -67,6 +73,7 @@ describe("useOverlaySync ipc volume", () => {
   let container: HTMLDivElement;
   let root: Root;
   let sent: Array<Record<string, unknown>>;
+  let actionHandler: ((action: { type: string }) => void) | null;
 
   function mount() {
     window.linerElectron = {
@@ -74,7 +81,10 @@ describe("useOverlaySync ipc volume", () => {
       overlayUpdateState: (state: Record<string, unknown>) => {
         sent.push(state);
       },
-      onOverlayAction: () => () => {},
+      onOverlayAction: (cb: (action: { type: string }) => void) => {
+        actionHandler = cb;
+        return () => {};
+      },
       setOverlayAuthenticated: () => {},
       updateOverlaySettings: () => {},
       closeOverlay: () => {},
@@ -95,6 +105,7 @@ describe("useOverlaySync ipc volume", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     sent = [];
+    actionHandler = null;
     usePlayerStore.setState({
       status: "playing",
       currentTrack: track("a"),
@@ -103,6 +114,9 @@ describe("useOverlaySync ipc volume", () => {
       positionMs: 0,
       durationMs: 200_000,
       playbackRate: 1,
+      shuffle: false,
+      repeat: "off",
+      playbackContext: null,
     });
     container = document.createElement("div");
     document.body.appendChild(container);
@@ -170,5 +184,57 @@ describe("useOverlaySync ipc volume", () => {
     sent = [];
     for (let t = 2_000; t < 8_000; t += TICK_MS * 1.5) tick(Math.round(t));
     expect(sent).toHaveLength(0);
+  });
+
+  it("mirrors shuffle, repeat and the playback context into the payload", () => {
+    act(() => {
+      usePlayerStore.getState().setShuffle(true);
+      usePlayerStore.getState().setRepeat("one");
+      usePlayerStore.getState().setPlaybackContext("album:xyz");
+    });
+    mount();
+    expect(sent.at(-1)).toMatchObject({
+      shuffle: true,
+      repeat: "one",
+      contextLabel: "Playing from Album",
+    });
+  });
+
+  it("names radio and human-titled contexts honestly, and stays neutral without one", () => {
+    act(() => usePlayerStore.getState().setPlaybackContext("radio:abc"));
+    mount();
+    expect(sent.at(-1)).toMatchObject({
+      contextLabel: "Playing from radio",
+    });
+
+    act(() => usePlayerStore.getState().setPlaybackContext("Chill Mix"));
+    expect(sent.at(-1)).toMatchObject({
+      contextLabel: "Playing from Chill Mix",
+    });
+
+    act(() => usePlayerStore.getState().setPlaybackContext(null));
+    expect(sent.at(-1)).toMatchObject({ contextLabel: null });
+  });
+
+  it("routes toggleShuffle and cycleRepeat to the engine like the main player", () => {
+    mount();
+    expect(actionHandler).not.toBeNull();
+
+    act(() => actionHandler?.({ type: "toggleShuffle" }));
+    expect(usePlayerStore.getState().shuffle).toBe(true);
+    act(() => actionHandler?.({ type: "toggleShuffle" }));
+    expect(usePlayerStore.getState().shuffle).toBe(false);
+
+    act(() => actionHandler?.({ type: "cycleRepeat" }));
+    expect(usePlayerStore.getState().repeat).toBe("all");
+    act(() => actionHandler?.({ type: "cycleRepeat" }));
+    expect(usePlayerStore.getState().repeat).toBe("one");
+    act(() => actionHandler?.({ type: "cycleRepeat" }));
+    expect(usePlayerStore.getState().repeat).toBe("off");
+
+    // Radio skips repeat-all, exactly as the main player's button does.
+    act(() => usePlayerStore.getState().setPlaybackContext("radio:abc"));
+    act(() => actionHandler?.({ type: "cycleRepeat" }));
+    expect(usePlayerStore.getState().repeat).toBe("one");
   });
 });

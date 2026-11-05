@@ -1,5 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { playerEngine } from "@/features/player/engine/playerEngine";
+import {
+  isRadioContext,
+  nextRepeatMode,
+} from "@/features/player/engine/radioMode";
 import { usePlayerStore } from "@/features/player/store/playerStore";
 import {
   clampUserVolume,
@@ -22,6 +26,27 @@ const PLAYING_RESYNC_DRIFT_MS = 1_500;
 const PAUSED_RESYNC_DRIFT_MS = 250;
 const DEFAULT_UNMUTE_LEVEL = 0.7;
 
+/**
+ * The eyebrow over the card's title: the playback source, in the same
+ * terms the app itself uses. The stored context is either a human
+ * title (an artist's name, a playlist or page title) — echoed as-is —
+ * a typed "<entity>:<id>" machine string, whose id half is never a
+ * label, or the radio prefix. Anything else is not a source we can
+ * honestly name, so the card falls back to "Now playing".
+ */
+function overlayContextLabel(context: string | null): string | null {
+  if (!context) return null;
+  if (isRadioContext(context)) return "Playing from radio";
+  const colon = context.indexOf(":");
+  if (colon > 0) {
+    const type = context.slice(0, colon).trim();
+    if (type && !/\s/.test(type)) {
+      return `Playing from ${type.charAt(0).toUpperCase()}${type.slice(1)}`;
+    }
+  }
+  return `Playing from ${context}`;
+}
+
 interface SentPosition {
   positionMs: number;
   at: number;
@@ -38,6 +63,9 @@ export function useOverlaySync() {
   const durationMs = usePlayerStore((s) => s.durationMs);
   const volume = usePlayerStore((s) => s.volume);
   const playbackRate = usePlayerStore((s) => s.playbackRate);
+  const shuffle = usePlayerStore((s) => s.shuffle);
+  const repeat = usePlayerStore((s) => s.repeat);
+  const playbackContext = usePlayerStore((s) => s.playbackContext);
   const effectiveCover = useCoverSrc(currentTrack?.coverUrl);
   const isLiked = useIsTrackLiked(currentTrack?.id);
   const likeMutation = useLikeTrack();
@@ -119,6 +147,21 @@ export function useOverlaySync() {
               total > 0 ? total : positionMs + Math.abs(deltaMs);
             playerEngine.seek(
               Math.min(upperBound, Math.max(0, positionMs + deltaMs)),
+            );
+            break;
+          }
+          case "toggleShuffle":
+            playerEngine.setShuffle(!usePlayerStore.getState().shuffle);
+            break;
+          case "cycleRepeat": {
+            // Exactly the main player's repeat button: cycle through
+            // the modes, skipping repeat-all in a radio context.
+            const store = usePlayerStore.getState();
+            playerEngine.setRepeat(
+              nextRepeatMode(
+                store.repeat,
+                isRadioContext(store.playbackContext),
+              ),
             );
             break;
           }
@@ -281,6 +324,9 @@ export function useOverlaySync() {
       durationMs,
       volume,
       isLiked,
+      shuffle,
+      repeat,
+      contextLabel: overlayContextLabel(playbackContext),
     };
 
     sentPositionRef.current = {
@@ -299,6 +345,9 @@ export function useOverlaySync() {
     currentTrack,
     effectiveCover,
     isLiked,
+    shuffle,
+    repeat,
+    playbackContext,
     seekTick,
   ]);
 }

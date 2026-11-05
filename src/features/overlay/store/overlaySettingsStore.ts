@@ -6,7 +6,11 @@ import type {
   OverlaySize,
 } from "../contracts";
 import { normalizeShortcutToEnglish } from "../lib/shortcutUtils";
-import { clampOverlaySize, OVERLAY_SIZE_PRESETS } from "../lib/overlaySize";
+import {
+  clampOverlaySize,
+  isLegacyDefaultOverlaySize,
+  OVERLAY_SIZE_PRESETS,
+} from "../lib/overlaySize";
 
 interface OverlaySettingsState extends OverlaySettings {
   setEnabled: (enabled: boolean) => void;
@@ -81,6 +85,13 @@ export const useOverlaySettingsStore = create<OverlaySettingsState>()(
           state.shortcut =
             normalizeShortcutToEnglish(state.shortcut) ||
             DEFAULT_SETTINGS.shortcut;
+        }
+        // A size stored by the pre-panel build is overwhelmingly its
+        // own default anchor, not a deliberate choice — move it to the
+        // new default so the panel composition is what greets the
+        // user (the old anchor would fall into the micro band now).
+        if (state?.size && isLegacyDefaultOverlaySize(state.size)) {
+          state.size = { ...OVERLAY_SIZE_PRESETS.default };
         }
       },
     },

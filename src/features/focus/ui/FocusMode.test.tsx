@@ -74,11 +74,12 @@ const { engineSpies, playerState, sessionState } = vi.hoisted(() => {
     } as Record<string, any>,
     sessionState: {
       isRunning: false,
-      isPaused: false,
-      degraded: false,
-      plainCutCount: 0,
-      liveRaveOpenRequests: [] as unknown[],
-      endReason: null as string | null,
+      stageSnapshot: null as unknown,
+      nextJoinPreview: null as {
+        trackId: string;
+        trackTitle: string;
+      } | null,
+      feedEvents: [] as { at: number; kind: string; text: string }[],
     },
   };
 });
@@ -97,36 +98,28 @@ vi.mock("@/features/player", () => ({
   useGlassBlur: () => true,
 }));
 
-vi.mock("@/features/mixer/engine/djSession", () => ({
-  djSession: {
+// The session seam, faked at exactly the surface Focus consumes:
+// isRunning, the stage snapshot (for the current move), the next
+// join preview (the drawn next track, when one is drawn) and the
+// activity feed (the session's narration, verbatim). Focus reads
+// no session counters and no preparation cache — what the session
+// is doing reaches this surface only in the session's own words.
+vi.mock("@/features/mixer/liverave/session", () => ({
+  liveRaveSession: {
     get isRunning() {
       return sessionState.isRunning;
     },
-    get isPaused() {
-      return sessionState.isPaused;
+    get nextJoinPreview() {
+      return sessionState.nextJoinPreview;
     },
-    get degraded() {
-      return sessionState.degraded;
+    stageSnapshot: () => sessionState.stageSnapshot,
+    activityFeed: {
+      events: () => sessionState.feedEvents,
+      latest: () =>
+        sessionState.feedEvents[sessionState.feedEvents.length - 1] ?? null,
+      subscribe: () => () => {},
     },
-    get plainCutCount() {
-      return sessionState.plainCutCount;
-    },
-    get liveRaveOpenRequests() {
-      return sessionState.liveRaveOpenRequests;
-    },
-    get endReason() {
-      return sessionState.endReason;
-    },
-    stageSnapshot: () => null,
   },
-}));
-
-vi.mock("@/features/mixer/engine/trackSource", () => ({
-  preparedTrack: () => null,
-}));
-
-vi.mock("@/features/mixer/store/djModeStore", () => ({
-  useDjModeStore: (selector: any) => selector({ blending: false }),
 }));
 
 import { FocusMode } from "./FocusMode";
@@ -145,6 +138,9 @@ describe("FocusMode — the annex proposal as a working surface", () => {
     playerState.positionMs = 65_000;
     playerState.durationMs = 200_000;
     sessionState.isRunning = false;
+    sessionState.stageSnapshot = null;
+    sessionState.nextJoinPreview = null;
+    sessionState.feedEvents = [];
     container = document.createElement("div");
     document.body.appendChild(container);
     root = createRoot(container);
@@ -222,6 +218,10 @@ describe("FocusMode — the annex proposal as a working surface", () => {
     sessionState.isRunning = true;
     const next = track("t2", "Second Song", "Singer Two");
     playerState.queue = [playerState.currentTrack, next];
+    sessionState.feedEvents = [
+      { at: 1, kind: "preparing", text: "Preparing Second Song" },
+      { at: 2, kind: "drawn", text: "Long blend drawn for Second Song" },
+    ];
     act(() => {
       useFocusModeStore.setState({ active: true });
     });
@@ -229,9 +229,182 @@ describe("FocusMode — the annex proposal as a working surface", () => {
 
     expect(container?.textContent).toContain("Coming up");
     expect(container?.textContent).toContain("Second Song");
-    // activityLinesForStage's own narration for this state: the
-    // next track exists but is not prepared yet.
-    expect(container?.textContent).toContain("Preparing incoming track");
+    // The session's narration, verbatim from its activity feed.
+    expect(container?.textContent).toContain("Preparing Second Song");
+    expect(container?.textContent).toContain(
+      "Long blend drawn for Second Song",
+    );
+  });
+
+  it("prefers the session's drawn next join over the store queue's next", () => {
+    sessionState.isRunning = true;
+    const storeNext = track("t2", "Second Song", "Singer Two");
+    playerState.queue = [playerState.currentTrack, storeNext];
+    // A party guest the session scheduled into its own upcoming
+    // and has now drawn: it is not in the store queue at all, and
+    // the queue's next (Second Song) is NOT what plays next.
+    sessionState.nextJoinPreview = {
+      trackId: "guest-1",
+      trackTitle: "Guest Song",
+    };
+    act(() => {
+      useFocusModeStore.setState({ active: true });
+    });
+    render();
+
+    expect(container?.textContent).toContain("Coming up");
+    expect(container?.textContent).toContain("Guest Song");
+    expect(container?.textContent).not.toContain("Second Song");
+  });
+
+  it("a drawn preview that is in the queue borrows the queue entry's artists", () => {
+    sessionState.isRunning = true;
+    const next = track("t2", "Second Song", "Singer Two");
+    playerState.queue = [playerState.currentTrack, next];
+    sessionState.nextJoinPreview = {
+      trackId: "t2",
+      trackTitle: "Second Song",
+    };
+    act(() => {
+      useFocusModeStore.setState({ active: true });
+    });
+    render();
+
+    expect(container?.textContent).toContain("Second Song");
+    expect(container?.textContent).toContain("Singer Two");
+  });
+
+  it("with no join drawn yet, Coming up falls back to the store queue's next", () => {
+    sessionState.isRunning = true;
+    const next = track("t2", "Second Song", "Singer Two");
+    playerState.queue = [playerState.currentTrack, next];
+    sessionState.nextJoinPreview = null;
+    act(() => {
+      useFocusModeStore.setState({ active: true });
+    });
+    render();
+
+    expect(container?.textContent).toContain("Coming up");
+    expect(container?.textContent).toContain("Second Song");
+  });
+
+  it("states the current move's label when the snapshot carries one", () => {
+    sessionState.isRunning = true;
+    const next = track("t2", "Second Song", "Singer Two");
+    playerState.queue = [playerState.currentTrack, next];
+    sessionState.stageSnapshot = {
+      decks: [
+        {
+          trackId: "t1",
+          positionMs: 0,
+          positionSec: 0,
+          playing: true,
+          rate: 1,
+        },
+        {
+          trackId: null,
+          positionMs: 0,
+          positionSec: null,
+          playing: false,
+          rate: 1,
+        },
+      ],
+      currentMove: {
+        label: "Flare scratch into Second Song",
+        family: "scratch-in",
+        technique: "flare",
+      },
+      controlLevel: "autonomous",
+    };
+    act(() => {
+      useFocusModeStore.setState({ active: true });
+    });
+    render();
+    expect(container?.textContent).toContain("Flare scratch into Second Song");
+  });
+
+  it("does not duplicate the move when the feed's latest entry already states it", () => {
+    sessionState.isRunning = true;
+    const next = track("t2", "Second Song", "Singer Two");
+    playerState.queue = [playerState.currentTrack, next];
+    sessionState.stageSnapshot = {
+      decks: [
+        {
+          trackId: "t1",
+          positionMs: 0,
+          positionSec: 0,
+          playing: true,
+          rate: 1,
+        },
+        {
+          trackId: "t2",
+          positionMs: 0,
+          positionSec: 0,
+          playing: false,
+          rate: 1,
+        },
+      ],
+      currentMove: {
+        label: "Flare scratch into Second Song",
+        family: "scratch-in",
+        technique: "flare",
+      },
+      controlLevel: "autonomous",
+    };
+    sessionState.feedEvents = [
+      { at: 1, kind: "performing", text: "Flare scratch into Second Song" },
+    ];
+    act(() => {
+      useFocusModeStore.setState({ active: true });
+    });
+    render();
+    const occurrences =
+      container?.textContent?.split("Flare scratch into Second Song").length ??
+      0;
+    // One statement of the move in the lines block (the title of
+    // the incoming track in "Coming up" is a separate element and
+    // does not contain the move's full label).
+    expect(occurrences).toBe(2); // split yields one more than the count
+  });
+
+  it("shows only the latest three narration lines", () => {
+    sessionState.isRunning = true;
+    const next = track("t2", "Second Song", "Singer Two");
+    playerState.queue = [playerState.currentTrack, next];
+    sessionState.feedEvents = [1, 2, 3, 4, 5].map((n) => ({
+      at: n,
+      kind: "preparing",
+      text: `Narration ${n}`,
+    }));
+    act(() => {
+      useFocusModeStore.setState({ active: true });
+    });
+    render();
+    expect(container?.textContent).not.toContain("Narration 1");
+    expect(container?.textContent).not.toContain("Narration 2");
+    expect(container?.textContent).toContain("Narration 3");
+    expect(container?.textContent).toContain("Narration 4");
+    expect(container?.textContent).toContain("Narration 5");
+  });
+
+  it("carries the session's degradation honesty verbatim, reasons included", () => {
+    sessionState.isRunning = true;
+    const next = track("t2", "Second Song", "Singer Two");
+    playerState.queue = [playerState.currentTrack, next];
+    sessionState.feedEvents = [
+      {
+        at: 1,
+        kind: "degraded",
+        text: "Plain cut into Second Song — no join was prepared in time",
+      },
+    ];
+    act(() => {
+      useFocusModeStore.setState({ active: true });
+    });
+    render();
+    expect(container?.textContent).toContain(
+      "Plain cut into Second Song — no join was prepared in time",
+    );
   });
 
   it("without a DJ session there is no Coming up block", () => {

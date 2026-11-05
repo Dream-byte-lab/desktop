@@ -406,3 +406,84 @@ describe("PlayerRuntime audio caching", () => {
     }
   }, 15_000);
 });
+
+describe("PlayerRuntime — session authority gates (fix2-0119)", () => {
+  const track2: Track = {
+    id: "t2",
+    title: "Track 2",
+    artists: "Artist",
+    durationMs: 100_000,
+    coverUrl: "",
+    playCount: 0,
+  };
+
+  beforeEach(() => {
+    usePlayerStore.setState({
+      status: "playing",
+      currentTrack: track,
+      queue: [track, track2],
+      currentIndex: 0,
+      positionMs: 0,
+      durationMs: track.durationMs,
+      volume: 1,
+      error: null,
+    });
+    (playerRuntime as any).audio.src = "blob:mock-stream";
+    setAudioPaused(false);
+    // A live DJ session owns playback for these tests.
+    playerRuntime!.sessionLive = () => true;
+  });
+
+  afterEach(() => {
+    playerRuntime!.sessionLive = undefined;
+    vi.restoreAllMocks();
+  });
+
+  it("timeupdate writes no store position while a session owns playback", () => {
+    const audio = (playerRuntime as any).audio as HTMLAudioElement;
+    Object.defineProperty(audio, "currentTime", {
+      value: 55,
+      configurable: true,
+    });
+    usePlayerStore.setState({ positionMs: 1234 });
+    audio.dispatchEvent(new Event("timeupdate"));
+    // The element's clock is not a position writer any more —
+    // the photographed two-positions state has no source.
+    expect(usePlayerStore.getState().positionMs).toBe(1234);
+  });
+
+  it("the element's ended event does not advance the queue while a session owns playback", () => {
+    const audio = (playerRuntime as any).audio as HTMLAudioElement;
+    audio.dispatchEvent(new Event("ended"));
+    // Element end is inert under a live session: the plain
+    // engine cannot override the song the DJ is playing.
+    expect(usePlayerStore.getState().currentTrack?.id).toBe("t1");
+    expect(usePlayerStore.getState().currentIndex).toBe(0);
+  });
+
+  it("the element's pause event does not flip the store to paused while a session owns playback", () => {
+    const audio = (playerRuntime as any).audio as HTMLAudioElement;
+    audio.dispatchEvent(new Event("pause"));
+    expect(usePlayerStore.getState().status).toBe("playing");
+  });
+
+  it("resume() stands down while a session owns playback", () => {
+    const playSpy = vi
+      .spyOn(HTMLMediaElement.prototype, "play")
+      .mockImplementation(() => Promise.resolve());
+    playerRuntime!.resume();
+    expect(playSpy).not.toHaveBeenCalled();
+  });
+
+  it("with no session live, the gates open: timeupdate writes position again", () => {
+    playerRuntime!.sessionLive = undefined;
+    const audio = (playerRuntime as any).audio as HTMLAudioElement;
+    Object.defineProperty(audio, "currentTime", {
+      value: 55,
+      configurable: true,
+    });
+    usePlayerStore.setState({ positionMs: 1234 });
+    audio.dispatchEvent(new Event("timeupdate"));
+    expect(usePlayerStore.getState().positionMs).toBe(55_000);
+  });
+});

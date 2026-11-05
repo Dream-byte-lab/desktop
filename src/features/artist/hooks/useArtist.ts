@@ -6,7 +6,14 @@ import {
   toMaxQualityAvatarUrl,
   toClientTrack,
 } from "@/shared/api";
+import type { SimilarArtistsBasis } from "@/shared/contracts";
 import type { Track } from "@/shared/types";
+
+export interface SimilarArtistViewModel {
+  id: string;
+  name: string;
+  coverUrl: string;
+}
 
 export interface ArtistAlbumViewModel {
   id: string;
@@ -38,7 +45,13 @@ export interface ArtistPageData {
   albums: ArtistAlbumViewModel[];
   reposts: Track[];
   singles: ArtistReleaseViewModel[];
+  /** The catalogue's similar artists; empty when it supplied none. */
+  similarArtists: SimilarArtistViewModel[];
+  /** Provenance of similarArtists — see the contract's note. */
+  similarArtistsBasis?: SimilarArtistsBasis;
 }
+
+export { artistAudience, type ArtistAudience } from "../lib/audience";
 
 async function loadArtistPage(artistId: string): Promise<ArtistPageData> {
   const artist = await api.getArtist(artistId);
@@ -78,6 +91,14 @@ async function loadArtistPage(artistId: string): Promise<ArtistPageData> {
       totalTracks: single.totalTracks ?? single.trackCount,
       explicit: single.explicit,
     })),
+    similarArtists: (artist.similarArtists ?? []).map((similar) => ({
+      id: similar.id,
+      name: similar.name,
+      coverUrl: similar.cover ? mediaUrl(similar.cover.url) : "",
+    })),
+    ...(artist.similarArtistsBasis
+      ? { similarArtistsBasis: artist.similarArtistsBasis }
+      : {}),
   };
   return formatted;
 }

@@ -40,6 +40,7 @@ vi.mock("@/features/player/engine/playerEngine", async () => {
 
 import { usePlayerStore } from "@/features/player/store/playerStore";
 import { useLyricsStore } from "@/features/lyrics/store/lyricsStore";
+import { useDjState } from "@/features/mixer/liverave/state";
 import { useTouchBarSync } from "./useTouchBarSync";
 
 const TICK_MS = 250;
@@ -148,6 +149,8 @@ describe("useTouchBarSync ipc volume", () => {
   afterEach(() => {
     act(() => root.unmount());
     container.remove();
+    document.getElementById("liner-audio")?.remove();
+    useDjState.setState({ active: false });
     delete window.linerElectron;
     vi.unstubAllGlobals();
     vi.useRealTimers();
@@ -226,5 +229,29 @@ describe("useTouchBarSync ipc volume", () => {
     const last = sent.at(-1) as { activeLyricText?: string; status?: string };
     expect(last.status).toBe("playing");
     expect(last.activeLyricText).toBe("line number 1 of the song");
+  });
+
+  it("macos: while a DJ session runs, the lyric line follows the store position the session publishes, not the frozen element", () => {
+    // The plain player's element sits paused at 100 s for the
+    // whole set; reading it would pin the touchbar lyrics there.
+    const el = document.createElement("audio");
+    el.id = "liner-audio";
+    Object.defineProperty(el, "currentTime", {
+      value: 100,
+      configurable: true,
+    });
+    Object.defineProperty(el, "seeking", { value: false, configurable: true });
+    document.body.appendChild(el);
+    useDjState.setState({ active: true });
+    mount("darwin");
+    play(5_000);
+    const last = sent.at(-1) as {
+      activeLyricText?: string;
+      positionMs?: number;
+    };
+    // Store position ~5 s in → line 1; the element's 100 s would
+    // be far past it.
+    expect(last.activeLyricText).toBe("line number 1 of the song");
+    expect(last.positionMs).toBeLessThan(10_000);
   });
 });

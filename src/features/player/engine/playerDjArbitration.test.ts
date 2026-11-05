@@ -30,8 +30,8 @@ const dj = vi.hoisted(() => {
     },
   };
 });
-vi.mock("@/features/mixer/engine/djSession", () => ({
-  djSession: dj.transport,
+vi.mock("@/features/mixer/liverave/session", () => ({
+  liveRaveSession: dj.transport,
 }));
 
 import { playerEngine, usePlayerStore } from "./playerEngine";

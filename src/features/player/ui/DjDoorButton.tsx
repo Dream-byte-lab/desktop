@@ -1,31 +1,35 @@
-import { djSession } from "@/features/mixer/engine/djSession";
-import { useDjModeStore } from "@/features/mixer/store/djModeStore";
+import { liveRaveSession } from "@/features/mixer/liverave/session";
+import { useDjState } from "@/features/mixer/liverave/state";
+import { noteDeliberateStop } from "@/features/mixer/liverave/wiring";
 import { cn } from "@/shared/lib";
 import { usePlayerStore } from "../store/playerStore";
 import { useGlassBlur } from "../store/visualModeStore";
 
-// The Now Playing card's DJ door (design read, Open Question 3
-// RULED): the card's top-right EQ-bars glyph is the DJ/liveRave
-// door — the same DJ control the player bar carries, in the card's
-// own glass-button language. It shows the user's standing INTENT
-// (djModeStore.intent), not whether a session happens to be
-// running this second, exactly like the bar's button.
+// The Now Playing card's DJ door, written against the new
+// engine's seams (design §3.10). The card's
+// top-right EQ-bars glyph is the DJ/liveRave door: the same DJ
+// control the player bar carries, in the card's own glass-button
+// language. It shows the user's standing INTENT (the DJ state's
+// intent), not whether a session happens to be running this
+// second, exactly like the bar's button.
 //
-// The toggle logic below mirrors DjModeButton.toggle line for line
-// in semantics because DjModeButton does not export its internals
-// and that file is fenced off from this build: both doors must do
-// precisely the same thing — running → clear intent, stop the
-// session, leave the player paused; otherwise → set intent if
-// unset, bail on an empty queue, hand the current queue to the
-// session from the current index. The bar button's module-scope
-// wiring (initDjIntentWiring / onBlendChange) is NOT replicated
-// here: it is installed once by the bar's button, which is always
-// mounted in the shell, and installing it twice would double-wire
-// the session.
+// Toggle semantics, identical to the bar door's: running → clear
+// intent, stop the session, leave the player paused; intent on
+// with nothing running → clear intent and settle the session
+// (fix-0119: this state used to re-fire start, so intent could
+// never be turned off when a session would not start — the
+// persisted intent trapped the user); otherwise → set intent,
+// bail on an empty queue, hand the current queue to the session
+// from the current index.
+//
+// This door deliberately does NOT bootstrap any wiring: the intent
+// wiring and settings application are started by the mixer door
+// (DjModeButton) / the app bootstrap, and installing them twice
+// would double-wire the session.
 export function DjDoorButton() {
-  const intent = useDjModeStore((state) => state.intent);
-  const running = useDjModeStore((state) => state.active);
-  const setIntent = useDjModeStore((state) => state.setIntent);
+  const intent = useDjState((state) => state.intent);
+  const running = useDjState((state) => state.active);
+  const setIntent = useDjState((state) => state.setIntent);
   const glassBlur = useGlassBlur();
   const hasQueue = usePlayerStore(
     (state) => state.queue.length > 0 && state.currentTrack !== null,
@@ -34,14 +38,25 @@ export function DjDoorButton() {
   const toggle = () => {
     if (running) {
       setIntent(false);
-      djSession.stop();
+      noteDeliberateStop();
+      liveRaveSession.stop();
       usePlayerStore.getState().setStatus("paused");
       return;
     }
-    if (!intent) setIntent(true);
+    if (intent) {
+      // Intent on, nothing running: switch off (fix-0119). The
+      // session never owned playback here, so the plain player
+      // is left untouched; stop() only settles the session's
+      // start state.
+      setIntent(false);
+      noteDeliberateStop();
+      liveRaveSession.stop();
+      return;
+    }
+    setIntent(true);
     const { queue, currentIndex } = usePlayerStore.getState();
     if (queue.length === 0) return;
-    void djSession.start(queue, Math.max(0, currentIndex));
+    void liveRaveSession.start(queue, Math.max(0, currentIndex));
   };
 
   const disabled = !intent && !running && !hasQueue;

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { playerEngine } from "@/features/player/engine/playerEngine";
 import { usePlayerStore } from "@/features/player/store/playerStore";
-import { useDjModeStore } from "@/features/mixer/store/djModeStore";
+import { useDjState } from "@/features/mixer/liverave/state";
 import { useLyricsStore } from "@/features/lyrics";
 import {
   useIsTrackLiked,
@@ -47,7 +47,14 @@ function findActiveLineIndex(lines: LyricLine[], positionMs: number): number {
   return idx;
 }
 
-function currentAudioPositionMs(): number {
+function currentAudioPositionMs(sessionActive = false): number {
+  // While a DJ session runs, the decks are the playback and
+  // #liner-audio sits paused at whatever position plain playback
+  // last left it — the element's position is stale for the whole
+  // set (the same reasoning as mediaClock's session branch). The
+  // position is the one the session publishes into the player
+  // store on its 250 ms tick, so read that instead.
+  if (sessionActive) return usePlayerStore.getState().positionMs;
   const audioEl =
     typeof document !== "undefined"
       ? (document.getElementById("liner-audio") as HTMLAudioElement | null)
@@ -138,7 +145,7 @@ export function useTouchBarSync() {
   const location = useLocation();
   const isMac = window.linerElectron?.platform === "darwin";
   const status = usePlayerStore((s) => s.status);
-  const djSessionActive = useDjModeStore((s) => s.active);
+  const djActive = useDjState((s) => s.active);
   const keepPlayingWhenScreenOff = usePlayerStore(
     (s) => s.keepPlayingWhenScreenOff,
   );
@@ -272,7 +279,7 @@ export function useTouchBarSync() {
     const update = () => {
       if (!isWindowVisible()) return;
       setActiveIndex(
-        findActiveLineIndex(syncedLines, currentAudioPositionMs()),
+        findActiveLineIndex(syncedLines, currentAudioPositionMs(djActive)),
       );
     };
     update();
@@ -285,7 +292,7 @@ export function useTouchBarSync() {
       clearInterval(timer);
       stopVisibility();
     };
-  }, [isMac, status, syncedLines]);
+  }, [isMac, status, syncedLines, djActive]);
 
   useEffect(() => {
     if (isMac || !window.linerElectron?.touchbarUpdateState) return;
@@ -293,7 +300,7 @@ export function useTouchBarSync() {
     const key = JSON.stringify([
       status,
       track,
-      djSessionActive,
+      djActive,
       keepPlayingWhenScreenOff,
     ]);
     if (key === lastStateSentRef.current) return;
@@ -301,7 +308,7 @@ export function useTouchBarSync() {
     window.linerElectron.touchbarUpdateState({
       status,
       track,
-      djSessionActive,
+      djActive,
       keepPlayingWhenScreenOff,
     });
   }, [
@@ -309,7 +316,7 @@ export function useTouchBarSync() {
     status,
     currentTrack,
     syncRequestTick,
-    djSessionActive,
+    djActive,
     keepPlayingWhenScreenOff,
   ]);
 
@@ -318,7 +325,7 @@ export function useTouchBarSync() {
 
     let activeLine: TouchBarActiveLine | null = null;
     let nextLyricText = "";
-    const currentAudioMs = currentAudioPositionMs();
+    const currentAudioMs = currentAudioPositionMs(djActive);
     const lineIndex = activeIndex < syncedLines.length ? activeIndex : -1;
 
     if (syncedLines.length > 0) {
@@ -387,7 +394,7 @@ export function useTouchBarSync() {
       isFullscreen,
       hasSyncedLyrics,
       activeIndex: lineIndex,
-      djSessionActive,
+      djActive,
       keepPlayingWhenScreenOff,
     };
 
@@ -405,7 +412,7 @@ export function useTouchBarSync() {
       fs: payload.isFullscreen,
       sl: payload.hasSyncedLyrics,
       r: payload.currentRoute,
-      dj: payload.djSessionActive,
+      dj: payload.djActive,
       kp: payload.keepPlayingWhenScreenOff,
     });
 
@@ -446,7 +453,7 @@ export function useTouchBarSync() {
     activeIndex,
     location.pathname,
     syncRequestTick,
-    djSessionActive,
+    djActive,
     keepPlayingWhenScreenOff,
   ]);
 }

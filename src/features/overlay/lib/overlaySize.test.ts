@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   clampOverlaySize,
+  isLegacyDefaultOverlaySize,
   isOverlaySize,
   matchOverlaySizePreset,
   overlaySizeBand,
@@ -33,6 +34,15 @@ describe("clampOverlaySize", () => {
   });
 });
 
+describe("OVERLAY_SIZE_PRESETS", () => {
+  it("anchors the panel composition, not the old mini card", () => {
+    expect(OVERLAY_SIZE_PRESETS.small).toEqual({ width: 320, height: 64 });
+    expect(OVERLAY_SIZE_PRESETS.default).toEqual({ width: 600, height: 344 });
+    expect(OVERLAY_SIZE_PRESETS.large).toEqual({ width: 760, height: 456 });
+    expect(OVERLAY_MAX_SIZE).toEqual({ width: 820, height: 520 });
+  });
+});
+
 describe("matchOverlaySizePreset", () => {
   it("recognises each anchor exactly", () => {
     expect(matchOverlaySizePreset({ ...OVERLAY_SIZE_PRESETS.small })).toBe(
@@ -62,12 +72,25 @@ describe("overlaySizeBand", () => {
 
   it("keeps a short window in the micro strip however wide it gets", () => {
     expect(overlaySizeBand({ width: 560, height: 100 })).toBe("micro");
+    expect(overlaySizeBand({ width: 820, height: 243 })).toBe("micro");
   });
 
-  it("requires both width and height before expanding to the panel", () => {
-    expect(overlaySizeBand({ width: 480, height: 200 })).toBe("default");
+  it("requires both width and height before expanding to the large panel", () => {
+    expect(overlaySizeBand({ width: 480, height: 200 })).toBe("micro");
     expect(overlaySizeBand({ width: 400, height: 360 })).toBe("default");
-    expect(overlaySizeBand({ width: 424, height: 264 })).toBe("large");
+    expect(overlaySizeBand({ width: 424, height: 264 })).toBe("default");
+    expect(overlaySizeBand({ width: 760, height: 300 })).toBe("default");
+    expect(overlaySizeBand({ width: 700, height: 392 })).toBe("large");
+  });
+});
+
+describe("isLegacyDefaultOverlaySize", () => {
+  it("matches only the pre-panel default anchor exactly", () => {
+    expect(isLegacyDefaultOverlaySize({ width: 368, height: 168 })).toBe(true);
+    expect(isLegacyDefaultOverlaySize({ width: 368, height: 169 })).toBe(false);
+    expect(
+      isLegacyDefaultOverlaySize({ ...OVERLAY_SIZE_PRESETS.default }),
+    ).toBe(false);
   });
 });
 

@@ -12,13 +12,7 @@ import { cn } from "@/shared/lib";
 import { PANEL_GLASS_CLASS } from "@/shared/ui/Panel";
 import { CoverImage } from "@/features/covers";
 import { playerEngine, useGlassBlur, usePlayerState } from "@/features/player";
-import { djSession } from "@/features/mixer/engine/djSession";
-import { preparedTrack } from "@/features/mixer/engine/trackSource";
-import { useDjModeStore } from "@/features/mixer/store/djModeStore";
-import {
-  activityLinesForStage,
-  type ActivitySnapshot,
-} from "@/features/mixer/ui/stage/stageData";
+import { liveRaveSession } from "@/features/mixer/liverave/session";
 import { useFocusModeStore } from "../store/focusModeStore";
 
 // Focus mode (Interface Build 6) — the DESIGN-READ annex proposal
@@ -38,11 +32,18 @@ import { useFocusModeStore } from "../store/focusModeStore";
 // Readings chosen where the text leaves room (flagged in the build
 // report): "the transport" is previous / play-pause / next — the
 // annex names no scrubber, so the progress line and the times are
-// stated, not operable; "the incoming track" is the queue's next
-// track, the same provenance the DJ stage's standby panel uses;
-// the join's progress is stated through the stage's own narration
-// lines (activityLinesForStage), which carry the session's
-// degradation honesty as well.
+// stated, not operable; "the incoming track" is the session's drawn
+// next join (nextJoinPreview) when the session has drawn one —
+// that preview honestly names the actual next track, including a
+// party guest the session scheduled into its own upcoming order,
+// which the store queue does not carry — and the queue's next
+// track otherwise (before a join is drawn the session publishes
+// no next-track seam: its upcoming order is private, so the queue
+// is the only name available and is stated as such); the join's
+// progress is stated in the session's own words — its current move
+// and the latest entries of its activity feed, which is where the
+// session narrates preparation, degradations and fallbacks, with
+// their reasons.
 
 function formatClock(ms: number): string {
   if (!ms || ms < 0) return "0:00";
@@ -56,6 +57,31 @@ function artworkOf(track: { coverUrl?: string }): string {
   return track.coverUrl ?? "";
 }
 
+// ---------------------------------------------------------------------
+// Session narration, in the session's own terms: the move sounding
+// right now (the stage snapshot's current move) followed by the
+// latest entries of the session's activity feed, verbatim. Focus
+// derives nothing of its own here — preparation, degradations and
+// guest-request news are the session's to state, and it states
+// them in the feed with their reasons.
+// ---------------------------------------------------------------------
+
+const FOCUS_LINE_LIMIT = 3;
+
+function focusDjLines(): string[] {
+  const lines: string[] = [];
+  const move = liveRaveSession.stageSnapshot()?.currentMove ?? null;
+  if (move && move.label.trim().length > 0) {
+    lines.push(move.label);
+  }
+  const events = liveRaveSession.activityFeed.events();
+  for (const event of events.slice(-FOCUS_LINE_LIMIT)) {
+    if (!event?.text || lines.includes(event.text)) continue;
+    lines.push(event.text);
+  }
+  return lines.slice(0, FOCUS_LINE_LIMIT);
+}
+
 export function FocusMode() {
   const { t } = useTranslation();
   const active = useFocusModeStore((state) => state.active);
@@ -63,16 +89,38 @@ export function FocusMode() {
   const player = usePlayerState();
   const glassBlur = useGlassBlur();
   const reduceMotion = useReducedMotion();
-  const blending = useDjModeStore((state) => state.blending);
-
   const track = player.currentTrack;
   const queueNext =
     player.currentIndex >= 0
       ? (player.queue[player.currentIndex + 1] ?? null)
       : null;
 
+  // Coming up: prefer the session's drawn next join while a
+  // session runs. nextJoinPreview is set when the brain draws the
+  // next join and cleared when it lands, and it names the track
+  // the session will actually play next — during a party that can
+  // be a guest track scheduled into the session's internal
+  // upcoming, which never enters the store queue, so the queue's
+  // next would name the wrong track. When no join is drawn yet
+  // the session publishes no next-track seam, so fall back to the
+  // store queue's next. The preview carries no artists, so a
+  // preview track that IS in the queue borrows the queue entry's
+  // artists; a guest track is stated by title alone.
+  const joinPreview = liveRaveSession.isRunning
+    ? liveRaveSession.nextJoinPreview
+    : null;
+  const previewQueueEntry = joinPreview
+    ? (player.queue.find((t) => t.id === joinPreview.trackId) ?? null)
+    : null;
+  const comingNext: { title: string; artists?: string } | null = joinPreview
+    ? {
+        title: previewQueueEntry?.title ?? joinPreview.trackTitle,
+        artists: previewQueueEntry?.artists ?? "",
+      }
+    : queueNext;
+
   // The session's plain getters are not reactive; sample them on a
-  // slow tick while Focus is up (the DJ stage's own cadence).
+  // slow tick while Focus is up.
   const [, setTick] = useState(0);
   useEffect(() => {
     if (!active) return;
@@ -86,28 +134,8 @@ export function FocusMode() {
     if (active && !track) exit();
   }, [active, track, exit]);
 
-  const djRunning = djSession.isRunning;
-  const djLines: string[] = [];
-  if (active && djRunning && track) {
-    const snapshot: ActivitySnapshot = {
-      running: true,
-      paused: djSession.isPaused,
-      blending,
-      degraded: djSession.degraded,
-      plainCutCount: djSession.plainCutCount,
-      currentTitle: track.title,
-      nextTitle: queueNext?.title ?? null,
-      nextPrepared: queueNext ? preparedTrack(queueNext.id) != null : false,
-      openRequestCount: djSession.liveRaveOpenRequests.length,
-      endReason: djSession.endReason,
-    };
-    for (const line of activityLinesForStage(
-      snapshot,
-      djSession.stageSnapshot()?.currentMove ?? null,
-    )) {
-      djLines.push(line.text);
-    }
-  }
+  const djRunning = liveRaveSession.isRunning;
+  const djLines: string[] = active && djRunning && track ? focusDjLines() : [];
 
   const playing = player.status === "playing";
   const progress =
@@ -226,17 +254,17 @@ export function FocusMode() {
             </div>
 
             {/* In a DJ session: the incoming track and the join's
-                progress, stated plainly — the stage's own words. */}
+                progress, stated plainly — the session's own words. */}
             {djRunning && (
               <div className="mt-8 max-w-md text-center">
-                {queueNext && (
+                {comingNext && (
                   <div className="text-sm text-text-secondary">
                     <span className="font-medium text-text-primary">
                       {t("focus.coming_up") || "Coming up"}
                     </span>
                     {" — "}
-                    {queueNext.title}
-                    {queueNext.artists && ` · ${queueNext.artists}`}
+                    {comingNext.title}
+                    {comingNext.artists && ` · ${comingNext.artists}`}
                   </div>
                 )}
                 {djLines.length > 0 && (

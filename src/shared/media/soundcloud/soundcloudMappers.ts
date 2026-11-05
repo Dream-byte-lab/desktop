@@ -3,6 +3,7 @@ import type {
   ArtistAlbum,
   ArtistRelease,
   Cover,
+  SimilarArtistItem,
 } from "@/shared/contracts";
 import {
   asArray,
@@ -47,6 +48,47 @@ export function mapSoundCloudArtist(
     : undefined;
 }
 
+// Similar artists, derived from SoundCloud's own related-tracks
+// graph: the uploaders of the tracks SoundCloud's /related
+// endpoint pairs with this artist's top songs, ranked by how
+// often each uploader appears there, with the avatar SoundCloud
+// itself serves for that uploader. This is relatedness data, not
+// fan data — callers must label it so. The artist the list was
+// derived for never appears in it.
+export function similarArtistsFromRelatedTracks(
+  rawTracks: readonly unknown[],
+  selfId: string,
+  limit = 8,
+): SimilarArtistItem[] {
+  const counts = new Map<
+    string,
+    { name: string; cover?: Cover; count: number }
+  >();
+  for (const raw of rawTracks) {
+    const user = asRecord(asRecord(raw)?.user);
+    const artist = mapSoundCloudArtist(user);
+    if (!artist || artist.id === selfId) continue;
+    const entry = counts.get(artist.id);
+    if (entry) {
+      entry.count += 1;
+    } else {
+      counts.set(artist.id, {
+        name: artist.name,
+        cover: soundCloudCover(user?.avatar_url),
+        count: 1,
+      });
+    }
+  }
+  return [...counts.entries()]
+    .sort((a, b) => b[1].count - a[1].count)
+    .slice(0, limit)
+    .map(([id, entry]) => ({
+      id,
+      name: entry.name,
+      ...(entry.cover ? { cover: entry.cover } : {}),
+    }));
+}
+
 export function mapSoundCloudCatalogTrack(rawTrack: unknown): ApiTrack | null {
   const track = asRecord(rawTrack);
   const id = numberValue(track?.id);
@@ -57,6 +99,7 @@ export function mapSoundCloudCatalogTrack(rawTrack: unknown): ApiTrack | null {
   const cover =
     soundCloudCover(track.artwork_url) ??
     soundCloudCover(asRecord(track.user)?.avatar_url);
+  const playCount = numberValue(track.playback_count);
   return {
     id: soundCloudTrackId(id),
     title,
@@ -64,6 +107,7 @@ export function mapSoundCloudCatalogTrack(rawTrack: unknown): ApiTrack | null {
     durationMs: numberValue(track.duration) ?? 0,
     ...(cover ? { cover } : {}),
     ...(publisher?.explicit === true ? { explicit: true } : {}),
+    ...(playCount !== undefined ? { playCount } : {}),
   };
 }
 

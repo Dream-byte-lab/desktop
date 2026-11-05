@@ -56,9 +56,12 @@ export interface OverlaySettings {
 // The overlay's size anchors and drag limits. These mirror
 // src/features/overlay/lib/overlaySize.ts (electron cannot import from
 // the renderer tree); keep the numbers in step.
-const DEFAULT_OVERLAY_SIZE: OverlaySize = { width: 368, height: 168 };
+const DEFAULT_OVERLAY_SIZE: OverlaySize = { width: 600, height: 344 };
 const OVERLAY_MIN_SIZE: OverlaySize = { width: 280, height: 56 };
-const OVERLAY_MAX_SIZE: OverlaySize = { width: 560, height: 440 };
+const OVERLAY_MAX_SIZE: OverlaySize = { width: 820, height: 520 };
+/** The pre-panel build's default anchor: a persisted size matching it
+ *  exactly migrates to the new default (see loadSettings). */
+const LEGACY_DEFAULT_OVERLAY_SIZE: OverlaySize = { width: 368, height: 168 };
 
 function clampOverlaySize(size: OverlaySize): OverlaySize {
   const clamp = (value: number, min: number, max: number) =>
@@ -371,7 +374,15 @@ export class OverlayManager {
         }
         const persistedSize = asOverlaySize(data.size);
         if (persistedSize) {
-          this.size = persistedSize;
+          // A size persisted by the pre-panel build is overwhelmingly
+          // its own default anchor rather than a deliberate choice;
+          // migrate it so the window opens as the new panel, not as a
+          // micro strip the user never asked for.
+          this.size =
+            persistedSize.width === LEGACY_DEFAULT_OVERLAY_SIZE.width &&
+            persistedSize.height === LEGACY_DEFAULT_OVERLAY_SIZE.height
+              ? { ...DEFAULT_OVERLAY_SIZE }
+              : persistedSize;
         }
       }
     } catch (e) {

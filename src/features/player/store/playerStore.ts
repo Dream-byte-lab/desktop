@@ -17,6 +17,14 @@ import { clampCrossfadeSeconds } from "../engine/crossfade";
 export { debouncedStorage };
 
 export type RepeatMode = "off" | "all" | "one";
+/**
+ * Shuffle's three states. "smart" is Smart Shuffle (taste/flow
+ * ordering + admitted recommendation guests, and the DJ's widened
+ * pool); "plain" is the legacy dice roll. `shuffle` stays as the
+ * boolean shadow (mode !== "off") for every surface that only
+ * asks whether shuffle is on.
+ */
+export type ShuffleMode = "off" | "smart" | "plain";
 export type PlayerStatus = "idle" | "loading" | "playing" | "paused" | "error";
 export type MiniPlayerStyle = "default" | "rounded";
 export type AudioQuality = "low" | "standard" | "high" | "lossless";
@@ -54,6 +62,13 @@ export interface QueueState {
   currentTrack: Track | null;
   playbackContext: string | null;
   playbackContextCover: string | null;
+  /**
+   * Ids of queue tracks that are Smart Shuffle GUESTS — admitted
+   * recommendations, not playlist members. Surfaces label them
+   * from this list; leaving smart mode clears it as the guests
+   * are removed.
+   */
+  smartGuestIds: string[];
 }
 
 export interface SessionState {
@@ -61,6 +76,10 @@ export interface SessionState {
   volumeBoostAvailable: boolean;
   repeat: RepeatMode;
   shuffle: boolean;
+  /** The shuffle mode; `shuffle` above is its boolean shadow. */
+  shuffleMode: ShuffleMode;
+  /** The Smart Shuffle feature's own switch (Settings → Playback). */
+  smartShuffleEnabled: boolean;
   audioQuality: AudioQuality;
   miniPlayerStyle: MiniPlayerStyle;
   accentVariant: AccentVariant;
@@ -122,6 +141,9 @@ export interface PlayerStore extends PlayerState {
   setPlaybackMode: (mode: "hls" | "mp3" | null) => void;
   setRepeat: (mode: RepeatMode) => void;
   setShuffle: (shuffle: boolean) => void;
+  setShuffleMode: (mode: ShuffleMode) => void;
+  setSmartShuffleEnabled: (enabled: boolean) => void;
+  setSmartGuestIds: (ids: string[]) => void;
   setVolume: (volume: number) => void;
   setVolumeBoostAvailable: (available: boolean) => void;
   setCurrentTrack: (track: Track | null, index: number) => void;
@@ -198,12 +220,15 @@ export const usePlayerStore = create<PlayerStore>()(
       currentTrack: null,
       playbackContext: null,
       playbackContextCover: null,
+      smartGuestIds: [],
 
       // SessionSlice
       volume: 1,
       volumeBoostAvailable: true,
       repeat: "off",
       shuffle: false,
+      shuffleMode: "off",
+      smartShuffleEnabled: true,
       audioQuality: "high",
       miniPlayerStyle: "default",
       accentVariant: "default",
@@ -234,7 +259,24 @@ export const usePlayerStore = create<PlayerStore>()(
       setDuration: (durationMs) => set({ durationMs }),
       setPlaybackMode: (playbackMode) => set({ playbackMode }),
       setRepeat: (repeat) => set({ repeat }),
-      setShuffle: (shuffle) => set({ shuffle }),
+      setShuffle: (shuffle) =>
+        set((state) =>
+          shuffle
+            ? {
+                shuffle: true,
+                // Turning shuffle on never downgrades a smart
+                // selection; from off it means the legacy roll.
+                shuffleMode:
+                  state.shuffleMode === "off" ? "plain" : state.shuffleMode,
+              }
+            : { shuffle: false, shuffleMode: "off" },
+        ),
+      setShuffleMode: (shuffleMode) =>
+        set({ shuffleMode, shuffle: shuffleMode !== "off" }),
+      setSmartShuffleEnabled: (smartShuffleEnabled) =>
+        set({ smartShuffleEnabled }),
+      setSmartGuestIds: (smartGuestIds) =>
+        set({ smartGuestIds: [...new Set(smartGuestIds)] }),
       setVolume: (volume) => set({ volume: clampUserVolume(volume) }),
       setVolumeBoostAvailable: (available) =>
         set({ volumeBoostAvailable: available }),
@@ -307,6 +349,7 @@ export const usePlayerStore = create<PlayerStore>()(
           currentTrack: null,
           playbackContext: null,
           playbackContextCover: null,
+          smartGuestIds: [],
           fullscreen: false,
         }),
       clearQueue: () => {
@@ -338,6 +381,29 @@ export const usePlayerStore = create<PlayerStore>()(
           ...current,
           ...((persisted ?? {}) as Partial<PlayerStore>),
         };
+        // Shuffle mode migration: builds before Smart Shuffle
+        // persisted only the boolean. A persisted "on" meant the
+        // legacy roll; anything unrecognised falls back to it (or
+        // to off) rather than inventing a smart selection the
+        // user never made. The check reads the PERSISTED object:
+        // after the spread above, a missing mode is
+        // indistinguishable from the current default.
+        const persistedMode = (persisted as Partial<PlayerStore> | undefined)
+          ?.shuffleMode;
+        if (
+          persistedMode !== "off" &&
+          persistedMode !== "smart" &&
+          persistedMode !== "plain"
+        ) {
+          merged.shuffleMode = merged.shuffle ? "plain" : "off";
+        }
+        merged.shuffle = merged.shuffleMode !== "off";
+        if (typeof merged.smartShuffleEnabled !== "boolean") {
+          merged.smartShuffleEnabled = true;
+        }
+        if (!Array.isArray(merged.smartGuestIds)) {
+          merged.smartGuestIds = [];
+        }
         const resume = readResumePosition();
         if (resume && merged.currentTrack?.id === resume.trackId) {
           merged.positionMs = resume.positionMs;
@@ -428,10 +494,13 @@ export const usePlayerStore = create<PlayerStore>()(
               playbackContextCover: state.playbackContextCover,
               playbackMode: state.playbackMode,
               durationMs: state.durationMs,
+              smartGuestIds: state.smartGuestIds,
             }
           : {}),
         repeat: state.repeat,
         shuffle: state.shuffle,
+        shuffleMode: state.shuffleMode,
+        smartShuffleEnabled: state.smartShuffleEnabled,
         volume: state.volume,
         audioQuality: state.audioQuality,
         miniPlayerStyle: state.miniPlayerStyle,

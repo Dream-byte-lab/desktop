@@ -31,6 +31,10 @@ export interface SongCardWithMenuProps {
   hideArtists?: boolean;
   imageShape?: "square" | "circle";
   trackNumber?: number;
+  /** numbered rows that keep their artwork (artist Popular rows) */
+  showCoverWithNumber?: boolean;
+  /** preformatted lifetime play count, where the source supplies one */
+  playCount?: string;
   repostedBy?: string;
   searchType?: "track" | "album" | "artist" | "playlist";
   totalTracks?: number;
@@ -65,6 +69,8 @@ function SongCardWithMenu({
   hideArtists,
   imageShape,
   trackNumber,
+  showCoverWithNumber,
+  playCount,
   repostedBy,
   searchType,
   totalTracks,
@@ -240,6 +246,8 @@ function SongCardWithMenu({
       hideArtists={hideArtists}
       imageShape={imageShape}
       trackNumber={trackNumber}
+      showCoverWithNumber={showCoverWithNumber}
+      playCount={playCount}
       repostedBy={repostedBy}
       menuItems={menuItems}
       menuOpen={menuOpen}

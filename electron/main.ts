@@ -645,14 +645,14 @@ if (!gotTheLock) {
         state: {
           status: string;
           track?: unknown;
-          djSessionActive?: boolean;
+          djActive?: boolean;
           keepPlayingWhenScreenOff?: boolean;
         },
       ) => {
         updateSleepBlocker(state.status);
         keepPlaying?.update({
           status: state.status,
-          djSessionActive: state.djSessionActive === true,
+          djActive: state.djActive === true,
           // The controller defaults to enabled and the renderer
           // always syncs the persisted value; `!== false` only
           // guards a hypothetical sync that lacks the field.

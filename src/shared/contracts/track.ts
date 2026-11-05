@@ -21,6 +21,12 @@ export interface Track {
   cover?: Cover;
   explicit?: boolean;
   audioVariant?: TrackAudioVariant;
+  /**
+   * Lifetime play count, only where the source supplies one
+   * (SoundCloud's playback_count). Absent — never zero-filled —
+   * for sources that publish no count.
+   */
+  playCount?: number;
 }
 
 export interface ApiTrack extends Track {

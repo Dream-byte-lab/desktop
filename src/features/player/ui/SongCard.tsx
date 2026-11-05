@@ -27,6 +27,14 @@ export interface SongCardProps {
   explicit?: boolean;
   imageShape?: "square" | "circle";
   trackNumber?: number;
+  /**
+   * With a trackNumber, the cover normally steps aside for the
+   * number (album listings). A numbered list that still shows its
+   * artwork (an artist's Popular rows) opts in here.
+   */
+  showCoverWithNumber?: boolean;
+  /** Preformatted lifetime play count, where the source supplies one. */
+  playCount?: string;
   repostedBy?: string;
   menuItems?: DropdownMenuItem[];
   menuOpen?: boolean;
@@ -59,6 +67,8 @@ function SongCard({
   explicit = false,
   imageShape = "square",
   trackNumber,
+  showCoverWithNumber = false,
+  playCount,
   repostedBy,
   menuItems,
   menuOpen,
@@ -132,6 +142,33 @@ function SongCard({
     }, 200);
   };
 
+  const coverBox = (
+    <div
+      className={`relative ${imageSizeClass} shrink-0 overflow-hidden bg-bg-panel flex items-center justify-center ${
+        imageShape === "circle" ? "rounded-full" : "rounded-catalogue"
+      }`}
+    >
+      {icon ? (
+        icon
+      ) : (
+        <CoverImage
+          key={coverUrl}
+          src={coverUrl}
+          alt={title}
+          fill
+          sizes={compact ? "40px" : "48px"}
+          placeholder="empty"
+          onLoadStart={() => setImageLoaded(isCoverReady(coverUrl))}
+          onLoad={() => setImageLoaded(true)}
+          className={`object-cover pointer-events-none transition-opacity duration-300 ${
+            imageLoaded ? "opacity-100" : "opacity-0"
+          }`}
+          draggable={false}
+        />
+      )}
+    </div>
+  );
+
   return (
     <div
       className={`group w-full flex items-center justify-between rounded-item ${paddingClass} outline-none transition-colors duration-150 ease-out ${
@@ -176,39 +213,19 @@ function SongCard({
     >
       <div className={`flex items-center ${gapClass} min-w-0`}>
         {trackNumber !== undefined ? (
-          <div
-            className={`flex ${imageSizeClass} shrink-0 items-center justify-center ${titleSizeClass} text-text-tertiary tabular-nums`}
-            style={{
-              fontWeight: 400,
-            }}
-          >
-            {trackNumber}
-          </div>
+          <>
+            <div
+              className={`flex ${showCoverWithNumber ? "w-[26px]" : imageSizeClass} shrink-0 items-center justify-center ${titleSizeClass} text-text-tertiary tabular-nums`}
+              style={{
+                fontWeight: 400,
+              }}
+            >
+              {trackNumber}
+            </div>
+            {showCoverWithNumber ? coverBox : null}
+          </>
         ) : (
-          <div
-            className={`relative ${imageSizeClass} shrink-0 overflow-hidden bg-bg-panel flex items-center justify-center ${
-              imageShape === "circle" ? "rounded-full" : "rounded-catalogue"
-            }`}
-          >
-            {icon ? (
-              icon
-            ) : (
-              <CoverImage
-                key={coverUrl}
-                src={coverUrl}
-                alt={title}
-                fill
-                sizes={compact ? "40px" : "48px"}
-                placeholder="empty"
-                onLoadStart={() => setImageLoaded(isCoverReady(coverUrl))}
-                onLoad={() => setImageLoaded(true)}
-                className={`object-cover pointer-events-none transition-opacity duration-300 ${
-                  imageLoaded ? "opacity-100" : "opacity-0"
-                }`}
-                draggable={false}
-              />
-            )}
-          </div>
+          coverBox
         )}
 
         <div className="min-w-0 flex flex-col gap-[2px]">
@@ -281,6 +298,16 @@ function SongCard({
       </div>
 
       <div className="flex items-center shrink-0 ml-[16px] gap-[16px]">
+        {playCount && (
+          <span
+            className="min-w-[76px] text-right text-label text-text-tertiary tabular-nums"
+            style={{
+              fontWeight: 400,
+            }}
+          >
+            {playCount}
+          </span>
+        )}
         {releaseDate && (
           <span
             className="text-label text-text-tertiary"

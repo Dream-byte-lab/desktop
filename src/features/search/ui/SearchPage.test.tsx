@@ -390,7 +390,43 @@ describe("SearchPage", () => {
     expect(text).toContain("ABBA Gold Mix");
   });
 
-  it("the hero renders WITHOUT a stat line — the register's absence is pinned", () => {
+  it("the page carries the large Search title over the query field", () => {
+    renderPage();
+    const heading = container?.querySelector("h1");
+    expect(heading?.textContent).toBe("Search");
+  });
+
+  it("results compose in the reference order: artists, albums, songs, playlists", () => {
+    hookState.all.items = [
+      TRACK_ITEM,
+      ARTIST_ITEM,
+      ARTIST_ITEM_2,
+      ALBUM_ITEM,
+      PLAYLIST_ITEM,
+    ];
+    hookState.all.hasLoaded = true;
+    hookState.artistPage.data = {
+      title: "ABBA",
+      tracks: [{ id: "trk-1" }],
+      verified: true,
+      coverUrl: "",
+      description: "",
+    };
+    renderPage();
+    typeQuery("abba");
+
+    const text = container?.textContent ?? "";
+    const artistsAt = text.indexOf("Artists");
+    const albumsAt = text.indexOf("Albums");
+    const songsAt = text.indexOf("Songs");
+    const playlistsAt = text.indexOf("Playlists");
+    expect(artistsAt).toBeGreaterThanOrEqual(0);
+    expect(albumsAt).toBeGreaterThan(artistsAt);
+    expect(songsAt).toBeGreaterThan(albumsAt);
+    expect(playlistsAt).toBeGreaterThan(songsAt);
+  });
+
+  it("the hero renders the audience stat line, labelled as the artist page labels it", () => {
     hookState.all.items = [ARTIST_ITEM];
     hookState.all.hasLoaded = true;
     hookState.artistPage.data = {
@@ -405,13 +441,35 @@ describe("SearchPage", () => {
     renderPage();
     typeQuery("abba");
 
+    // The user's 2026-11-05 order added the omitted stat line:
+    // the source's monthly figure, extracted and labelled by the
+    // artist page's own rule — never the raw follower count
+    // alongside it.
     const text = container?.textContent ?? "";
     expect(text).toContain("ABBA");
     expect(text).toContain("Follow");
     expect(text).toContain("Shuffle Play");
-    expect(text).not.toContain("7,847,659");
-    expect(text.toLowerCase()).not.toContain("monthly listeners");
+    expect(text).toContain("7,847,659 monthly audience");
     expect(text).not.toContain("1,234,567");
+    expect(text).not.toContain("1.2M followers");
+  });
+
+  it("the hero's stat line falls back to the follower count without a monthly figure", () => {
+    hookState.all.items = [ARTIST_ITEM];
+    hookState.all.hasLoaded = true;
+    hookState.artistPage.data = {
+      title: "ABBA",
+      tracks: [{ id: "trk-1" }],
+      verified: false,
+      coverUrl: "",
+      description: "",
+      followers: 1234567,
+    };
+    renderPage();
+    typeQuery("abba");
+
+    const text = container?.textContent ?? "";
+    expect(text).toContain("1.2M followers");
   });
 
   it("the type chip scopes the page to the per-type hook", () => {

@@ -374,11 +374,25 @@ function ReadyDashboard({ stats }: { stats: ListeningStats }) {
       {joins && (
         <Section title={t("space.dj.title")}>
           <div className="flex flex-wrap gap-x-[26px] gap-y-[6px] text-body text-text-secondary tabular-nums">
-            <span>{t("space.dj.joins", { count: joins.performed })}</span>
-            {joins.averageGrade !== null && (
+            <span>
+              {t("space.dj.joins", {
+                count: joins.performed + joins.userAct,
+              })}
+            </span>
+            {joins.userAct > 0 && (
+              <span>{t("space.dj.byHand", { count: joins.userAct })}</span>
+            )}
+            {joins.fallbackUnprepared + joins.fallbackInvalid > 0 && (
               <span>
-                {t("space.dj.grade", {
-                  percent: Math.round(joins.averageGrade * 100),
+                {t("space.dj.fallbacks", {
+                  count: joins.fallbackUnprepared + joins.fallbackInvalid,
+                })}
+              </span>
+            )}
+            {joins.degradedUntrusted > 0 && (
+              <span>
+                {t("space.dj.degraded", {
+                  count: joins.degradedUntrusted,
                 })}
               </span>
             )}

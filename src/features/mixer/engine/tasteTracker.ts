@@ -1,6 +1,5 @@
 import type { Track } from "../../../shared/types/track";
 import { labelsForTrack } from "../../genres/trackGenres";
-import type { JoinRecord } from "./joinHistory";
 import {
   applyEvent,
   applyJoinEvidence,
@@ -92,8 +91,25 @@ export function getTasteProfile(): TasteProfile {
  * the stored profile is untouched; the caller (the For You layer)
  * ranks against the returned copy.
  */
+/**
+ * The join-evidence shape this tracker folds into the profile —
+ * exactly the fields tasteProfile.applyJoinEvidence reads (the two
+ * sides' audio fingerprints and when the join happened). It is a
+ * local structural type on purpose: no engine module owns this
+ * record type any more, and this kept module imports nothing from
+ * the DJ engine. Any record source
+ * carrying these three fields (the new engine's behaviour record
+ * adapted by its caller, a test fixture) satisfies it.
+ */
+export interface TasteJoinEvidence {
+  /** Audio fingerprints; null when a side carried none — skipped. */
+  aAudioHash: string | null;
+  bAudioHash: string | null;
+  at: number;
+}
+
 export function getTasteProfileWithJoins(
-  joins: readonly JoinRecord[],
+  joins: readonly TasteJoinEvidence[],
   trackIdByAudioHash: ReadonlyMap<string, string>,
 ): TasteProfile {
   return applyJoinEvidence(profile, joins, trackIdByAudioHash, Date.now());

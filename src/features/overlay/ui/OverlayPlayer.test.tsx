@@ -6,6 +6,7 @@ vi.mock("@/features/covers/ui/CoverImage", () => ({ default: () => null }));
 
 import { OverlayPlayer } from "./OverlayPlayer";
 import type { OverlaySize } from "../contracts";
+import { OVERLAY_SIZE_PRESETS } from "../lib/overlaySize";
 
 const playingState = {
   status: "playing",
@@ -14,9 +15,12 @@ const playingState = {
   durationMs: 200_000,
   volume: 1,
   isLiked: false,
+  shuffle: false,
+  repeat: "off",
+  contextLabel: "Playing from Album",
 };
 
-const DEFAULT_BAND: OverlaySize = { width: 368, height: 168 };
+const DEFAULT_BAND: OverlaySize = { ...OVERLAY_SIZE_PRESETS.default };
 
 describe("OverlayPlayer", () => {
   let container: HTMLDivElement;
@@ -59,9 +63,16 @@ describe("OverlayPlayer", () => {
   }
 
   function progressPercent() {
-    const bar = Array.from(
-      container.querySelectorAll<HTMLElement>("[style]"),
-    ).find((el) => el.style.width.endsWith("%"));
+    // In the panel bands the cover panel itself carries a percentage
+    // width, so look inside the seek slider first; the micro strip's
+    // hairline is found by the container-wide fallback.
+    const slider = container.querySelector(
+      '[role="slider"][aria-label="Seek"]',
+    );
+    const scope = slider ?? container;
+    const bar = Array.from(scope.querySelectorAll<HTMLElement>("[style]")).find(
+      (el) => el.style.width.endsWith("%"),
+    );
     return bar ? parseFloat(bar.style.width) : NaN;
   }
 
@@ -149,8 +160,8 @@ describe("OverlayPlayer", () => {
     expect(progressPercent()).toBeLessThan(16);
   });
 
-  it("large band shows the full player: seek, volume and artwork hero", async () => {
-    await mount({ width: 480, height: 360 });
+  it("panel bands show the reference composition: eyebrow, transport ends, seek, volume, focus and close", async () => {
+    await mount({ ...OVERLAY_SIZE_PRESETS.large });
     expect(container.querySelector('[aria-label="Seek"]')).not.toBeNull();
     expect(container.querySelector('[aria-label="Volume"]')).not.toBeNull();
     expect(
@@ -159,6 +170,82 @@ describe("OverlayPlayer", () => {
     expect(
       container.querySelector('[aria-label="Resize overlay"]'),
     ).not.toBeNull();
+    expect(container.querySelector('[aria-label="Shuffle"]')).not.toBeNull();
+    expect(container.querySelector('[aria-label="Repeat"]')).not.toBeNull();
+    expect(
+      container.querySelector('[aria-label="Close overlay"]'),
+    ).not.toBeNull();
+    expect(container.querySelector('[aria-label="Like"]')).not.toBeNull();
+    expect(container.textContent).toContain("Playing from Album");
+  });
+
+  it("the resize grip is visible at rest with its label intact — not hover-only (fix-0119)", async () => {
+    await mount({ ...OVERLAY_SIZE_PRESETS.large });
+    const grip = container.querySelector<HTMLElement>(
+      '[aria-label="Resize overlay"]',
+    );
+    expect(grip).not.toBeNull();
+    // A low but real at-rest opacity; full on hover/focus.
+    expect(grip!.className).toContain("opacity-40");
+    expect(grip!.className).not.toContain("opacity-0");
+    expect(grip!.className).toContain("group-hover:opacity-100");
+    expect(grip!.className).toContain("focus-visible:opacity-100");
+  });
+
+  it("shuffle and repeat buttons send their actions and reflect state", async () => {
+    await mount();
+    const shuffle = container.querySelector<HTMLElement>(
+      '[aria-label="Shuffle"]',
+    );
+    const repeat = container.querySelector<HTMLElement>(
+      '[aria-label="Repeat"]',
+    );
+    expect(shuffle).not.toBeNull();
+    expect(repeat).not.toBeNull();
+    expect(shuffle!.getAttribute("aria-pressed")).toBe("false");
+    await act(async () => {
+      shuffle!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await act(async () => {
+      repeat!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(sentActions).toContainEqual({ type: "toggleShuffle" });
+    expect(sentActions).toContainEqual({ type: "cycleRepeat" });
+
+    await act(async () => {
+      pushState?.({
+        ...playingState,
+        shuffle: true,
+        repeat: "one",
+      });
+    });
+    const shuffleOn = container.querySelector<HTMLElement>(
+      '[aria-label="Shuffle"]',
+    );
+    const repeatOne = container.querySelector<HTMLElement>(
+      '[aria-label="Repeat one"]',
+    );
+    expect(shuffleOn!.getAttribute("aria-pressed")).toBe("true");
+    expect(repeatOne).not.toBeNull();
+    expect(repeatOne!.getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("close button in the panel sends closeOverlay", async () => {
+    await mount();
+    const close = container.querySelector<HTMLElement>(
+      '[aria-label="Close overlay"]',
+    );
+    expect(close).not.toBeNull();
+    await act(async () => {
+      close!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(sentActions).toContainEqual({ type: "closeOverlay" });
+  });
+
+  it("falls back to a neutral eyebrow when no context is known", async () => {
+    initialState = { ...playingState, contextLabel: null };
+    await mount();
+    expect(container.textContent).toContain("Now playing");
   });
 
   it("mute button in the volume pill sends toggleMute", async () => {

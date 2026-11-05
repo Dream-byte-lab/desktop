@@ -52,7 +52,12 @@ const DICT: Record<string, string> = {
   "space.dj.title": "Your DJ sets",
   "space.dj.joins_one": "{count} join",
   "space.dj.joins_plural": "{count} joins",
-  "space.dj.grade": "Average transition grade {percent}%",
+  "space.dj.byHand_one": "{count} by hand",
+  "space.dj.byHand_plural": "{count} by hand",
+  "space.dj.fallbacks_one": "{count} fallback",
+  "space.dj.fallbacks_plural": "{count} fallbacks",
+  "space.dj.degraded_one": "{count} join on untrusted evidence",
+  "space.dj.degraded_plural": "{count} joins on untrusted evidence",
   "space.guest.body":
     "You're listening as a guest, so there's no account history to show. Play counts and listening time begin with sign-in.",
   "space.guest.topArtists": "Strongest on this device",
@@ -145,7 +150,14 @@ function makeStats(over: Partial<ListeningStats> = {}): ListeningStats {
     currentStreakDays: 3,
     activeDays: 21,
     days: [],
-    joins: { performed: 24, graded: 20, averageGrade: 0.83 },
+    joins: {
+      performed: 20,
+      userAct: 4,
+      fallbackUnprepared: 2,
+      fallbackInvalid: 1,
+      degradedUntrusted: 3,
+      setEnd: 1,
+    },
     coverage: {
       events: 50,
       countedPlays: 42,
@@ -222,8 +234,14 @@ describe("ListeningDashboard", () => {
     expect(text).toContain("Amapiano");
     expect(text).toContain("Basic genre isn't recorded");
     expect(text).toContain("↑ 1");
+    // The DJ block: sounded joins (drawn + by hand), then the
+    // fallbacks and degraded joins under their own names — and
+    // no grade-shaped figure anywhere.
     expect(text).toContain("24 joins");
-    expect(text).toContain("Average transition grade 83%");
+    expect(text).toContain("4 by hand");
+    expect(text).toContain("3 fallbacks");
+    expect(text).toContain("3 joins on untrusted evidence");
+    expect(text).not.toContain("grade");
   });
 
   it("links artists and songs to their pages when ids resolve", async () => {

@@ -2,9 +2,18 @@ import type {
   ArtistAlbum,
   ArtistDetails,
   ArtistRelease,
+  SimilarArtistItem,
+  Track,
 } from "@/shared/contracts";
 import { asArray, asRecord, findFirst, walkRecords } from "@/shared/utils/json";
-import { getPageType, getRuns, getText, yearFromRuns } from "./innertubeJson";
+import {
+  getBrowseEndpoint,
+  getPageType,
+  getRuns,
+  getText,
+  isArtistPage,
+  yearFromRuns,
+} from "./innertubeJson";
 import { coverFromThumbnail } from "./innertubeThumbnail";
 import { hasExplicitBadge } from "./innertubeTrackMapper";
 import {
@@ -114,6 +123,119 @@ function mapArtistReleases(body: unknown): {
   return { albums, singles };
 }
 
+// Similar artists, from the artist browse body itself: YouTube
+// Music artist pages carry a "Fans might also like" carousel of
+// artist cards — the source's own listener-derived similar
+// artists, in the SAME response this mapper already consumes for
+// the header, top songs and releases. The parse is title-keyed
+// exactly like mapArtistReleases and accepts only items whose
+// endpoint is an artist page, so nothing but artist cards can
+// land here; when the shelf is absent the field stays unset and
+// the UI shows no section — never a dressed-up guess.
+const SIMILAR_SHELF_TITLES = new Set([
+  "fans might also like",
+  "fans also like",
+  "similar artists",
+]);
+
+function mapSimilarArtistItem(raw: unknown): SimilarArtistItem | null {
+  const twoRow = asRecord(asRecord(raw)?.musicTwoRowItemRenderer);
+  if (twoRow) {
+    const titleRun = getRuns(twoRow.title)[0];
+    const endpoint =
+      asRecord(asRecord(titleRun?.navigationEndpoint)?.browseEndpoint) ??
+      asRecord(asRecord(twoRow.navigationEndpoint)?.browseEndpoint);
+    const name = getText(twoRow.title);
+    if (
+      !isArtistPage(getPageType(endpoint)) ||
+      typeof endpoint?.browseId !== "string" ||
+      !name
+    ) {
+      return null;
+    }
+    const cover = coverFromThumbnail(twoRow.thumbnailRenderer, {
+      isArtist: true,
+    });
+    return { id: endpoint.browseId, name, ...(cover ? { cover } : {}) };
+  }
+  const listItem = asRecord(asRecord(raw)?.musicResponsiveListItemRenderer);
+  if (listItem) {
+    const titleColumn = asRecord(
+      asArray(listItem.flexColumns)[0],
+    )?.musicResponsiveListItemFlexColumnRenderer;
+    const titleRun = getRuns(asRecord(titleColumn)?.text)[0];
+    const endpoint = getBrowseEndpoint(titleRun);
+    const name = getText(asRecord(titleColumn)?.text);
+    if (
+      !isArtistPage(getPageType(endpoint)) ||
+      typeof endpoint?.browseId !== "string" ||
+      !name
+    ) {
+      return null;
+    }
+    const cover = coverFromThumbnail(listItem.thumbnail, { isArtist: true });
+    return { id: endpoint.browseId, name, ...(cover ? { cover } : {}) };
+  }
+  return null;
+}
+
+export function mapSimilarArtists(
+  body: unknown,
+  selfId: string,
+): SimilarArtistItem[] {
+  const artists: SimilarArtistItem[] = [];
+  const seen = new Set<string>([selfId]);
+  walkRecords(body, (record) => {
+    const carousel = asRecord(record.musicCarouselShelfRenderer);
+    if (!carousel) return false;
+    const header = asRecord(
+      asRecord(carousel.header)?.musicCarouselShelfBasicHeaderRenderer,
+    );
+    const shelfTitle = getText(header?.title)?.toLowerCase();
+    if (!shelfTitle || !SIMILAR_SHELF_TITLES.has(shelfTitle)) return true;
+    for (const raw of asArray(carousel.contents)) {
+      const artist = mapSimilarArtistItem(raw);
+      if (!artist || seen.has(artist.id)) continue;
+      seen.add(artist.id);
+      artists.push(artist);
+      if (artists.length >= 12) break;
+    }
+    return true;
+  });
+  return artists;
+}
+
+// The derivation used when the source supplied no similar-artists
+// shelf: rank the artists of a related-tracks list (the source's
+// own radio/related graph) by how many of those tracks credit
+// them. An artist is counted once per track; the artist the list
+// was derived for, and id-less credits, never appear. This is
+// relatedness data, not fan data — callers must label it so.
+export function rankSimilarArtistsFromTracks(
+  tracks: readonly Track[],
+  selfId: string,
+  limit = 8,
+): SimilarArtistItem[] {
+  const counts = new Map<string, { name: string; count: number }>();
+  for (const track of tracks) {
+    const credited = new Set<string>();
+    for (const artist of track.artists) {
+      if (!artist.id || artist.id === "unknown" || artist.id === selfId) {
+        continue;
+      }
+      if (credited.has(artist.id)) continue;
+      credited.add(artist.id);
+      const entry = counts.get(artist.id);
+      if (entry) entry.count += 1;
+      else counts.set(artist.id, { name: artist.name, count: 1 });
+    }
+  }
+  return [...counts.entries()]
+    .sort((a, b) => b[1].count - a[1].count)
+    .slice(0, limit)
+    .map(([id, entry]) => ({ id, name: entry.name }));
+}
+
 export function mapInnertubeArtistDetails(
   id: string,
   body: unknown,
@@ -128,6 +250,7 @@ export function mapInnertubeArtistDetails(
     microformatCover(body, true) ??
     coverFromThumbnail(header?.thumbnail, { isArtist: true });
   const releases = mapArtistReleases(body);
+  const similarArtists = mapSimilarArtists(body, id);
   return {
     type: "artist",
     id,
@@ -140,6 +263,9 @@ export function mapInnertubeArtistDetails(
     tracks: mapInnertubeBrowseTracks(body, [{ id, name }]),
     albums: releases.albums,
     singles: releases.singles,
+    ...(similarArtists.length > 0
+      ? { similarArtists, similarArtistsBasis: "fans" as const }
+      : {}),
   };
 }
 

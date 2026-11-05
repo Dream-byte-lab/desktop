@@ -10,6 +10,7 @@ import { InnertubeError, postInnertube } from "./innertubeClient";
 import {
   getArtistTopSongsBrowse,
   mapInnertubeArtistDetails,
+  rankSimilarArtistsFromTracks,
 } from "./innertubeArtistMapper";
 import { mapInnertubeBrowseTracks } from "./innertubeCollectionMapper";
 import {
@@ -137,8 +138,26 @@ async function getArtist(
   signal?: AbortSignal,
 ): Promise<ArtistDetails> {
   const artist = await loadArtist(artistId, signal);
-  if (artist) return artist;
-  throw notFound("Artist");
+  if (!artist) throw notFound("Artist");
+  // When the artist page carried no similar-artists shelf, derive
+  // the list from the source's own relatedness graph: the artists
+  // credited on this artist's top song's radio. Labelled "related"
+  // — it is radio data, not fan data. Best-effort: any failure
+  // leaves the artist exactly as loaded.
+  if (artist.similarArtists?.length || artist.tracks.length === 0) {
+    return artist;
+  }
+  try {
+    const radio = await getRadio(artist.tracks[0].id, {
+      k: DEFAULT_RADIO_SIZE,
+      signal,
+    });
+    const similarArtists = rankSimilarArtistsFromTracks(radio.items, artist.id);
+    if (similarArtists.length === 0) return artist;
+    return { ...artist, similarArtists, similarArtistsBasis: "related" };
+  } catch {
+    return artist;
+  }
 }
 
 function search(

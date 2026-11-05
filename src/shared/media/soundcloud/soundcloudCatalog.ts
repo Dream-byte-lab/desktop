@@ -8,6 +8,7 @@ import type {
 } from "@/shared/contracts";
 import {
   asArray,
+  asRecord,
   isRecord,
   numberValue,
   trimmedString,
@@ -28,6 +29,7 @@ import {
   mapSoundCloudCatalogTrack,
   mapSoundCloudRelease,
   mapSoundCloudTracks,
+  similarArtistsFromRelatedTracks,
   soundCloudCover,
   soundCloudPlaylistCover,
   soundCloudReleaseType,
@@ -81,7 +83,7 @@ async function getArtist(
   const bio = trimmedString(user.description);
   const followers = numberValue(user.followers_count);
   const { albums, singles } = splitReleases(releases);
-  return {
+  const details: ArtistDetails = {
     type: "artist",
     id: artist.id,
     name: trimmedString(user.full_name) ?? artist.name,
@@ -96,6 +98,31 @@ async function getArtist(
     albums,
     singles,
   };
+  // Similar artists, derived from SoundCloud's own related-tracks
+  // graph (the /related lists of the artist's two top tracks) —
+  // labelled "related", never fan data. getCollection resolves to
+  // [] on any failure, so a failed derivation simply leaves the
+  // field unset and the UI shows no section.
+  const topIds = topTracks
+    .slice(0, 2)
+    .map((raw) => numberValue(asRecord(raw)?.id))
+    .filter((id): id is number => id !== undefined);
+  if (topIds.length > 0) {
+    const relatedLists = await Promise.all(
+      topIds.map((trackId) =>
+        getCollection(`/tracks/${trackId}/related`, ARTIST_TOP_LIMIT, signal),
+      ),
+    );
+    const similarArtists = similarArtistsFromRelatedTracks(
+      relatedLists.flat(),
+      artist.id,
+    );
+    if (similarArtists.length > 0) {
+      details.similarArtists = similarArtists;
+      details.similarArtistsBasis = "related";
+    }
+  }
+  return details;
 }
 
 async function getArtistImage(

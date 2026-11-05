@@ -4,12 +4,13 @@ import { createRoot, Root } from "react-dom/client";
 import { act } from "react";
 import {
   buildForYouCandidates,
-  factsFromAnalysisRecord,
+  factsFromTrackRead,
   mergeUniverse,
   useForYouFeed,
   type HeardEntry,
 } from "./useForYouFeed";
-import { ANALYSIS_VERSION } from "@/features/mixer/engine/analyseTrack";
+import { ANALYSIS_VERSION } from "@/features/mixer/liverave/analyse";
+import type { TrackRead } from "@/features/mixer/liverave/facts";
 import { api } from "@/shared/api";
 import type { Track } from "@/shared/types";
 
@@ -41,7 +42,9 @@ const playlistsHolder: {
 const labelsHolder: {
   byTrack: Record<string, { playlistGenres: string[]; genres: string[] }>;
 } = { byTrack: {} };
-const analysisHolder: { byTrack: Record<string, unknown> } = { byTrack: {} };
+const readsHolder: { reads: TrackRead[] } = { reads: [] };
+/** The attribution bridge's pairs, as listTrackHashes returns them. */
+const bridgeHolder: { pairs: [string, string][] } = { pairs: [] };
 
 vi.mock("@/shared/api", () => ({
   api: {
@@ -83,12 +86,13 @@ vi.mock("@/features/genres/trackGenres", () => ({
     labelsHolder.byTrack[trackId] ?? { playlistGenres: [], genres: [] },
 }));
 
-vi.mock("@/shared/storage", () => ({
-  linerDb: {
-    getAnalysis: vi.fn(
-      async (trackId: string) => analysisHolder.byTrack[trackId] ?? null,
-    ),
-  },
+// The new engine's storage seam: reads are enumerated (the store
+// is content-addressed by audioHash — there is no per-track key),
+// so the fake hands back the whole stored set plus the attribution
+// bridge's pairs, and the hook's own gates decide what may be used.
+vi.mock("@/features/mixer/liverave/storage", () => ({
+  listReads: vi.fn(async () => readsHolder.reads),
+  listTrackHashes: vi.fn(async () => new Map(bridgeHolder.pairs)),
 }));
 
 function makeTrack(id: string, artists = "Artist"): Track {
@@ -102,38 +106,43 @@ function makeTrack(id: string, artists = "Artist"): Track {
   } as Track;
 }
 
-function analysisRecord(
-  trackId: string,
+/**
+ * A stored TrackRead in the new engine's shape. The first argument
+ * is the read's audioHash. Attribution reaches a universe track
+ * two ways (see the note on factsFromTrackRead): through the
+ * attribution bridge (bridgeHolder pairs: trackId → audioHash —
+ * the production path), or, in the older fixtures below, by the
+ * tracks' ids doubling as their hashes (the direct-key case).
+ */
+function storedRead(
+  audioHash: string,
   energy: number,
-  overrides: { recordVersion?: number; analysisVersion?: number } = {},
-): unknown {
+  overrides: { analysisVersion?: number } = {},
+): TrackRead {
   return {
-    trackId,
-    audioHash: "hash-a",
-    analysisVersion: overrides.recordVersion ?? ANALYSIS_VERSION,
+    audioHash,
+    analysisVersion: overrides.analysisVersion ?? ANALYSIS_VERSION,
     depth: "deep",
-    savedAt: Date.now(),
-    analysis: {
-      analysisVersion: overrides.analysisVersion ?? ANALYSIS_VERSION,
-      audioHash: "hash-a",
-      beatMap: {
-        bpm: 120,
-        firstBeatSec: 0,
-        beatsPerBar: 4,
-        durationSec: 60,
-        grid: { anchors: [], sections: [], confidence: 0.5 },
-      },
-      tempoConfidence: 0.9,
-      energyCurve: [
-        { timeSec: 0, energy },
-        { timeSec: 1, energy },
-      ],
-      drops: [],
-      key: { camelot: "8A", confidence: 0.9 },
-      vocalRanges: [{ startSec: 0, endSec: 30 }],
-      loudness: 0.2,
-      sections: [],
+    durationSec: 60,
+    bpm: 120,
+    tempoConfidence: 0.9,
+    grid: {
+      beatsMs: [0, 500, 1000, 1500],
+      downbeatsMs: [0],
+      beatsPerBar: 4,
+      confidence: 0.6,
     },
+    key: { tonic: 9, mode: "minor", camelot: "8A", confidence: 0.9 },
+    sections: [
+      { kind: "verse", startMs: 0, endMs: 60_000, meanEnergy: energy },
+    ],
+    energyCurvePerSec: [energy, energy],
+    energyContour: [],
+    vocalActivity: [
+      { startMs: 0, endMs: 30_000, activity: 1, confidence: 0.9 },
+    ],
+    drops: [],
+    loudnessRms: 0.2,
   };
 }
 
@@ -186,9 +195,9 @@ describe("mergeUniverse + buildForYouCandidates", () => {
   });
 });
 
-describe("factsFromAnalysisRecord", () => {
-  it("extracts coarse facts from a trustworthy record", () => {
-    const facts = factsFromAnalysisRecord(analysisRecord("t1", 0.2) as never);
+describe("factsFromTrackRead", () => {
+  it("extracts coarse facts from a trustworthy read", () => {
+    const facts = factsFromTrackRead(storedRead("t1", 0.2));
     expect(facts).toEqual({
       bpm: 120,
       meanEnergy: 0.2,
@@ -197,30 +206,37 @@ describe("factsFromAnalysisRecord", () => {
     });
   });
 
-  it("ignores a record with a stale outer analysisVersion", () => {
-    const facts = factsFromAnalysisRecord(
-      analysisRecord("t1", 0.2, {
-        recordVersion: ANALYSIS_VERSION - 1,
-      }) as never,
+  it("ignores a read with a stale analysisVersion", () => {
+    const facts = factsFromTrackRead(
+      storedRead("t1", 0.2, { analysisVersion: ANALYSIS_VERSION - 1 }),
     );
     expect(facts).toBeNull();
   });
 
-  it("ignores a record whose inner analysisVersion is stale", () => {
-    const facts = factsFromAnalysisRecord(
-      analysisRecord("t1", 0.2, {
-        analysisVersion: ANALYSIS_VERSION - 1,
-      }) as never,
-    );
-    expect(facts).toBeNull();
+  it("ignores a read whose beat grid is missing", () => {
+    const read = storedRead("t1", 0.2);
+    read.grid = { ...read.grid, beatsMs: [] };
+    expect(factsFromTrackRead(read)).toBeNull();
   });
 
-  it("ignores a record whose analysis lost its beat grid", () => {
-    const record = analysisRecord("t1", 0.2) as {
-      analysis: { beatMap: Record<string, unknown> };
-    };
-    delete record.analysis.beatMap.grid;
-    expect(factsFromAnalysisRecord(record as never)).toBeNull();
+  it("ignores a read with no typed sections", () => {
+    const read = storedRead("t1", 0.2);
+    read.sections = [];
+    expect(factsFromTrackRead(read)).toBeNull();
+  });
+
+  it("returns null for a missing read", () => {
+    expect(factsFromTrackRead(null)).toBeNull();
+    expect(factsFromTrackRead(undefined)).toBeNull();
+  });
+
+  it("weights the vocal share by graded activity", () => {
+    const read = storedRead("t1", 0.2);
+    // Half the track covered at half activity → share 0.25.
+    read.vocalActivity = [
+      { startMs: 0, endMs: 30_000, activity: 0.5, confidence: 0.9 },
+    ];
+    expect(factsFromTrackRead(read)?.vocalShare).toBeCloseTo(0.25);
   });
 });
 
@@ -251,7 +267,8 @@ describe("useForYouFeed", () => {
     playlistsHolder.isLoading = false;
     playlistsHolder.error = undefined;
     labelsHolder.byTrack = {};
-    analysisHolder.byTrack = {};
+    readsHolder.reads = [];
+    bridgeHolder.pairs = [];
   });
 
   afterEach(() => {
@@ -329,9 +346,7 @@ describe("useForYouFeed", () => {
     sessionHolder.user = { id: "user-mood" };
     const ids = ["m1", "m2", "m3", "m4", "m5"];
     likedHolder.tracks = ids.map((id) => makeTrack(id, "Calm Artist"));
-    for (const id of ids) {
-      analysisHolder.byTrack[id] = analysisRecord(id, 0.2);
-    }
+    readsHolder.reads = ids.map((id) => storedRead(id, 0.2));
     (api.getHistory as any).mockResolvedValue({
       items: [],
       nextCursor: null,
@@ -345,15 +360,55 @@ describe("useForYouFeed", () => {
     expect(row?.tracks.map((track) => track.id).sort()).toEqual(ids);
   });
 
+  it("attributes stored analyses to tracks through the bridge, whose ids are not hashes", async () => {
+    sessionHolder.user = { id: "user-mood-bridge" };
+    const ids = ["b1", "b2", "b3", "b4", "b5"];
+    likedHolder.tracks = ids.map((id) => makeTrack(id, "Calm Artist"));
+    // Reads live under hashes that share nothing with the track
+    // ids; only the bridge pairs can attribute them.
+    readsHolder.reads = ids.map((id) => storedRead(`hash-${id}`, 0.2));
+    bridgeHolder.pairs = ids.map(
+      (id) => [id, `hash-${id}`] as [string, string],
+    );
+    (api.getHistory as any).mockResolvedValue({
+      items: [],
+      nextCursor: null,
+    });
+
+    const getResult = await renderHook();
+    expect(getResult()?.isLoading).toBe(false);
+    const row = getResult()?.moodRows.find(
+      (entry) => entry.kind === "lowEnergy",
+    );
+    expect(row?.tracks.map((track) => track.id).sort()).toEqual(ids);
+  });
+
+  it("leaves tracks fact-less when the bridge holds no entry for them (graceful absence)", async () => {
+    sessionHolder.user = { id: "user-mood-no-bridge" };
+    const ids = ["n1", "n2", "n3", "n4", "n5"];
+    likedHolder.tracks = ids.map((id) => makeTrack(id, "Calm Artist"));
+    // The reads exist, but under hashes no bridge entry points to
+    // and no track id equals — attribution honestly fails and the
+    // tracks keep the feed's long-standing null-facts behaviour.
+    readsHolder.reads = ids.map((id) => storedRead(`hash-${id}`, 0.2));
+    bridgeHolder.pairs = [];
+    (api.getHistory as any).mockResolvedValue({
+      items: [],
+      nextCursor: null,
+    });
+
+    const getResult = await renderHook();
+    expect(getResult()?.isLoading).toBe(false);
+    expect(getResult()?.moodRows).toEqual([]);
+  });
+
   it("ignores stored analyses with a stale analysisVersion", async () => {
     sessionHolder.user = { id: "user-mood-stale" };
     const ids = ["s1", "s2", "s3", "s4", "s5"];
     likedHolder.tracks = ids.map((id) => makeTrack(id, "Calm Artist"));
-    for (const id of ids) {
-      analysisHolder.byTrack[id] = analysisRecord(id, 0.2, {
-        recordVersion: ANALYSIS_VERSION - 1,
-      });
-    }
+    readsHolder.reads = ids.map((id) =>
+      storedRead(id, 0.2, { analysisVersion: ANALYSIS_VERSION - 1 }),
+    );
     (api.getHistory as any).mockResolvedValue({
       items: [],
       nextCursor: null,

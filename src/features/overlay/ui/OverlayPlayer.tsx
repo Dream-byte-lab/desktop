@@ -5,9 +5,17 @@ import {
   useCallback,
   type CSSProperties,
   type PointerEvent as ReactPointerEvent,
+  type ReactNode,
 } from "react";
 import { motion } from "framer-motion";
-import { Maximize, SkipNext, SkipPrevious } from "@solar-icons/react";
+import {
+  Maximize,
+  Repeat,
+  RepeatOne,
+  Shuffle,
+  SkipNext,
+  SkipPrevious,
+} from "@solar-icons/react";
 import {
   PlayerMorphIcon,
   ICON_PLAY,
@@ -36,6 +44,121 @@ import {
   overlaySizeBand,
   OVERLAY_SIZE_PRESETS,
 } from "../lib/overlaySize";
+
+/**
+ * Panel densities. One composition at three scales: the default anchor
+ * (regular), the large anchor (large — the same layout with air), and a
+ * compact squeeze for custom sizes between the anchors, so a hand-dragged
+ * window keeps the panel's shape instead of collapsing to another layout.
+ */
+type PanelDensity = "compact" | "regular" | "large";
+
+interface PanelTokens {
+  radius: string;
+  coverPct: number;
+  padTop: number;
+  padRight: number;
+  padBottom: number;
+  padLeft: number;
+  eyebrowClass: string;
+  circle: number;
+  circleIcon: number;
+  titleClass: string;
+  artistClass: string;
+  disc: number;
+  discIcon: number;
+  skipButton: number;
+  skipIcon: number;
+  modeButton: number;
+  modeIcon: number;
+  pillRoomy: boolean;
+}
+
+const PANEL_TOKENS: Record<PanelDensity, PanelTokens> = {
+  compact: {
+    radius: "rounded-[22px]",
+    coverPct: 40,
+    padTop: 14,
+    padRight: 16,
+    padBottom: 14,
+    padLeft: 16,
+    eyebrowClass: "text-[9.5px]",
+    circle: 30,
+    circleIcon: 14,
+    titleClass:
+      "text-[23px] leading-[28px] font-extrabold tracking-tight text-white",
+    artistClass: "text-[13px] leading-[17px] font-light text-white/60",
+    disc: 48,
+    discIcon: 20,
+    skipButton: 34,
+    skipIcon: 22,
+    modeButton: 28,
+    modeIcon: 16,
+    pillRoomy: false,
+  },
+  regular: {
+    radius: "rounded-[26px]",
+    coverPct: 43,
+    padTop: 20,
+    padRight: 22,
+    padBottom: 20,
+    padLeft: 22,
+    eyebrowClass: "text-[10.5px]",
+    circle: 36,
+    circleIcon: 16,
+    titleClass:
+      "text-[30px] leading-[36px] font-extrabold tracking-tight text-white",
+    artistClass: "text-[14.5px] leading-[19px] font-light text-white/60",
+    disc: 66,
+    discIcon: 26,
+    skipButton: 42,
+    skipIcon: 28,
+    modeButton: 32,
+    modeIcon: 19,
+    pillRoomy: false,
+  },
+  large: {
+    radius: "rounded-[28px]",
+    coverPct: 43,
+    padTop: 26,
+    padRight: 28,
+    padBottom: 26,
+    padLeft: 28,
+    eyebrowClass: "text-[11px]",
+    circle: 40,
+    circleIcon: 18,
+    titleClass:
+      "text-[38px] leading-[44px] font-extrabold tracking-tight text-white",
+    artistClass: "text-[16px] leading-[21px] font-light text-white/60",
+    disc: 82,
+    discIcon: 32,
+    skipButton: 48,
+    skipIcon: 32,
+    modeButton: 36,
+    modeIcon: 21,
+    pillRoomy: true,
+  },
+};
+
+/** The reference eyebrow's equaliser glyph: four quiet bars in the
+ *  artwork tint (or the theme accent when no tint was sampled). */
+function EqualiserGlyph({ color }: { color: string }) {
+  return (
+    <span
+      aria-hidden
+      className="flex shrink-0 items-end gap-[2px]"
+      style={{ height: 11 }}
+    >
+      {[6, 10, 7, 9].map((height, i) => (
+        <span
+          key={i}
+          className="w-[2.5px] rounded-full"
+          style={{ height, background: color }}
+        />
+      ))}
+    </span>
+  );
+}
 import { useArtworkTint } from "../hooks/useArtworkTint";
 import { useShortcutsStore, matchesShortcut } from "@/features/shortcuts";
 import { isLocalTrackId } from "@/shared/media/local/localTrackIds";
@@ -175,15 +298,12 @@ function SeekBar({ positionMs, durationMs, tint, onSeek }: SeekBarProps) {
 
   return (
     <div
-      className="flex items-center gap-2 select-none"
+      className="flex flex-col gap-[5px] select-none"
       style={NO_DRAG_STYLE}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
       onMouseDown={(e) => e.stopPropagation()}
     >
-      <span className="w-[30px] shrink-0 text-right text-[10.5px] tabular-nums leading-none text-white/55">
-        {formatPlaybackTime(displayMs)}
-      </span>
       <div
         role="slider"
         aria-label="Seek"
@@ -193,7 +313,7 @@ function SeekBar({ positionMs, durationMs, tint, onSeek }: SeekBarProps) {
         tabIndex={0}
         onKeyDown={handleKeyDown}
         onPointerDown={handlePointerDown}
-        className="relative flex h-[16px] flex-1 cursor-pointer items-center outline-none"
+        className="relative flex h-[16px] w-full cursor-pointer items-center outline-none"
       >
         <div
           ref={trackRef}
@@ -215,17 +335,27 @@ function SeekBar({ positionMs, durationMs, tint, onSeek }: SeekBarProps) {
             }}
           />
         </div>
+        {/* The reference's knob rides the end of the fill, always
+            visible, in the fill's lightened end colour. */}
         <span
           aria-hidden
-          className={`pointer-events-none absolute top-1/2 h-[10px] w-[10px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-white shadow transition-opacity duration-150 ${
-            isActive ? "opacity-100" : "opacity-0"
-          }`}
-          style={{ left: `${ratio * 100}%` }}
+          className="pointer-events-none absolute top-1/2 h-[11px] w-[11px] -translate-x-1/2 -translate-y-1/2 rounded-full shadow-[0_1px_5px_rgba(0,0,0,0.5)]"
+          style={{
+            left: `${ratio * 100}%`,
+            background: tint
+              ? `color-mix(in srgb, ${tint} 45%, #ffffff)`
+              : "var(--accent-secondary)",
+          }}
         />
       </div>
-      <span className="w-[30px] shrink-0 text-[10.5px] tabular-nums leading-none text-white/55">
-        {formatPlaybackTime(duration)}
-      </span>
+      <div className="flex items-center justify-between">
+        <span className="text-[11px] tabular-nums leading-none text-white/55">
+          {formatPlaybackTime(displayMs)}
+        </span>
+        <span className="text-[11px] tabular-nums leading-none text-white/55">
+          {formatPlaybackTime(duration)}
+        </span>
+      </div>
     </div>
   );
 }
@@ -235,6 +365,9 @@ interface VolumePillProps {
   volume: number;
   tint: string | null;
   roomy?: boolean;
+  /** Rendered inside the pill after the slider, behind a hairline —
+   *  the reference pill carries its utility icons inside itself. */
+  trailing?: ReactNode;
   onSetVolume: (gain: number) => void;
   onToggleMute: () => void;
 }
@@ -243,6 +376,7 @@ function VolumePill({
   volume,
   tint,
   roomy = false,
+  trailing,
   onSetVolume,
   onToggleMute,
 }: VolumePillProps) {
@@ -399,7 +533,20 @@ function VolumePill({
             }}
           />
         </div>
+        {/* The reference slider's round white knob. */}
+        <span
+          aria-hidden
+          className="pointer-events-none absolute top-1/2 z-10 h-[11px] w-[11px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-white shadow-[0_1px_5px_rgba(0,0,0,0.5)]"
+          style={{ left: `${level * 100}%` }}
+        />
       </div>
+
+      {trailing ? (
+        <>
+          <div aria-hidden className="h-[16px] w-px shrink-0 bg-white/[0.12]" />
+          {trailing}
+        </>
+      ) : null}
     </div>
   );
 }
@@ -513,7 +660,7 @@ function ResizeGrip({ onResize }: ResizeGripProps) {
       onPointerDown={handlePointerDown}
       onKeyDown={handleKeyDown}
       onMouseDown={(e) => e.stopPropagation()}
-      className="absolute right-[3px] bottom-[3px] z-30 flex h-[16px] w-[16px] cursor-nwse-resize items-center justify-center rounded-[5px] border-0 bg-transparent text-white/30 opacity-0 outline-none transition-opacity duration-150 group-hover:opacity-100 hover:text-white/70 focus-visible:opacity-100"
+      className="absolute right-[3px] bottom-[3px] z-30 flex h-[16px] w-[16px] cursor-nwse-resize items-center justify-center rounded-[5px] border-0 bg-transparent text-white/30 opacity-40 outline-none transition-opacity duration-150 group-hover:opacity-100 hover:text-white/70 hover:opacity-100 focus-visible:opacity-100"
       style={NO_DRAG_STYLE}
     >
       <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden>
@@ -544,6 +691,9 @@ export function OverlayPlayer({ initialWindowSize }: OverlayPlayerProps = {}) {
     durationMs: 0,
     volume: 1,
     isLiked: false,
+    shuffle: false,
+    repeat: "off",
+    contextLabel: null,
   });
 
   const [isInfoHovered, setIsInfoHovered] = useState(false);
@@ -560,6 +710,13 @@ export function OverlayPlayer({ initialWindowSize }: OverlayPlayerProps = {}) {
   const measuredWindowSize = useOverlayWindowSize();
   const windowSize = initialWindowSize ?? measuredWindowSize;
   const band = overlaySizeBand(windowSize);
+  const density: PanelDensity =
+    band === "large"
+      ? "large"
+      : windowSize.height < 330 || windowSize.width < 580
+        ? "compact"
+        : "regular";
+  const panel = PANEL_TOKENS[density];
 
   const coverSrc = state.track?.coverUrl || state.track?.cover || null;
   const tint = useArtworkTint(coverSrc);
@@ -908,21 +1065,6 @@ export function OverlayPlayer({ initialWindowSize }: OverlayPlayerProps = {}) {
     </div>
   );
 
-  const identityText = (titleClass: string, artistClass: string) => (
-    <div className="flex min-w-0 flex-1 flex-col justify-center overflow-hidden">
-      <ScrollableText
-        text={state.track?.title || "No track playing"}
-        isParentHovered={isInfoHovered}
-        className={titleClass}
-      />
-      <ScrollableText
-        text={state.track?.artist || ""}
-        isParentHovered={isInfoHovered}
-        className={artistClass}
-      />
-    </div>
-  );
-
   const focusButton = (size: number, iconSize: number) => (
     <button
       type="button"
@@ -943,21 +1085,170 @@ export function OverlayPlayer({ initialWindowSize }: OverlayPlayerProps = {}) {
     </button>
   );
 
-  const volumeCluster = (roomy: boolean) => (
-    <div className="flex items-center gap-1.5">
-      <div className="min-w-0 flex-1">
-        <VolumePill
-          volume={state.volume}
-          tint={tint}
-          roomy={roomy}
-          onSetVolume={(gain) =>
-            sendAction({ type: "setVolume", payload: { volume: gain } })
-          }
-          onToggleMute={() => sendAction({ type: "toggleMute" })}
+  // ── Panel building blocks (the reference card's composition) ──
+
+  const accentColor = tint ?? "var(--accent-primary)";
+
+  const glassCircleClass =
+    "flex shrink-0 cursor-pointer items-center justify-center rounded-full border border-white/[0.14] bg-white/[0.08] shadow-[0_4px_14px_rgba(0,0,0,0.35)] transition-all outline-none hover:bg-white/[0.15] hover:text-white active:scale-90";
+
+  const panelLikeButton = showLike ? (
+    <button
+      type="button"
+      tabIndex={-1}
+      onMouseDown={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      }}
+      onClick={(e) => {
+        e.stopPropagation();
+        sendAction({ type: "like" });
+      }}
+      className={`${glassCircleClass} ${
+        state.isLiked ? "text-[#ff3b5c]" : "text-white/85"
+      }`}
+      style={{ height: panel.circle, width: panel.circle }}
+      aria-label={state.isLiked ? "Unlike" : "Like"}
+    >
+      {state.isLiked ? (
+        <HeartFill size={panel.circleIcon} />
+      ) : (
+        <HeartLine size={panel.circleIcon} />
+      )}
+    </button>
+  ) : null;
+
+  const panelCloseButton = (
+    <button
+      type="button"
+      tabIndex={-1}
+      onMouseDown={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      }}
+      onClick={(e) => {
+        e.stopPropagation();
+        sendAction({ type: "closeOverlay" });
+      }}
+      className={`${glassCircleClass} text-white/85`}
+      style={{ height: panel.circle, width: panel.circle }}
+      aria-label="Close overlay"
+    >
+      <svg
+        width={panel.circleIcon - 2}
+        height={panel.circleIcon - 2}
+        viewBox="0 0 12 12"
+        aria-hidden
+      >
+        <path
+          d="M2 2 L10 10 M10 2 L2 10"
+          stroke="currentColor"
+          strokeWidth="1.6"
+          strokeLinecap="round"
+          fill="none"
         />
-      </div>
-      {focusButton(roomy ? 26 : 24, 14)}
-    </div>
+      </svg>
+    </button>
+  );
+
+  /** Shuffle/repeat at the transport's ends, as in the reference:
+   *  accent colour with a dot beneath while the mode is on. */
+  const modeButton = (opts: {
+    label: string;
+    active: boolean;
+    onClick: () => void;
+    children: ReactNode;
+  }) => (
+    <button
+      type="button"
+      tabIndex={-1}
+      onMouseDown={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      }}
+      onClick={(e) => {
+        e.stopPropagation();
+        opts.onClick();
+      }}
+      className="relative flex shrink-0 cursor-pointer items-center justify-center rounded-full border-0 bg-transparent transition-all outline-none hover:bg-white/[0.07] active:scale-90"
+      style={{
+        height: panel.modeButton,
+        width: panel.modeButton,
+        color: opts.active ? accentColor : "rgba(255,255,255,0.45)",
+      }}
+      aria-label={opts.label}
+      aria-pressed={opts.active}
+    >
+      {opts.children}
+      {opts.active && (
+        <span
+          aria-hidden
+          className="absolute bottom-0 left-1/2 h-[4px] w-[4px] -translate-x-1/2 rounded-full"
+          style={{ background: accentColor }}
+        />
+      )}
+    </button>
+  );
+
+  const panelSkipButton = (direction: "prev" | "next") => (
+    <button
+      type="button"
+      tabIndex={-1}
+      onMouseDown={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      }}
+      onClick={(e) => {
+        e.stopPropagation();
+        sendAction({ type: direction });
+      }}
+      className="flex shrink-0 cursor-pointer items-center justify-center rounded-full border-0 bg-transparent text-white/90 transition-all outline-none hover:text-white active:scale-90"
+      style={{ height: panel.skipButton, width: panel.skipButton }}
+      aria-label={direction === "prev" ? "Previous" : "Next"}
+    >
+      {direction === "prev" ? (
+        <SkipPrevious size={panel.skipIcon} weight="Bold" />
+      ) : (
+        <SkipNext size={panel.skipIcon} weight="Bold" />
+      )}
+    </button>
+  );
+
+  const panelPlayDisc = (
+    <button
+      type="button"
+      tabIndex={-1}
+      onMouseDown={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      }}
+      onClick={(e) => {
+        e.stopPropagation();
+        sendAction({ type: "togglePlay" });
+      }}
+      className="inline-flex shrink-0 cursor-pointer items-center justify-center rounded-full border-none bg-white text-black transition-all duration-150 ease-out hover:scale-105 active:scale-95"
+      style={{
+        height: panel.disc,
+        width: panel.disc,
+        boxShadow: `0 0 38px ${
+          tint
+            ? `color-mix(in srgb, ${tint} 55%, transparent)`
+            : "rgba(255,255,255,0.32)"
+        }, 0 10px 28px rgba(0,0,0,0.5)`,
+      }}
+      aria-label={isPlaying ? "Pause" : "Play"}
+    >
+      <span
+        className={`flex items-center justify-center transition-transform ${
+          isPlaying ? "" : "translate-x-[1px]"
+        }`}
+      >
+        <PlayerMorphIcon
+          icon={isPlaying ? ICON_PAUSE : ICON_PLAY}
+          size={panel.discIcon}
+        />
+      </span>
+    </button>
   );
 
   return (
@@ -977,12 +1268,14 @@ export function OverlayPlayer({ initialWindowSize }: OverlayPlayerProps = {}) {
           scale: isVisible ? 1 : 0.92,
         }}
         transition={OVERLAY_CARD_TRANSITION}
-        className={`group relative flex w-full flex-1 flex-col overflow-hidden bg-[#0b0b11]/70 shadow-[0_18px_44px_rgba(0,0,0,0.55),0_2px_10px_rgba(0,0,0,0.45)] ring-1 ring-white/[0.13] ring-inset ${
+        className={`group relative flex w-full flex-1 flex-col overflow-hidden bg-[#0b0b11]/70 ring-1 ring-inset ${
           band === "micro"
-            ? "rounded-[14px]"
-            : band === "large"
-              ? "rounded-[20px]"
-              : "rounded-[18px]"
+            ? "rounded-[14px] shadow-[0_18px_44px_rgba(0,0,0,0.55),0_2px_10px_rgba(0,0,0,0.45)] ring-white/[0.13]"
+            : `${panel.radius} ${
+                density === "large"
+                  ? "shadow-[0_36px_90px_rgba(0,0,0,0.55),0_6px_20px_rgba(0,0,0,0.38)] ring-white/25"
+                  : "shadow-[0_24px_60px_rgba(0,0,0,0.58),0_4px_14px_rgba(0,0,0,0.42)] ring-white/[0.18]"
+              }`
         }`}
         style={{
           willChange: "transform, opacity",
@@ -991,7 +1284,10 @@ export function OverlayPlayer({ initialWindowSize }: OverlayPlayerProps = {}) {
         onMouseEnter={() => setIsInfoHovered(true)}
         onMouseLeave={() => setIsInfoHovered(false)}
       >
-        {/* Artwork glow backdrop (static per track) */}
+        {/* Artwork glow backdrop (static per track). The panel pushes
+            it harder than the old mini card did — more blur, more
+            saturation, higher presence — so the cover's colours bleed
+            across the whole translucent body, as in the references. */}
         {coverSrc ? (
           <img
             key={coverSrc}
@@ -999,7 +1295,13 @@ export function OverlayPlayer({ initialWindowSize }: OverlayPlayerProps = {}) {
             alt=""
             aria-hidden
             draggable={false}
-            className="pointer-events-none absolute inset-0 h-full w-full scale-[1.6] object-cover opacity-50 blur-2xl saturate-150 select-none"
+            className={`pointer-events-none absolute inset-0 h-full w-full object-cover select-none ${
+              band === "micro"
+                ? "scale-[1.6] opacity-50 blur-2xl saturate-150"
+                : density === "large"
+                  ? "scale-[1.85] opacity-[0.65] blur-3xl saturate-[1.75]"
+                  : "scale-[1.75] opacity-[0.55] blur-3xl saturate-[1.7]"
+            }`}
           />
         ) : (
           <div
@@ -1008,15 +1310,43 @@ export function OverlayPlayer({ initialWindowSize }: OverlayPlayerProps = {}) {
             style={{ backgroundImage: "var(--accent-gradient)" }}
           />
         )}
-        {/* Legibility tint + top sheen */}
+        {/* Legibility tint + top sheen. The panel's tint runs lighter
+            than the old card's — the glass reads translucent, not
+            smoked — and the large panel lighter still (the spatial
+            reference's airy panels). */}
         <div
           aria-hidden
-          className="pointer-events-none absolute inset-0 bg-gradient-to-b from-[#0a0a12]/55 via-[#0a0a12]/68 to-[#0a0a12]/82"
+          className={`pointer-events-none absolute inset-0 bg-gradient-to-b ${
+            band === "micro"
+              ? "from-[#0a0a12]/55 via-[#0a0a12]/68 to-[#0a0a12]/82"
+              : density === "large"
+                ? "from-[#0a0a12]/38 via-[#0a0a12]/50 to-[#0a0a12]/66"
+                : "from-[#0a0a12]/50 via-[#0a0a12]/62 to-[#0a0a12]/78"
+          }`}
         />
         <div
           aria-hidden
-          className="pointer-events-none absolute inset-x-0 top-0 h-1/2 bg-gradient-to-b from-white/[0.09] to-transparent"
+          className={`pointer-events-none absolute inset-x-0 top-0 h-1/2 bg-gradient-to-b to-transparent ${
+            band !== "micro" && density === "large"
+              ? "from-white/[0.14]"
+              : "from-white/[0.09]"
+          }`}
         />
+        {/* Halo bleed: a soft wash of the artwork's own colour pooled
+            where the cover panel meets the player column, so the
+            cover's edge glows into the glass instead of ending at a
+            hard seam. Static per track, like the glow raster. */}
+        {band !== "micro" && tint ? (
+          <div
+            aria-hidden
+            className="pointer-events-none absolute -inset-y-[12%] z-[1] w-[150px] blur-3xl"
+            style={{
+              left: `calc(${panel.coverPct}% - 75px)`,
+              background: tint,
+              opacity: density === "large" ? 0.36 : 0.3,
+            }}
+          />
+        ) : null}
 
         {band === "micro" && (
           <>
@@ -1069,115 +1399,144 @@ export function OverlayPlayer({ initialWindowSize }: OverlayPlayerProps = {}) {
           </>
         )}
 
-        {band === "default" && (
-          <div className="relative z-[2] flex h-full flex-col gap-1.5 px-3 py-2.5">
-            <div className="flex items-center gap-2.5">
-              {coverThumb(66, "rounded-[14px]")}
-              <div className="flex min-w-0 flex-1 flex-col self-stretch py-0.5">
-                {identityText(
-                  "text-[15px] leading-[19px] font-medium tracking-tight text-white",
-                  "mt-px text-[11.5px] leading-[15px] font-light text-white/55",
-                )}
-                <div
-                  className="mt-auto flex items-center gap-0.5"
-                  style={NO_DRAG_STYLE}
-                  onMouseDown={(e) => e.stopPropagation()}
-                >
-                  {transportCluster({
-                    button: 28,
-                    icon: 15,
-                    play: 32,
-                    playIcon: 14,
-                  })}
-                  <div className="ml-auto">{likeButton(28, 16)}</div>
-                </div>
-              </div>
-            </div>
-
-            <SeekBar
-              positionMs={currentPosMs}
-              durationMs={durationMs}
-              tint={tint}
-              onSeek={(positionMs) =>
-                sendAction({ type: "seek", payload: { positionMs } })
-              }
-            />
-
-            <div className="mt-auto">{volumeCluster(false)}</div>
-          </div>
-        )}
-
-        {band === "large" && (
-          <div className="relative z-[2] flex h-full flex-col gap-3 p-4">
-            {/* Player strip (reference: the frosted panel's top strip) */}
-            <div className="flex items-center gap-3">
-              {coverThumb(54, "rounded-[12px]")}
-              <div className="flex min-w-0 flex-1 flex-col justify-center overflow-hidden">
-                <ScrollableText
-                  text={state.track?.title || "No track playing"}
-                  isParentHovered={isInfoHovered}
-                  className="text-[15px] leading-[19px] font-semibold tracking-tight text-white"
-                />
-                <ScrollableText
-                  text={
-                    state.track?.album
-                      ? `${state.track?.artist || ""} · ${state.track.album}`
-                      : state.track?.artist || ""
-                  }
-                  isParentHovered={isInfoHovered}
-                  className="mt-px text-[12px] leading-[16px] font-light text-white/55"
-                />
-              </div>
-              <div
-                className="flex shrink-0 items-center gap-1"
-                style={NO_DRAG_STYLE}
-                onMouseDown={(e) => e.stopPropagation()}
-              >
-                {likeButton(30, 17)}
-                {transportCluster({
-                  button: 30,
-                  icon: 17,
-                  play: 40,
-                  playIcon: 17,
-                })}
-              </div>
-            </div>
-
-            {/* Roomier body: the artwork itself, full-bleed. */}
-            <div className="relative min-h-[72px] flex-1 overflow-hidden rounded-[16px] shadow-[0_10px_30px_rgba(0,0,0,0.4)] ring-1 ring-white/10 ring-inset">
+        {band !== "micro" && (
+          <div className="relative z-[2] flex h-full">
+            {/* Cover panel — the reference's left half: the artwork
+                itself at full height, flush to the card's edges (the
+                card's radius clips its corners), taking its ~43%. */}
+            <div
+              className="relative h-full shrink-0 overflow-hidden"
+              style={{ width: `${panel.coverPct}%` }}
+            >
               {coverSrc ? (
                 <CoverImage
                   key={coverSrc}
                   src={coverSrc}
                   alt={state.track?.title || "Artwork"}
                   fill
-                  sizes="440px"
+                  sizes="360px"
                   priority
                   unoptimized
                   draggable={false}
                   className="object-cover pointer-events-none select-none"
                 />
               ) : (
-                <div className="flex h-full w-full items-center justify-center bg-white/[0.04] text-[26px] text-white/25 select-none">
+                <div className="flex h-full w-full items-center justify-center bg-white/[0.04] text-[34px] text-white/25 select-none">
                   ♪
                 </div>
               )}
+              {/* Seat the panel into the glass: a bright hairline and a
+                  soft shade along its right edge. */}
               <div
                 aria-hidden
-                className="pointer-events-none absolute inset-x-0 bottom-0 h-2/5 bg-gradient-to-t from-black/45 to-transparent"
+                className="pointer-events-none absolute inset-y-0 right-0 w-px bg-white/[0.14]"
+              />
+              <div
+                aria-hidden
+                className="pointer-events-none absolute inset-0 shadow-[inset_-28px_0_36px_-28px_rgba(0,0,0,0.6)]"
               />
             </div>
 
-            <SeekBar
-              positionMs={currentPosMs}
-              durationMs={durationMs}
-              tint={tint}
-              onSeek={(positionMs) =>
-                sendAction({ type: "seek", payload: { positionMs } })
-              }
-            />
+            {/* Player column */}
+            <div
+              className="relative flex min-w-0 flex-1 flex-col"
+              style={{
+                paddingTop: panel.padTop,
+                paddingRight: panel.padRight,
+                paddingBottom: panel.padBottom,
+                paddingLeft: panel.padLeft,
+              }}
+            >
+              {/* Eyebrow + glass-circle actions */}
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex min-w-0 items-center gap-2 pt-[4px]">
+                  <EqualiserGlyph color={accentColor} />
+                  <span
+                    className={`truncate font-semibold tracking-[0.14em] text-white/55 uppercase ${panel.eyebrowClass}`}
+                  >
+                    {state.contextLabel ?? "Now playing"}
+                  </span>
+                </div>
+                <div
+                  className="flex shrink-0 items-center gap-2"
+                  style={NO_DRAG_STYLE}
+                  onMouseDown={(e) => e.stopPropagation()}
+                >
+                  {panelLikeButton}
+                  {panelCloseButton}
+                </div>
+              </div>
 
-            {volumeCluster(true)}
+              <div className="min-h-[2px] flex-1" />
+
+              <div className="flex min-w-0 flex-col overflow-hidden">
+                <ScrollableText
+                  text={state.track?.title || "No track playing"}
+                  isParentHovered={isInfoHovered}
+                  className={panel.titleClass}
+                />
+                <ScrollableText
+                  text={state.track?.artist || ""}
+                  isParentHovered={isInfoHovered}
+                  className={`mt-[2px] ${panel.artistClass}`}
+                />
+              </div>
+
+              <div className="min-h-[2px] flex-1" />
+
+              <SeekBar
+                positionMs={currentPosMs}
+                durationMs={durationMs}
+                tint={tint}
+                onSeek={(positionMs) =>
+                  sendAction({ type: "seek", payload: { positionMs } })
+                }
+              />
+
+              <div className="min-h-[2px] flex-1" />
+
+              {/* Transport: shuffle and repeat at the ends, the big
+                  white disc at the centre — the reference's row. */}
+              <div
+                className="flex items-center justify-between"
+                style={NO_DRAG_STYLE}
+                onMouseDown={(e) => e.stopPropagation()}
+              >
+                {modeButton({
+                  label: "Shuffle",
+                  active: state.shuffle,
+                  onClick: () => sendAction({ type: "toggleShuffle" }),
+                  children: <Shuffle size={panel.modeIcon} weight="Bold" />,
+                })}
+                {panelSkipButton("prev")}
+                {panelPlayDisc}
+                {panelSkipButton("next")}
+                {modeButton({
+                  label: state.repeat === "one" ? "Repeat one" : "Repeat",
+                  active: state.repeat !== "off",
+                  onClick: () => sendAction({ type: "cycleRepeat" }),
+                  children:
+                    state.repeat === "one" ? (
+                      <RepeatOne size={panel.modeIcon} weight="Bold" />
+                    ) : (
+                      <Repeat size={panel.modeIcon} weight="Bold" />
+                    ),
+                })}
+              </div>
+
+              <div className="min-h-[2px] flex-1" />
+
+              <VolumePill
+                volume={state.volume}
+                tint={tint}
+                roomy={panel.pillRoomy}
+                trailing={focusButton(26, 14)}
+                onSetVolume={(gain) =>
+                  sendAction({ type: "setVolume", payload: { volume: gain } })
+                }
+                onToggleMute={() => sendAction({ type: "toggleMute" })}
+              />
+            </div>
           </div>
         )}
 

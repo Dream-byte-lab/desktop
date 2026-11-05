@@ -4,9 +4,25 @@ import {
   type PlayerStatus,
   type RepeatMode,
   type PlayerState,
+  type ShuffleMode,
 } from "../store/playerStore";
-import { routeDjCommand } from "@/features/mixer/engine/djCommandRouter";
-import { djSession } from "@/features/mixer/engine/djSession";
+import { routeDjCommand } from "@/features/mixer/liverave/transport";
+import { liveRaveSession } from "@/features/mixer/liverave/session";
+import { useDjState } from "@/features/mixer/liverave/state";
+import { getTasteProfile } from "@/features/mixer/engine/tasteTracker";
+import {
+  maxGuestsFor,
+  smartShuffleOrder,
+  type SmartTrackFacts,
+} from "./smartShuffle";
+import {
+  buildSmartGuests,
+  getSmartFacts,
+  getSmartRecentPlays,
+  noteSmartShufflePlay,
+  prefetchSmartFacts,
+  smartCandidateInputFor,
+} from "./smartShuffleContext";
 import { recordDevicePlay } from "@/features/space";
 import { playerRuntime } from "./playerRuntime";
 import { clampUserVolume } from "./volume";
@@ -347,6 +363,12 @@ class PlayerEngine {
   private consecutiveAutoSkips = 0;
   private consecutiveOfflineSkips = 0;
   private lastPreloadKey: string | null = null;
+  // Smart Shuffle: bumped whenever the queue or mode moves on, so a
+  // guest pass that lands late can tell it belongs to a dead queue.
+  private smartGuestKickToken = 0;
+  private smartSeedCounter = 0;
+  private smartFeatureWasEnabled =
+    usePlayerStore.getState().smartShuffleEnabled;
   private inFlightLyricsPrefetches = new Map<string, Promise<void>>();
 
   constructor() {
@@ -354,13 +376,17 @@ class PlayerEngine {
       // While a DJ session runs, it gets first claim on transport
       // commands; everything else reaches this engine unchanged.
       dispatch: (command) => {
-        if (!routeDjCommand(command, djSession)) {
+        if (!routeDjCommand(command, liveRaveSession)) {
           this.dispatch(command);
         }
       },
     });
 
     if (playerRuntime) {
+      // DJ-session authority (fix2-0119): while the session
+      // runs, the runtime is fully subordinated to it (no
+      // crossfade, no element advance, no element store writes).
+      playerRuntime.sessionLive = () => liveRaveSession.isRunning;
       playerRuntime.onEnded = () => {
         const isRepeatOne = usePlayerStore.getState().repeat === "one";
         this.telemetry.onTrackCompleted(isRepeatOne);
@@ -383,12 +409,25 @@ class PlayerEngine {
       let prevStatus: string = "idle";
       let newTrack = false;
       const unsub = usePlayerStore.subscribe((state) => {
+        // Smart Shuffle's feature switch (Settings → Playback):
+        // disabling the feature while smart mode is selected ends
+        // smart mode through the normal transition — guests are
+        // removed and the queue restored, exactly as switching
+        // shuffle off does (user ruling, 2026-11-05).
+        if (state.smartShuffleEnabled !== this.smartFeatureWasEnabled) {
+          const wasEnabled = this.smartFeatureWasEnabled;
+          this.smartFeatureWasEnabled = state.smartShuffleEnabled;
+          if (wasEnabled && !state.smartShuffleEnabled) {
+            if (state.shuffleMode === "smart") this.setShuffleMode("off");
+          }
+        }
         const trackId = state.currentTrack?.id || null;
         if (trackId !== prevTrackId) {
           prevTrackId = trackId;
           newTrack = true;
           this.lastPreloadKey = null;
           if (state.currentTrack) {
+            noteSmartShufflePlay(state.currentTrack.id);
             this.telemetry.startTrack(
               state.currentTrack,
               state.playbackContext,
@@ -503,8 +542,8 @@ class PlayerEngine {
    * through to this engine untouched. Without this, the session's own
    * decks keep playing underneath the picked track (Note 2).
    */
-  private endDjSessionForPickedTrack(track: Track, queue?: Track[]): void {
-    routeDjCommand({ type: "PLAY_REQUESTED", track, queue }, djSession);
+  private endSessionForPickedTrack(track: Track, queue?: Track[]): void {
+    routeDjCommand({ type: "PLAY_REQUESTED", track, queue }, liveRaveSession);
   }
 
   public async playTrack(
@@ -515,7 +554,7 @@ class PlayerEngine {
     queueIndex?: number,
     preserveQueue?: boolean,
   ): Promise<void> {
-    this.endDjSessionForPickedTrack(track, queue);
+    this.endSessionForPickedTrack(track, queue);
     const store = usePlayerStore.getState();
     const nextQueue = this.normalizeQueue(queue ?? [track], track);
     const nextIndex =
@@ -548,17 +587,35 @@ class PlayerEngine {
 
     if (!isSelectingFromCurrentQueue) {
       this.masterPlaylist = [...nextQueue];
+      // A new queue is a new set: any guests belonged to the old
+      // one, and any guest pass still in flight is stale.
+      store.setSmartGuestIds([]);
+      this.smartGuestKickToken += 1;
     }
 
+    let kickSmartGuestsAfter = false;
     if (!isSelectingFromCurrentQueue && store.shuffle && nextQueue.length > 1) {
       const played = nextQueue.slice(0, nextIndex);
       const selectedTrackItem = nextQueue[nextIndex] ?? track;
       const upcoming = nextQueue.slice(nextIndex + 1);
 
       this.originalUpcomingQueue = [...upcoming];
-      const shuffledUpcoming = shuffleArray(upcoming);
-
-      finalQueue = [...played, selectedTrackItem, ...shuffledUpcoming];
+      if (this.smartModeOn() && !this.djSequencingOwnsOrder()) {
+        // Smart Shuffle orders the upcoming run; the picked track
+        // stays pinned at its slot exactly as the dice roll kept
+        // it. (With DJ intent on, the queue keeps the legacy roll:
+        // the brain sequences the set itself, through the pool —
+        // see setShuffleMode.)
+        finalQueue = [
+          ...played,
+          selectedTrackItem,
+          ...this.runSmartOrder(selectedTrackItem, upcoming),
+        ];
+        kickSmartGuestsAfter = true;
+      } else {
+        const shuffledUpcoming = shuffleArray(upcoming);
+        finalQueue = [...played, selectedTrackItem, ...shuffledUpcoming];
+      }
       finalIndex = nextIndex;
     } else if (!isSelectingFromCurrentQueue) {
       this.originalUpcomingQueue = [];
@@ -571,6 +628,7 @@ class PlayerEngine {
     store.setPosition(0);
     store.setDuration(selectedTrack.durationMs ?? 0);
     store.setStatus("loading", null);
+    if (kickSmartGuestsAfter) this.kickSmartGuests();
 
     if (playerRuntime) {
       void playerRuntime.loadAndPlay(selectedTrack);
@@ -597,16 +655,21 @@ class PlayerEngine {
         ? startIndex
         : Math.floor(Math.random() * tracks.length);
     const seedTrack = tracks[seedIndex];
-    this.endDjSessionForPickedTrack(seedTrack, tracks);
+    this.endSessionForPickedTrack(seedTrack, tracks);
     const remaining = [
       ...tracks.slice(0, seedIndex),
       ...tracks.slice(seedIndex + 1),
     ];
-    const shuffledRemaining = shuffleArray(remaining);
-    const finalQueue = [seedTrack, ...shuffledRemaining];
+    const useSmartOrder = this.smartModeOn() && !this.djSequencingOwnsOrder();
+    const orderedRemaining = useSmartOrder
+      ? this.runSmartOrder(seedTrack, remaining)
+      : shuffleArray(remaining);
+    const finalQueue = [seedTrack, ...orderedRemaining];
 
     this.masterPlaylist = [...tracks];
     this.originalUpcomingQueue = [...remaining];
+    store.setSmartGuestIds([]);
+    this.smartGuestKickToken += 1;
 
     store.setShuffle(true);
     if (context !== undefined) {
@@ -625,6 +688,7 @@ class PlayerEngine {
     store.setPosition(0);
     store.setDuration(seedTrack.durationMs ?? 0);
     store.setStatus("loading", null);
+    if (useSmartOrder) this.kickSmartGuests();
 
     if (playerRuntime) {
       void playerRuntime.loadAndPlay(seedTrack);
@@ -635,7 +699,7 @@ class PlayerEngine {
 
   public async startRadioStation(track: Track): Promise<void> {
     if (isLocalTrackId(track.id)) return;
-    this.endDjSessionForPickedTrack(track, [track]);
+    this.endSessionForPickedTrack(track, [track]);
     const store = usePlayerStore.getState();
     this.sessionId += 1;
     const mySession = this.sessionId;
@@ -649,6 +713,8 @@ class PlayerEngine {
     store.setPlaybackContextCover(track.coverUrl ?? null);
     store.setQueue([track]);
     this.originalUpcomingQueue = [];
+    store.setSmartGuestIds([]);
+    this.smartGuestKickToken += 1;
 
     store.setCurrentTrack(track, 0);
     store.setPosition(0);
@@ -673,8 +739,11 @@ class PlayerEngine {
         if (latestStore.shuffle) {
           const upcoming = additions;
           this.originalUpcomingQueue = [...upcoming];
-          const shuffledUpcoming = shuffleArray(upcoming);
-          latestStore.setQueue([track, ...shuffledUpcoming]);
+          const orderedUpcoming =
+            this.smartModeOn() && !this.djSequencingOwnsOrder()
+              ? this.runSmartOrder(track, upcoming)
+              : shuffleArray(upcoming);
+          latestStore.setQueue([track, ...orderedUpcoming]);
         }
         const sample = additions
           .slice(0, 3)
@@ -938,34 +1007,271 @@ class PlayerEngine {
     usePlayerStore.getState().setRepeat(mode);
   }
 
+  /**
+   * The legacy boolean seam, kept for every caller that only knows
+   * on/off (the touch bar, older surfaces): on means the plain
+   * roll when coming from off, and never downgrades a smart
+   * selection already in force; off is the full off transition.
+   */
   public setShuffle(enabled: boolean): void {
     const store = usePlayerStore.getState();
     if (store.shuffle === enabled) return;
-    store.setShuffle(enabled);
+    this.setShuffleMode(enabled ? "plain" : "off");
+  }
 
-    const { queue, currentIndex } = store;
-    if (queue.length > 0 && currentIndex >= 0) {
-      const played = queue.slice(0, currentIndex);
-      const current = queue[currentIndex];
-      const upcoming = queue.slice(currentIndex + 1);
-
-      if (enabled) {
-        this.originalUpcomingQueue = [...upcoming];
-        const shuffledUpcoming = shuffleArray(upcoming);
-        store.setQueue([...played, current, ...shuffledUpcoming]);
-      } else {
-        const referenceList =
-          this.masterPlaylist.length > 0
-            ? this.masterPlaylist
-            : this.originalUpcomingQueue;
-        const unshuffledUpcoming = restoreOriginalRelativeOrder(
-          upcoming,
-          referenceList,
-        );
-        store.setQueue([...played, current, ...unshuffledUpcoming]);
-        this.originalUpcomingQueue = [];
-      }
+  /**
+   * Smart Shuffle's activation rule (user ruling, 2026-11-05):
+   * the feature — its ordering AND its guests — lives only in
+   * smart mode. With smart on, the DJ sequences THROUGH Smart
+   * Shuffle: the session starts from this queue, so the guests
+   * admitted into it are the brain's candidate pool beside the
+   * playlist. With smart off (or the feature disabled in
+   * Settings), the DJ is restricted to the playlist only —
+   * Addendum A, restored exactly — and leaving smart mode removes
+   * the guests and restores the queue as plain playback had it.
+   *
+   * Ordering itself is a plain-playback act: while DJ intent is
+   * on, queue builds keep the legacy roll and the brain does the
+   * sequencing; the smart order shapes what plain playback plays
+   * and what the listener sees queued.
+   */
+  public setShuffleMode(mode: ShuffleMode): void {
+    const store = usePlayerStore.getState();
+    if (mode === "smart" && !store.smartShuffleEnabled) mode = "plain";
+    if (store.shuffleMode === mode) {
+      // Re-selecting smart is the re-roll: a fresh order, fresh seed.
+      if (mode === "smart") this.rebuildSmartUpcoming();
+      return;
     }
+    store.setShuffleMode(mode);
+    this.applyShuffleModeToQueue(mode);
+  }
+
+  /** The player controls' cycle: off → smart → plain → off. */
+  public cycleShuffleMode(): void {
+    const store = usePlayerStore.getState();
+    const modes: ShuffleMode[] = store.smartShuffleEnabled
+      ? ["off", "smart", "plain"]
+      : ["off", "plain"];
+    const index = modes.indexOf(store.shuffleMode);
+    this.setShuffleMode(modes[(index + 1) % modes.length]);
+  }
+
+  private applyShuffleModeToQueue(mode: ShuffleMode): void {
+    const store = usePlayerStore.getState();
+    this.smartGuestKickToken += 1;
+    const { queue, currentIndex } = store;
+    if (queue.length === 0 || currentIndex < 0 || !queue[currentIndex]) {
+      if (mode !== "smart") store.setSmartGuestIds([]);
+      return;
+    }
+    const played = queue.slice(0, currentIndex);
+    const current = queue[currentIndex];
+    const guestIds = new Set(store.smartGuestIds);
+    const playlistUpcoming = queue
+      .slice(currentIndex + 1)
+      .filter((track) => !guestIds.has(track.id));
+
+    if (mode === "off") {
+      const referenceList =
+        this.masterPlaylist.length > 0
+          ? this.masterPlaylist
+          : this.originalUpcomingQueue;
+      const unshuffledUpcoming = restoreOriginalRelativeOrder(
+        playlistUpcoming,
+        referenceList,
+      );
+      store.setQueue([...played, current, ...unshuffledUpcoming]);
+      this.originalUpcomingQueue = [];
+      store.setSmartGuestIds([]);
+      return;
+    }
+
+    this.originalUpcomingQueue = [...playlistUpcoming];
+    store.setSmartGuestIds([]);
+    if (mode === "plain") {
+      const shuffledUpcoming = shuffleArray(playlistUpcoming);
+      store.setQueue([...played, current, ...shuffledUpcoming]);
+    } else {
+      // Under DJ intent (or a running session) the brain owns the
+      // sequence: the queue keeps the playlist's natural order and
+      // Smart Shuffle's contribution is the pool — the guests the
+      // pass below admits into it.
+      const orderedUpcoming = this.djSequencingOwnsOrder()
+        ? restoreOriginalRelativeOrder(
+            playlistUpcoming,
+            this.masterPlaylist.length > 0
+              ? this.masterPlaylist
+              : this.originalUpcomingQueue,
+          )
+        : this.runSmartOrder(current, playlistUpcoming);
+      store.setQueue([...played, current, ...orderedUpcoming]);
+      this.kickSmartGuests();
+    }
+  }
+
+  /** The re-roll: a fresh smart order (and a fresh guest pass). */
+  private rebuildSmartUpcoming(): void {
+    const store = usePlayerStore.getState();
+    this.smartGuestKickToken += 1;
+    const { queue, currentIndex } = store;
+    if (queue.length === 0 || currentIndex < 0 || !queue[currentIndex]) return;
+    const played = queue.slice(0, currentIndex);
+    const current = queue[currentIndex];
+    const guestIds = new Set(store.smartGuestIds);
+    const playlistUpcoming = queue
+      .slice(currentIndex + 1)
+      .filter((track) => !guestIds.has(track.id));
+    // The restore basis stays the playlist's natural order, never
+    // the smart order itself.
+    const referenceList =
+      this.masterPlaylist.length > 0
+        ? this.masterPlaylist
+        : this.originalUpcomingQueue;
+    this.originalUpcomingQueue = restoreOriginalRelativeOrder(
+      playlistUpcoming,
+      referenceList,
+    );
+    store.setSmartGuestIds([]);
+    const orderedUpcoming = this.djSequencingOwnsOrder()
+      ? this.originalUpcomingQueue
+      : this.runSmartOrder(current, playlistUpcoming);
+    store.setQueue([...played, current, ...orderedUpcoming]);
+    this.kickSmartGuests();
+  }
+
+  private smartModeOn(): boolean {
+    const state = usePlayerStore.getState();
+    return state.shuffleMode === "smart" && state.smartShuffleEnabled;
+  }
+
+  /**
+   * Whether liveRave's brain currently owns sequencing — DJ
+   * intent is on, or a session is already running. While it does,
+   * Smart Shuffle never re-orders the queue (that would fight the
+   * brain); it only widens the pool with admitted guests.
+   */
+  private djSequencingOwnsOrder(): boolean {
+    return useDjState.getState().intent || liveRaveSession.isRunning;
+  }
+
+  private nextSmartSeed(): number {
+    this.smartSeedCounter += 1;
+    return (Date.now() ^ (this.smartSeedCounter * 0x9e3779b9)) >>> 0;
+  }
+
+  /**
+   * Runs the pure ordering over playlist tracks plus any admitted
+   * guests, anchored at the playing track. Facts come from the
+   * session cache only; a prefetch is kicked so later rolls and
+   * the guest pass see more of the library's analyses.
+   */
+  private runSmartOrder(
+    current: Track | null,
+    playlistUpcoming: readonly Track[],
+    guests: readonly Track[] = [],
+  ): Track[] {
+    const pairs = [
+      ...playlistUpcoming.map((track) => ({
+        track,
+        input: smartCandidateInputFor(track),
+      })),
+      ...guests.map((track) => ({
+        track,
+        input: smartCandidateInputFor(track, true),
+      })),
+    ];
+    const factsById = new Map<string, SmartTrackFacts>();
+    for (const { track } of pairs) {
+      const facts = getSmartFacts(track.id);
+      if (facts) factsById.set(track.id, facts);
+    }
+    void prefetchSmartFacts(playlistUpcoming);
+    const orderedInputs = smartShuffleOrder({
+      current: current ? smartCandidateInputFor(current) : null,
+      currentFacts: current ? getSmartFacts(current.id) : null,
+      candidates: pairs.map((pair) => pair.input),
+      factsById,
+      profile: getTasteProfile(),
+      nowMs: Date.now(),
+      recentPlays: getSmartRecentPlays(),
+      seed: this.nextSmartSeed(),
+    });
+    const trackByInput = new Map(pairs.map((pair) => [pair.input, pair.track]));
+    return orderedInputs
+      .map((input) => trackByInput.get(input))
+      .filter((track): track is Track => track !== undefined);
+  }
+
+  /**
+   * The guest pass: rails → admission → weave. Async and heavily
+   * guarded — it applies only if the queue it was kicked for is
+   * still the queue being played (same mode, same current track
+   * and index), and it fails silently: guests are an enhancement,
+   * never a dependency of playback.
+   */
+  private kickSmartGuests(): void {
+    const store = usePlayerStore.getState();
+    const currentTrack = store.currentTrack;
+    const currentIndex = store.currentIndex;
+    if (!this.smartModeOn() || !currentTrack || currentIndex < 0) return;
+    const guestIds = new Set(store.smartGuestIds);
+    const playlistUpcomingCount = store.queue
+      .slice(currentIndex + 1)
+      .filter((track) => !guestIds.has(track.id)).length;
+    const maxGuests = maxGuestsFor(playlistUpcomingCount);
+    if (maxGuests <= 0) return;
+    const playlistBody =
+      this.masterPlaylist.length > 0
+        ? [...this.masterPlaylist]
+        : [...store.queue];
+    const token = ++this.smartGuestKickToken;
+
+    void (async () => {
+      try {
+        const guests = await buildSmartGuests({
+          currentTrack,
+          playlistTracks: playlistBody,
+          maxGuests,
+          nowMs: Date.now(),
+        });
+        if (guests.length === 0) return;
+        if (token !== this.smartGuestKickToken) return;
+        const live = usePlayerStore.getState();
+        if (!this.smartModeOn()) return;
+        if (
+          live.currentTrack?.id !== currentTrack.id ||
+          live.currentIndex !== currentIndex
+        ) {
+          return;
+        }
+        const liveGuestIds = new Set(live.smartGuestIds);
+        const liveQueueIds = new Set(live.queue.map((track) => track.id));
+        const freshGuests = guests.filter(
+          (track) => !liveQueueIds.has(track.id),
+        );
+        if (freshGuests.length === 0) return;
+        const played = live.queue.slice(0, live.currentIndex + 1);
+        const livePlaylistUpcoming = live.queue
+          .slice(live.currentIndex + 1)
+          .filter((track) => !liveGuestIds.has(track.id));
+        const cappedGuests = freshGuests.slice(
+          0,
+          maxGuestsFor(livePlaylistUpcoming.length),
+        );
+        if (cappedGuests.length === 0) return;
+        const woven = this.runSmartOrder(
+          live.currentTrack,
+          livePlaylistUpcoming,
+          cappedGuests,
+        );
+        live.setQueue([...played, ...woven]);
+        live.setSmartGuestIds(cappedGuests.map((track) => track.id));
+        this.preloadNextTrack(usePlayerStore.getState());
+      } catch {
+        // Guests never break playback: a failed pass is no pass.
+      }
+    })();
   }
 
   public seek(positionMs: number, autoPlay: boolean = false): void {
@@ -1069,7 +1375,7 @@ class PlayerEngine {
    * Explicit sign-out is unaffected: logout calls stopAndClear directly.
    */
   public hasActivePlayback(): boolean {
-    if (djSession.isRunning) return true;
+    if (liveRaveSession.isRunning) return true;
     const state = usePlayerStore.getState();
     return state.currentTrack !== null && state.status !== "idle";
   }
@@ -1088,6 +1394,7 @@ class PlayerEngine {
     this.currentLyricsTrackId = null;
     this.masterPlaylist = [];
     this.originalUpcomingQueue = [];
+    this.smartGuestKickToken += 1;
     this.lastPreloadKey = null;
     this.consecutiveAutoSkips = 0;
     this.consecutiveOfflineSkips = 0;
@@ -1100,6 +1407,8 @@ class PlayerEngine {
 
   public clearQueue(): void {
     usePlayerStore.getState().clearQueue();
+    usePlayerStore.getState().setSmartGuestIds([]);
+    this.smartGuestKickToken += 1;
     this.masterPlaylist = [];
     this.originalUpcomingQueue = [];
   }
@@ -1158,6 +1467,11 @@ class PlayerEngine {
     store.setQueue(queue);
     if (index < store.currentIndex) {
       store.setCurrentTrack(store.currentTrack, store.currentIndex - 1);
+    }
+    if (store.smartGuestIds.includes(track.id)) {
+      store.setSmartGuestIds(
+        store.smartGuestIds.filter((id) => id !== track.id),
+      );
     }
     const after = usePlayerStore.getState();
     this.preloadNextTrack(after);

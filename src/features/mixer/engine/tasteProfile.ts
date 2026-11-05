@@ -198,7 +198,7 @@ export function topArtists(
 // DJ-history evidence
 // ---------------------------------------------------------------------
 
-/** The join-shaped facts this module needs (joinHistory's record). */
+/** The join-shaped facts this module needs (one performed join). */
 export interface JoinEvidence {
   /** Audio fingerprints; null when a side carried none — skipped. */
   aAudioHash: string | null;

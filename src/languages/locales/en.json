@@ -23,7 +23,22 @@
     "show_less": "Show less",
     "about_artist": "About",
     "aka": "Also known as",
-    "genius_profile": "Genius Profile"
+    "genius_profile": "Genius Profile",
+    "discography": "Discography",
+    "verified_artist": "Verified Artist",
+    "follow": "Follow",
+    "following": "Following",
+    "liked_songs": "Liked Songs",
+    "liked_songs_by": "By {name}",
+    "liked_songs_detail": "You've liked {count} songs",
+    "liked_songs_detail_one": "You've liked 1 song",
+    "fans_also_like": "Fans also like",
+    "similar_artists": "Similar artists",
+    "appears_on": "Appears On",
+    "latest_release": "Latest release",
+    "release_album": "Album",
+    "release_single": "Single",
+    "release_ep": "EP"
   },
   "collection": {
     "unknown_album": "Unknown Album",
@@ -506,6 +521,9 @@
     "clear_queue": "Clear queue",
     "shuffle_on": "Shuffle on",
     "shuffle_off": "Shuffle off",
+    "shuffle_smart": "Smart Shuffle on",
+    "smart_guest": "Guest",
+    "smart_guest_hint": "Added by Smart Shuffle — not part of this playlist",
     "save": "Save",
     "home": "In development",
     "home_subtitle": "Use search to listen to music",
@@ -745,6 +763,10 @@
     },
     "playback": {
       "description": "Queue behavior, click actions and audio output.",
+      "smart_shuffle": {
+        "title": "Smart Shuffle",
+        "description": "Shuffle that orders your playlist by your taste, flow and variety instead of a dice roll. While Smart Shuffle is on, a few recommended songs that earn their place can join the queue as labelled guests — never more than one in four — and the DJ may draw from those guests too. Turn this off and shuffle is the plain roll again."
+      },
       "keep_playing_screen_off": {
         "title": "Keep playing when the screen turns off",
         "description": "While music is playing or a DJ session is running, Linerave asks the system not to suspend the app, so playback continues after the screen turns off. This cannot override sleep you start yourself, or a lid-close set to sleep in your system's power settings."
@@ -1428,7 +1450,12 @@
       "title": "Your DJ sets",
       "joins_one": "{count} join",
       "joins_plural": "{count} joins",
-      "grade": "Average transition grade {percent}%"
+      "byHand_one": "{count} by hand",
+      "byHand_plural": "{count} by hand",
+      "fallbacks_one": "{count} fallback",
+      "fallbacks_plural": "{count} fallbacks",
+      "degraded_one": "{count} join on untrusted evidence",
+      "degraded_plural": "{count} joins on untrusted evidence"
     },
     "guest": {
       "body": "You're listening as a guest, so there's no account history to show. Play counts and listening time begin with sign-in.",
@@ -1458,51 +1485,6 @@
       "moreFailed": "More history couldn't be loaded.",
       "boundNote": "Older plays aren't loaded — this view reaches back about 13 months.",
       "endNote": "That's the start of your history here."
-    }
-  },
-  "dj": {
-    "stage": {
-      "control": "Control",
-      "level": {
-        "autonomous": "Fully autonomous",
-        "assisted": "Assisted",
-        "manual": "Manual"
-      },
-      "levelNote": {
-        "autonomous": "The DJ authors and performs every join.",
-        "assisted": "The DJ performs — and whatever your hands grab (EQ, filter, FX sends) stays yours through the next joins.",
-        "manual": "The brain stops authoring. Your hands rule the decks; the set still never goes silent underneath you."
-      },
-      "tempoBias": {
-        "note": "Tempo bias — what the planner believes this deck's tempo is; joins are authored against it."
-      },
-      "loop": {
-        "arm": "Loop from here",
-        "release": "Looping {beats} beats — release"
-      },
-      "roll": "Roll",
-      "scratch": "Scratch",
-      "move": {
-        "brake": "Brake",
-        "vinylStop": "Vinyl stop",
-        "spinback": "Spinback",
-        "baby": "Baby",
-        "chirp": "Chirp",
-        "transformer": "Transformer",
-        "flare": "Flare",
-        "crab": "Crab"
-      },
-      "reset": "Reset",
-      "refused": {
-        "move": "That move can't be performed right now.",
-        "loop": "That loop can't be armed right now.",
-        "noPlayhead": "No playhead to loop from on this deck."
-      },
-      "deckEmpty": "This deck holds no track — a prepared track waits in memory, not on the deck, until a join performs it here.",
-      "levelLabel": {
-        "assisted": "Assisted — the brain drives, your grabs hold",
-        "manual": "Manual — your hands rule the decks"
-      }
     }
   },
   "updater": {

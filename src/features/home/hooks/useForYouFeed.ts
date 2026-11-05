@@ -5,7 +5,6 @@ import { loadWithRetry, useSessionOwner } from "./sessionAwareLoad";
 import { freshFor, useCachedResource } from "@/shared/cache/useCachedResource";
 import { useLikedTracks, usePlaylistsList } from "@/features/library/hooks";
 import { labelsForTrack } from "@/features/genres/trackGenres";
-import { linerDb } from "@/shared/storage";
 import { getTasteProfile } from "@/features/mixer/engine/tasteTracker";
 import {
   decayProfile,
@@ -13,10 +12,9 @@ import {
   topArtists,
   type TasteProfile,
 } from "@/features/mixer/engine/tasteProfile";
-import {
-  ANALYSIS_VERSION,
-  type TrackAnalysis,
-} from "@/features/mixer/engine/analyseTrack";
+import { ANALYSIS_VERSION } from "@/features/mixer/liverave/analyse";
+import type { TrackRead } from "@/features/mixer/liverave/facts";
+import { listReads, listTrackHashes } from "@/features/mixer/liverave/storage";
 import {
   applyDailySnapshot,
   buildBecauseRows,
@@ -210,77 +208,95 @@ function clamp01(value: number): number {
 }
 
 /**
- * Extracts the feed's coarse facts from a stored analysis record,
- * or returns null when the record cannot be trusted for even that.
+ * Extracts the feed's coarse facts from one of the new engine's
+ * stored reads (a TrackRead), or returns null when the read cannot
+ * be trusted for even that.
  *
- * HONESTY NOTE — why this does NOT go through getCachedAnalysis:
- * the engine's getCachedAnalysis additionally demands the audio
- * fingerprint, which only decoded audio can provide; the feed
- * cannot decode audio, so it reads the store record directly here
- * instead. That is a deliberately weaker trust rule — the outer and
- * inner analysis versions must both match ANALYSIS_VERSION and the
- * analysis must still carry its sections and its beat grid (the
- * same structural checks analysisCache makes) — and the facts taken
- * under it are used ONLY for coarse, labelled-derived clustering
- * (mood bands, compatibility hints), never for playback or DJ
- * decisions, where only the fingerprint-checked cache may speak.
+ * HONESTY NOTE — the trust rule and the attribution gap:
+ * the read arrives through storage.ts's listReads(), which applies
+ * the engine's own content gates (envelope fingerprint + version
+ * must agree with the payload, version must be the current
+ * ANALYSIS_VERSION) before anything is served. This function then
+ * re-checks the version and demands the structural evidence this
+ * feed has always required before taking any fact — typed
+ * sections and a beat grid must exist. The facts
+ * are used ONLY for coarse, labelled-derived clustering (mood
+ * bands, compatibility hints), never for playback or DJ decisions.
+ *
+ * Attribution: the new store is content-addressed by audioHash and
+ * a TrackRead carries no track id — by design (design §3.0/§8.1,
+ * identity is the audio, never a track id). The meeting point of
+ * the two identities is the engine's source path: when
+ * liverave/source.ts resolves a player track to decoded audio it
+ * records (trackId → audioHash) in storage.ts's attribution
+ * bridge, and the analysis pass below consults that bridge
+ * (listTrackHashes) to attribute each enumerated read to its
+ * universe track. A track with no bridge entry — its audio was
+ * never resolved by a session on this device — carries null facts,
+ * the same no-facts state this feed has always tolerated for
+ * unanalysed tracks; the degenerate case where a track's own key
+ * IS a read's hash still attributes directly. The field
+ * adaptation itself is exact: every field below is read straight
+ * off the TrackRead.
  */
-export function factsFromAnalysisRecord(
-  record: { analysisVersion: number; analysis: unknown } | null | undefined,
+export function factsFromTrackRead(
+  read: TrackRead | null | undefined,
 ): ForYouTrackFacts | null {
   try {
-    if (!record) return null;
-    if (record.analysisVersion !== ANALYSIS_VERSION) return null;
-    const analysis = record.analysis as TrackAnalysis | null | undefined;
-    if (!analysis) return null;
-    if (analysis.analysisVersion !== ANALYSIS_VERSION) return null;
-    if (!analysis.sections || !analysis.beatMap?.grid) return null;
+    if (!read) return null;
+    if (read.analysisVersion !== ANALYSIS_VERSION) return null;
+    if (!read.sections || read.sections.length === 0) return null;
+    if (!read.grid || !read.grid.beatsMs || read.grid.beatsMs.length === 0) {
+      return null;
+    }
 
-    const bpm =
-      typeof analysis.beatMap.bpm === "number" && analysis.beatMap.bpm > 0
-        ? analysis.beatMap.bpm
-        : null;
+    const bpm = typeof read.bpm === "number" && read.bpm > 0 ? read.bpm : null;
 
     let meanEnergy: number | null = null;
     if (
-      Array.isArray(analysis.energyCurve) &&
-      analysis.energyCurve.length > 0
+      Array.isArray(read.energyCurvePerSec) &&
+      read.energyCurvePerSec.length > 0
     ) {
       let sum = 0;
       let count = 0;
-      for (const entry of analysis.energyCurve) {
-        if (
-          typeof entry?.energy === "number" &&
-          Number.isFinite(entry.energy)
-        ) {
-          sum += entry.energy;
+      for (const value of read.energyCurvePerSec) {
+        if (typeof value === "number" && Number.isFinite(value)) {
+          sum += value;
           count += 1;
         }
       }
       meanEnergy = count > 0 ? sum / count : null;
     }
 
+    // Vocal share: the activity-weighted share of the track the
+    // graded vocal windows cover — the new read's analogue of the
+    // old vocal-ranges share.
     let vocalShare: number | null = null;
     if (
-      Array.isArray(analysis.vocalRanges) &&
-      typeof analysis.beatMap.durationSec === "number" &&
-      analysis.beatMap.durationSec > 0
+      Array.isArray(read.vocalActivity) &&
+      read.vocalActivity.length > 0 &&
+      typeof read.durationSec === "number" &&
+      read.durationSec > 0
     ) {
-      let vocalSec = 0;
-      for (const range of analysis.vocalRanges) {
+      let vocalMs = 0;
+      for (const window of read.vocalActivity) {
         if (
-          typeof range?.startSec === "number" &&
-          typeof range?.endSec === "number" &&
-          Number.isFinite(range.startSec) &&
-          Number.isFinite(range.endSec)
+          typeof window?.startMs === "number" &&
+          typeof window?.endMs === "number" &&
+          Number.isFinite(window.startMs) &&
+          Number.isFinite(window.endMs) &&
+          typeof window?.activity === "number" &&
+          Number.isFinite(window.activity)
         ) {
-          vocalSec += Math.max(0, range.endSec - range.startSec);
+          vocalMs +=
+            Math.max(0, window.endMs - window.startMs) *
+            clamp01(window.activity);
         }
       }
-      vocalShare = clamp01(vocalSec / analysis.beatMap.durationSec);
+      vocalShare = clamp01(vocalMs / (read.durationSec * 1000));
     }
 
-    const camelot = analysis.key?.camelot;
+    const camelot = read.key?.camelot;
     return {
       bpm,
       meanEnergy,
@@ -364,9 +380,16 @@ export function useForYouCandidates(): ForYouCandidatesData {
   }, [universe]);
 
   // Analysis pass: an effect keyed by the sorted universe id list.
-  // Each stored record is read directly (see the honesty note on
-  // factsFromAnalysisRecord) and reduced to coarse facts; a failed
-  // read is a null fact, never a throw.
+  // The new engine's reads are enumerated once (listReads applies
+  // the store's version/fingerprint gates) and reduced to coarse
+  // facts per hash; the attribution bridge (listTrackHashes — the
+  // pairs source.ts recorded when it resolved each track's audio)
+  // then attributes those facts to universe tracks. Bridge first,
+  // then the degenerate direct case (a track key that IS a hash).
+  // No bridge entry means null facts, unchanged. Each enumeration
+  // fails independently: a failed bridge loses only attributions,
+  // a failed read enumeration is null facts for everyone, and
+  // neither is ever a throw.
   const [analysisState, setAnalysisState] = useState<{
     key: string;
     facts: ReadonlyMap<string, ForYouTrackFacts | null>;
@@ -377,19 +400,34 @@ export function useForYouCandidates(): ForYouCandidatesData {
     let alive = true;
     const key = universeKey;
     void (async () => {
-      const facts = new Map<string, ForYouTrackFacts | null>();
-      for (const id of sortedUniverseIds) {
-        if (!alive) return;
-        let factsForTrack: ForYouTrackFacts | null = null;
-        try {
-          const record = await linerDb.getAnalysis(id);
-          factsForTrack = factsFromAnalysisRecord(record);
-        } catch {
-          factsForTrack = null;
+      const factsByHash = new Map<string, ForYouTrackFacts | null>();
+      try {
+        const reads = await listReads();
+        for (const read of reads) {
+          if (read?.audioHash) {
+            factsByHash.set(read.audioHash, factsFromTrackRead(read));
+          }
         }
-        facts.set(id, factsForTrack);
+      } catch {
+        // Enumeration failed: every track keeps null facts below.
+      }
+      let hashByTrack: ReadonlyMap<string, string> = new Map();
+      try {
+        hashByTrack = await listTrackHashes();
+      } catch {
+        // Bridge unreadable: attributions are lost, reads are not.
       }
       if (!alive) return;
+      const facts = new Map<string, ForYouTrackFacts | null>();
+      for (const id of sortedUniverseIds) {
+        const bridgedHash = hashByTrack.get(id);
+        facts.set(
+          id,
+          (bridgedHash ? factsByHash.get(bridgedHash) : undefined) ??
+            factsByHash.get(id) ??
+            null,
+        );
+      }
       setAnalysisState({ key, facts });
     })();
     return () => {

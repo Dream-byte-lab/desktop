@@ -25,6 +25,10 @@ export interface OverlayTrackInfo {
   durationMs?: number;
 }
 
+/** Mirrors the player store's RepeatMode (the overlay bundle cannot
+ *  import the player tree; keep the values in step). */
+export type OverlayRepeatMode = "off" | "all" | "one";
+
 export interface OverlayStatePayload {
   status: "playing" | "paused" | "loading" | "buffering" | "idle" | "error";
   track: OverlayTrackInfo | null;
@@ -34,6 +38,17 @@ export interface OverlayStatePayload {
   durationMs: number;
   volume: number;
   isLiked: boolean;
+  /** The player store's real shuffle switch (mirrors the main player). */
+  shuffle: boolean;
+  /** The player store's real repeat mode. */
+  repeat: OverlayRepeatMode;
+  /**
+   * Honest playback-context label for the card's eyebrow — the source
+   * the main window knows the queue came from ("Playing from album",
+   * a playlist's own title, track radio), or null when no source is
+   * known, in which case the card shows a neutral "Now playing".
+   */
+  contextLabel: string | null;
 }
 
 export interface OverlayAction {
@@ -47,6 +62,8 @@ export interface OverlayAction {
     | "seekBy"
     | "toggleMute"
     | "like"
+    | "toggleShuffle"
+    | "cycleRepeat"
     | "volumeUp"
     | "volumeDown"
     | "setVolume"

@@ -355,6 +355,12 @@ export default function SearchPage() {
   return (
     <div className="relative h-full w-full overflow-y-auto overflow-x-hidden bg-transparent pt-(--page-inset-top) pb-(--page-inset-bottom)">
       <div className="flex w-full flex-col gap-[20px] px-[28px] pt-[10px]">
+        {/* The page title, as the reference composes it: a large
+            "Search" heading over the query field. */}
+        <h1 className="m-0 text-[40px] leading-[1.1] font-[700] tracking-tight text-text-primary">
+          {t("common.search")}
+        </h1>
+
         {/* The query bar — reference 04: one wide, fully-rounded
             field spanning the content width; magnifier, the query,
             a clear ✕ and the round filter button at its right. */}
@@ -543,33 +549,9 @@ export default function SearchPage() {
               </div>
             ) : showResults ? (
               <>
-                {blocks.tracks.length > 0 ? (
-                  <SectionBlock title={t("search.songs")}>
-                    <div className="flex flex-col gap-[6px]">
-                      {blocks.tracks.map((row) => {
-                        const durationMs = row.durationMs ?? row.duration_ms;
-                        return (
-                          <SongCardWithMenu
-                            key={row.id}
-                            id={row.id}
-                            title={row.title || row.name || ""}
-                            artistId={row.artistId ?? row.artist_id}
-                            artistList={row.artistList}
-                            artists={row.artists || ""}
-                            coverUrl={row.coverUrl || ""}
-                            explicit={row.explicit}
-                            duration={formatSearchDuration(durationMs)}
-                            durationMs={durationMs}
-                            searchType="track"
-                            onPlay={() => handlePlayTrack(row)}
-                            onNavigate={() => handlePlayTrack(row)}
-                          />
-                        );
-                      })}
-                    </div>
-                  </SectionBlock>
-                ) : null}
-
+                {/* Section order follows the reference composition:
+                    the artist block first, then the albums grid,
+                    then songs and playlists below. */}
                 {blocks.artists.length > 0 ? (
                   <SectionBlock title={t("search.artists")}>
                     <SearchHeroArtist
@@ -610,6 +592,33 @@ export default function SearchPage() {
                               }
                             />
                           </div>
+                        );
+                      })}
+                    </div>
+                  </SectionBlock>
+                ) : null}
+
+                {blocks.tracks.length > 0 ? (
+                  <SectionBlock title={t("search.songs")}>
+                    <div className="flex flex-col gap-[6px]">
+                      {blocks.tracks.map((row) => {
+                        const durationMs = row.durationMs ?? row.duration_ms;
+                        return (
+                          <SongCardWithMenu
+                            key={row.id}
+                            id={row.id}
+                            title={row.title || row.name || ""}
+                            artistId={row.artistId ?? row.artist_id}
+                            artistList={row.artistList}
+                            artists={row.artists || ""}
+                            coverUrl={row.coverUrl || ""}
+                            explicit={row.explicit}
+                            duration={formatSearchDuration(durationMs)}
+                            durationMs={durationMs}
+                            searchType="track"
+                            onPlay={() => handlePlayTrack(row)}
+                            onNavigate={() => handlePlayTrack(row)}
+                          />
                         );
                       })}
                     </div>

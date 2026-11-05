@@ -183,13 +183,27 @@ export interface DayBucket {
 // The aggregate
 // ------------------------------------------------------------------
 
-/** The DJ block's input: performed-join facts, precomputed by the
- * joins reader. Null when no joins records exist at all. */
+/**
+ * The DJ block's input: what the behaviour record honestly holds,
+ * precomputed by the joins reader. Null when no records exist at
+ * all. There is no evaluation grade in the record and none is
+ * reported here — the summary counts outcomes by their recorded
+ * reason: joins the draw performed, joins a person triggered,
+ * fallbacks/degradations by kind, and set-end markers.
+ */
 export interface JoinSummary {
+  /** Joins the autonomous draw performed (reason "performed"). */
   performed: number;
-  graded: number;
-  /** Mean §28 overall grade over graded joins; null when none graded. */
-  averageGrade: number | null;
+  /** Joins a person triggered manually (reason "user-act"). */
+  userAct: number;
+  /** Plain cuts because the drawn track was unprepared. */
+  fallbackUnprepared: number;
+  /** Plain cuts because the drawn recipe failed validation. */
+  fallbackInvalid: number;
+  /** Joins that sounded at rate 1 on untrusted tempo/grid evidence. */
+  degradedUntrusted: number;
+  /** Records that closed a set without a join (reason "set-end"). */
+  setEnd: number;
 }
 
 export type WalkTruncation = "pages" | "events" | "months";

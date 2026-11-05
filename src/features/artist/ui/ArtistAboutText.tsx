@@ -5,7 +5,7 @@ interface ArtistAboutTextProps {
   onShowAll: () => void;
 }
 
-function stripMarkdown(text: string): string {
+export function stripMarkdown(text: string): string {
   return text
     .replace(/(Дискография)(Официальный)/g, "$1\n\n$2")
     .replace(

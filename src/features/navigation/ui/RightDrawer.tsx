@@ -50,6 +50,7 @@ const QueueList = memo(function QueueList({
   playbackContext,
   playbackContextCover,
   scrollContainerRef,
+  guestIds,
 }: {
   queue: any[];
   queueLimit: number;
@@ -57,6 +58,7 @@ const QueueList = memo(function QueueList({
   playbackContext: any;
   playbackContextCover: any;
   scrollContainerRef: React.RefObject<HTMLDivElement | null>;
+  guestIds: string[];
 }) {
   const effectiveLimit = Math.max(
     queueLimit,
@@ -174,6 +176,9 @@ const QueueList = memo(function QueueList({
 
       {visibleQueue.map((item, index) => {
         const isCurrent = index === currentIndex;
+        // Smart Shuffle guests are labelled, never disguised as
+        // playlist members (user ruling, 2026-11-05).
+        const isGuest = guestIds.includes(item.id);
         const isThisDragged = isDragging && index === dragIndex;
         const isRemoving = removingIndex === index;
         const restoringHere = restoring?.index === index;
@@ -252,6 +257,16 @@ const QueueList = memo(function QueueList({
                 ""
               }
               showReorderHandle
+              trailingAction={
+                isGuest ? (
+                  <span
+                    title={t("player.smart_guest_hint")}
+                    className="shrink-0 rounded-full border border-rim px-2 py-[2px] text-[10px] font-medium uppercase tracking-wide text-text-tertiary"
+                  >
+                    {t("player.smart_guest")}
+                  </span>
+                ) : undefined
+              }
               onRemoveFromQueue={
                 index <= currentIndex || removingIndex !== null
                   ? undefined
@@ -432,6 +447,7 @@ function RightDrawer({ onClose }: RightDrawerProps) {
               playbackContext={player.playbackContext}
               playbackContextCover={player.playbackContextCover}
               scrollContainerRef={queueScrollRef}
+              guestIds={player.smartGuestIds}
             />
           ) : (
             <div className="h-full flex items-center justify-center text-text-tertiary text-label">

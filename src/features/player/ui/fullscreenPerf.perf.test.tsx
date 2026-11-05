@@ -2,7 +2,7 @@
 // commit profile.
 //
 // The REAL FullscreenPlayer is mounted with its heavy children
-// stubbed (Kawarp, canvas lyrics, ambient, queue drawer) and the
+// stubbed (Kawarp, ambient, queue drawer) and the
 // REAL player/lyrics stores. React Profiler counts commits while
 // the harness drives the two real position/state flows:
 //  1. playerStore.setPosition at the timeupdate rate (~4 Hz) —
@@ -68,9 +68,6 @@ vi.mock("./KawarpWrapper", () => ({
 }));
 vi.mock("./AmbientLayer", () => ({
   default: () => <div data-testid="ambient" />,
-}));
-vi.mock("./CanvasLyricsView", () => ({
-  CanvasLyricsView: () => <div data-testid="lyrics" />,
 }));
 vi.mock("./PlayerUiElements", () => ({
   PlayerUiElements: () => <div data-testid="ui-elements" />,

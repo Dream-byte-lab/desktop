@@ -80,9 +80,34 @@ export interface ArtistDetails {
   tracks: ApiTrack[];
   albums: ArtistAlbum[];
   singles: ArtistRelease[];
+  /** The catalogue's own similar artists, when it supplies any. */
+  similarArtists?: SimilarArtistItem[];
+  /** Provenance of similarArtists — see SimilarArtistItem. */
+  similarArtistsBasis?: SimilarArtistsBasis;
 }
 
 export type ApiArtistDetails = ArtistDetails;
+
+/**
+ * An artist the catalogue itself puts next to this one. Two
+ * provenances exist, told apart by SimilarArtistsBasis:
+ *  - "fans": the source presented the list as its own
+ *    fans/similar shelf inside the artist payload (YouTube's
+ *    "Fans might also like" carousel) — the entries are the
+ *    source's listener-derived similar artists.
+ *  - "related": derived on the client from the source's own
+ *    related-tracks graph (the tracks its radio/related endpoints
+ *    pair with this artist's songs), ranked by how often each
+ *    artist appears there. Never fan data; the UI labels it
+ *    "Similar artists", never "Fans also like".
+ */
+export interface SimilarArtistItem {
+  id: string;
+  name: string;
+  cover?: Cover;
+}
+
+export type SimilarArtistsBasis = "fans" | "related";
 
 export interface AlbumDetails {
   type: "album";

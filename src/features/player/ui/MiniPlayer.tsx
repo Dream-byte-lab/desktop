@@ -36,7 +36,7 @@ import {
 } from "../engine/volume";
 import { VolumeColumn } from "./VolumeColumn";
 import { DjModeButton } from "@/features/mixer/ui/DjModeButton";
-import { DjProToggle } from "@/features/mixer/ui/DjProView";
+import { BoothToggle } from "@/features/mixer/ui/Booth";
 import { popOutOverlay } from "@/features/overlay";
 import { SpeedPitchPicker } from "./SpeedPitchPicker";
 import { EqualizerPicker } from "./EqualizerPicker";
@@ -810,17 +810,22 @@ function MiniPlayer({
               type="button"
               aria-label="Shuffle"
               title={
-                player.shuffle
-                  ? t("player.shuffle_on")
-                  : t("player.shuffle_off")
+                player.shuffleMode === "smart"
+                  ? t("player.shuffle_smart")
+                  : player.shuffle
+                    ? t("player.shuffle_on")
+                    : t("player.shuffle_off")
               }
-              className={`${iconButtonClass} ${
+              className={`${iconButtonClass} relative ${
                 player.shuffle ? activeToggleClass : ""
               }`}
               onPointerDown={(e) => e.stopPropagation()}
-              onClick={() => playerEngine.setShuffle(!player.shuffle)}
+              onClick={() => playerEngine.cycleShuffleMode()}
             >
               <Shuffle size={18} weight="Outline" />
+              {player.shuffleMode === "smart" && (
+                <span className="absolute top-[3px] right-[3px] h-[5px] w-[5px] rounded-full bg-current" />
+              )}
             </button>
             <button
               type="button"
@@ -1033,7 +1038,7 @@ function MiniPlayer({
                 className={iconButtonClass}
                 activeClassName={activeToggleClass}
               />
-              <DjProToggle
+              <BoothToggle
                 className={iconButtonClass}
                 activeClassName={activeToggleClass}
               />

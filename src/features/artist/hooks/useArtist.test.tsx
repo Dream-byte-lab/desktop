@@ -2,7 +2,7 @@
 import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRoot, type Root } from "react-dom/client";
-import { useArtist } from "./useArtist";
+import { useArtist, artistAudience } from "./useArtist";
 import { api } from "@/shared/api";
 import { queryCache } from "@/shared/cache/queryCache";
 
@@ -75,5 +75,55 @@ describe("useArtist", () => {
       data: { title: "Boards of Canada" },
     });
     expect(api.getArtist).toHaveBeenCalledTimes(1);
+  });
+
+  it("maps the catalogue's similar artists onto the view model", async () => {
+    vi.mocked(api.getArtist).mockResolvedValue({
+      ...artist,
+      similarArtists: [
+        { id: "sim-1", name: "Similar One", cover: { url: "sim.jpg" } },
+        { id: "sim-2", name: "Similar Two" },
+      ],
+      similarArtistsBasis: "fans",
+    } as any);
+
+    await act(async () => {
+      root.render(<Probe id="boc" />);
+    });
+
+    expect(latest?.data?.similarArtists).toEqual([
+      { id: "sim-1", name: "Similar One", coverUrl: "sim.jpg" },
+      { id: "sim-2", name: "Similar Two", coverUrl: "" },
+    ]);
+    expect(latest?.data?.similarArtistsBasis).toBe("fans");
+  });
+
+  it("defaults similar artists to an empty list when the catalogue has none", async () => {
+    await act(async () => {
+      root.render(<Probe id="boc" />);
+    });
+    expect(latest?.data?.similarArtists).toEqual([]);
+    expect(latest?.data?.similarArtistsBasis).toBeUndefined();
+  });
+});
+
+describe("artistAudience", () => {
+  it("extracts the count from the source's monthly figure", () => {
+    expect(
+      artistAudience({ monthlyListeners: "17,682,480 monthly listeners" }),
+    ).toEqual({ kind: "monthly", count: "17,682,480" });
+    expect(artistAudience({ monthlyListeners: "1.2M" })).toEqual({
+      kind: "monthly",
+      count: "1.2M",
+    });
+  });
+
+  it("falls back to the compact follower count, and to nothing", () => {
+    expect(artistAudience({ followers: 1234567 })).toEqual({
+      kind: "followers",
+      count: "1.2M",
+    });
+    expect(artistAudience({})).toBeNull();
+    expect(artistAudience({ followers: 0 })).toBeNull();
   });
 });

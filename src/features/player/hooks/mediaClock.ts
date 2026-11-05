@@ -1,11 +1,11 @@
 import type { LyricsClock } from "@/features/lyrics";
-import { djSession } from "@/features/mixer/engine/djSession";
+import { liveRaveSession } from "@/features/mixer/liverave/session";
 import { usePlayerStore } from "../store/playerStore";
 
 const MAX_CARRY_MS = 100;
 
 // A live DJ session publishes its musical position into the player
-// store on its own 250 ms tick (djSession's TICK_MS). Between ticks
+// store on its own 250 ms tick (the session's SESSION_TICK_MS). Between ticks
 // the session branch below carries from the last store write at
 // rate 1, capped at one tick, so the rendered position stays smooth
 // without ever running ahead of the session.
@@ -37,8 +37,8 @@ export function createMediaClock(): LyricsClock {
       // (Note 28). The session's own clock is the player-store
       // position it publishes every tick, so read that instead.
       // Liveness is the mixer's own predicate, the same one the
-      // player engine arbitrates against (djSession.isRunning).
-      if (djSession.isRunning) {
+      // player engine arbitrates against (liveRaveSession.isRunning).
+      if (liveRaveSession.isRunning) {
         anchor = null;
         const { positionMs, status } = usePlayerStore.getState();
         const frameMs = performance.now();
@@ -75,7 +75,7 @@ export function createMediaClock(): LyricsClock {
       return anchor.mediaMs + carried * anchor.rate;
     },
     playing: () => {
-      if (djSession.isRunning) {
+      if (liveRaveSession.isRunning) {
         return usePlayerStore.getState().status === "playing";
       }
       const audio = audioElement();

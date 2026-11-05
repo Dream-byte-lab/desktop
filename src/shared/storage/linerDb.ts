@@ -60,11 +60,11 @@ export interface CachedArtistRecord {
 }
 
 /**
- * A persisted track analysis (Step 5 analysis v2). The record is keyed
- * by track id and trusted only when BOTH the audio fingerprint and the
- * analysis version match what the caller computed for the audio it
- * actually decoded — the fingerprint discipline lives in the analysis
- * cache module, which is this store's only reader/writer.
+ * A persisted track analysis from the retired DJ engine. The
+ * `analyses` store and its accessors below are orphaned legacy
+ * data: no current code reads or writes them (the live engine
+ * owns its own storage in liverave/storage.ts), and existing
+ * installs may still hold records in this shape.
  */
 export interface CachedAnalysisRecord {
   trackId: string;
@@ -77,12 +77,13 @@ export interface CachedAnalysisRecord {
 }
 
 /**
- * The persisted join history (Step 5 slice S5-3): ONE record holding
- * the session memory's whole log — the joins actually performed,
- * oldest first — so anti-repetition survives restarts. The payload
- * stays `unknown` here, as with analyses: the shape and its
- * validation live in the engine's joinHistory module, this store's
- * only reader/writer.
+ * The persisted join history of the retired DJ engine: ONE record
+ * holding its whole performed-join log. Like `analyses` above,
+ * the `joins` store is orphaned legacy data — no current code
+ * reads or writes it; the live engine's behaviour record lives
+ * in its own storage (liverave/storage.ts, read by space's
+ * joinsReader). The payload stays `unknown` here, as with
+ * analyses.
  */
 export interface CachedJoinLogRecord {
   id: string;
@@ -91,11 +92,9 @@ export interface CachedJoinLogRecord {
 }
 
 /**
- * The record id the join log persists under in the `joins` store.
- * Its shared home is here, beside the store itself (interface
- * slice S2's SEAMS OWED (d)): the engine's joinHistory writes the
- * log under it and the statistics reader reads it — neither side
- * keeps a private copy of the string.
+ * The record id the retired engine's join log persisted under in
+ * the `joins` store. Kept beside the store itself; no current
+ * code reads or writes a record under it.
  */
 export const JOINS_LOG_RECORD_ID = "join-log";
 
