@@ -590,6 +590,72 @@ describe("LiveRavePerformer — stopAll (C4)", () => {
   });
 });
 
+describe("LiveRavePerformer — loadDeck after stopAll (realcheck S1)", () => {
+  it("reopens every dry-path gain stage: stopAll → loadDeck → playDeck leaves no zeroed hop", () => {
+    const ctx = new FakeAudioContext();
+    const performer = newPerformer(ctx);
+    loadBoth(performer, ctx);
+    performer.playDeck("A", 0);
+
+    // The takeover sequence, call for call: stopAll first, the
+    // session restores the master, then each deck is loaded fresh.
+    performer.stopAll();
+    performer.setMasterGain(1);
+    performer.loadDeck("A", {
+      trackId: "a2",
+      buffer: makeBuffer(ctx),
+      facts: factsFor("a2"),
+    });
+    performer.loadDeck("B", {
+      trackId: "b2",
+      buffer: makeBuffer(ctx),
+      facts: factsFor("b2"),
+    });
+    performer.playDeck("A", 0);
+    performer.playDeck("B", 0);
+
+    // A deck's dry chain is gains in series, so a single hop still
+    // at 0 is digital silence no matter how truthfully positions
+    // advance — exactly what realcheck S1 measured on the shipped
+    // build (input and crossfaderGain stayed at 0 after every
+    // takeover because loadDeck never restored them).
+    const dryGainHops: Array<[number, number]> = [
+      [0, 1], // input
+      [1, 1], // scratchGate
+      [2, 1], // preGain
+      [7, 1], // channelGain
+      [8, 1], // fxGate
+      [9, Math.SQRT1_2], // crossfaderGain at the centred fader
+    ];
+    for (const source of ctx.sources.slice(-2)) {
+      for (const [hop, expected] of dryGainHops) {
+        const node = chainNode(source, hop) as FakeGain;
+        expect(node.gain.value).toBeCloseTo(expected);
+      }
+    }
+    expect(ctx.gains[0].gain.value).toBeCloseTo(1);
+  });
+
+  it("re-derives crossfaderGain from the current fader position, not a fixed value", () => {
+    const ctx = new FakeAudioContext();
+    const performer = newPerformer(ctx);
+    loadBoth(performer, ctx);
+    performer.setCrossfader(0.25);
+    performer.stopAll();
+    performer.loadDeck("A", {
+      trackId: "a2",
+      buffer: makeBuffer(ctx),
+      facts: factsFor("a2"),
+    });
+    performer.playDeck("A", 0);
+    const aSource = ctx.sources[ctx.sources.length - 1];
+    const cross = chainNode(aSource, 9) as FakeGain;
+    expect(cross.gain.value).toBeCloseTo(Math.cos(0.25 * (Math.PI / 2)));
+    const input = chainNode(aSource, 0) as FakeGain;
+    expect(input.gain.value).toBeCloseTo(1);
+  });
+});
+
 describe("LiveRavePerformer — transport and manual seams", () => {
   it("position follows the fake clock; pause freezes; seek moves", () => {
     const ctx = new FakeAudioContext();

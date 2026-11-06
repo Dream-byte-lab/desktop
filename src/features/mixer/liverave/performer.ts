@@ -480,6 +480,16 @@ export class LiveRavePerformer {
     deck.eqHigh.gain.value = 0;
     deck.filter.frequency.value = 20_000;
     deck.channelGain.gain.value = 1;
+    // stopAll() also zeroes the two remaining dry-path stages —
+    // `input` (chain hop 0) and `crossfaderGain` (hop 9) — and no
+    // other code path ever raises them again, so a deck loaded
+    // after a stopAll (every takeover does exactly that) played
+    // into two series gains held at 0: positions advanced over
+    // digital silence (realcheck S1). Restore both here, where
+    // their sibling gains already live, so every deck-loading path
+    // (takeover, plain cut, join) reopens the full dry chain.
+    deck.input.gain.value = 1;
+    this.setCrossfader(this.crossfaderValue);
   }
 
   unloadDeck(side: DeckSide): void {
