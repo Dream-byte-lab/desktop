@@ -124,12 +124,17 @@ export function isFxDressed(recipe: JoinRecipe): boolean {
 // Thresholds (stated, with reasons)
 // ---------------------------------------------------------------------
 
-/** Sustained beatmatch rates must sit inside this window (§3.3). */
-export const RATE_FEASIBILITY_MIN = 0.92;
-export const RATE_FEASIBILITY_MAX = 1.08;
-
-/** Distant keys (keyFit compatible = false) cap blend overlaps here. */
-export const DISTANT_KEY_BLEND_CAP_BEATS = 8;
+/**
+ * The feasibility constants are OWNED by canMix.ts (the One
+ * Ruler, wave item 1) and re-exported here so existing imports
+ * keep working — there is one definition, in one place.
+ */
+export {
+  RATE_FEASIBILITY_MAX,
+  RATE_FEASIBILITY_MIN,
+  DISTANT_KEY_BLEND_CAP_BEATS,
+} from "./canMix";
+import { beatmatchProven, DISTANT_KEY_BLEND_CAP_BEATS } from "./canMix";
 
 /** A scratch window must be witnessed THIS quiet (graded mean). */
 export const SCRATCH_VOCAL_MAX = 0.25;
@@ -380,13 +385,15 @@ export function authorCandidates(
   const durationB = factsB.durationMs;
   const minPlayA = factsA.minimumPlayMs ?? 0;
 
-  const ratio = beatmatchRate(bpmA, bpmB);
+  // Pair feasibility is canMix's beatmatch sub-proof — the same
+  // definition the planner and the ladder consult (wave item 1).
+  const { proven: beatmatchedFeasible, ratio } = beatmatchProven(
+    factsA,
+    factsB,
+  );
+  // Read only to word the rejection reason below (the gate itself
+  // is beatmatchProven, never this flag).
   const trustedPair = factsA.beatmatchTrusted && factsB.beatmatchTrusted;
-  const beatmatchedFeasible =
-    trustedPair &&
-    ratio !== null &&
-    ratio >= RATE_FEASIBILITY_MIN &&
-    ratio <= RATE_FEASIBILITY_MAX;
   const matchedRates: JoinRecipe["rates"] = beatmatchedFeasible
     ? { rateA: 1, rateB: ratio as number, beatmatched: true }
     : { rateA: 1, rateB: 1, beatmatched: false };

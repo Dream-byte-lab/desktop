@@ -531,6 +531,19 @@ export function resolveShaping(
   return makeShaping(id, affinities, bends);
 }
 
+/**
+ * A personality's raw affinity table — its weight table as a
+ * Hands module (wave item 6). resolveShaping composes this table
+ * with the slider bends; the Hands layer reads the table directly
+ * so the personality module owns its weights by name.
+ */
+export function personalityAffinityTable(
+  personalityId: PersonalityId,
+): Record<AffinityTarget, number> {
+  const def = PERSONALITIES[personalityId] ?? PERSONALITIES.autonomous;
+  return { ...def.affinities };
+}
+
 /** The identity shaping: autonomous personality, all sliders neutral. */
 export const NEUTRAL_SHAPING: Shaping = resolveShaping(
   "autonomous",

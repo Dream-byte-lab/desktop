@@ -38,18 +38,24 @@
 // exist in the gates themselves.
 
 import { ANALYSIS_VERSION } from "./analyse";
+import type { ShelfState } from "./cooldown";
+import type { TransitionOutcome } from "./ear";
 import type { AnalysisDepth, TrackRead } from "./facts";
 import type { BehaviourRecord, BehaviourReason } from "./memory";
 
 export type { BehaviourRecord, BehaviourReason };
 
 export const LIVERAVE_DB_NAME = "liverave-engine-v1";
-/** v2 adds the trackHashes attribution-bridge store. */
-export const LIVERAVE_DB_VERSION = 2;
+/**
+ * v2 adds the trackHashes attribution-bridge store.
+ * v3 adds the wave's outcomes store (the Ear's persisted
+ * transition history) and shelf store (Cooldown Shelf state).
+ */
+export const LIVERAVE_DB_VERSION = 3;
 export const BEHAVIOUR_CAP = 400;
 
 export type EngineStoreName =
-  "reads" | "pairSets" | "behaviour" | "trackHashes";
+  "reads" | "pairSets" | "behaviour" | "trackHashes" | "outcomes" | "shelf";
 type StorageKey = string | number;
 
 // ---------------------------------------------------------------------
@@ -225,6 +231,12 @@ class IndexedDbEngineStorageBackend implements EngineStorageBackend {
           if (!db.objectStoreNames.contains("trackHashes")) {
             db.createObjectStore("trackHashes");
           }
+          if (!db.objectStoreNames.contains("outcomes")) {
+            db.createObjectStore("outcomes", { autoIncrement: true });
+          }
+          if (!db.objectStoreNames.contains("shelf")) {
+            db.createObjectStore("shelf");
+          }
         };
         request.onsuccess = () => resolve(request.result);
         request.onerror = () => reject(request.error);
@@ -318,6 +330,14 @@ export interface LiveRaveEngineStorage {
   getPairSet<T>(aHash: string, bHash: string): Promise<StoredPairSet<T> | null>;
   appendBehaviour(record: BehaviourRecord): Promise<void>;
   listBehaviour(): Promise<BehaviourRecord[]>;
+  /** Append one labelled transition outcome (Ear, wave item 5). */
+  appendOutcome(outcome: TransitionOutcome): Promise<void>;
+  /** Every persisted transition outcome, append order. */
+  listOutcomes(): Promise<TransitionOutcome[]>;
+  /** The persisted Cooldown Shelf state for one mode, if any. */
+  getShelfState(mode: string): Promise<ShelfState | null>;
+  /** Persist the Cooldown Shelf state under its mode key. */
+  putShelfState(state: ShelfState): Promise<void>;
   /** Record (or refresh) the bridge pair trackId → audioHash. */
   recordTrackHash(trackId: string, audioHash: string): Promise<void>;
   /** The hash a track last resolved to, or null when unbridged. */
@@ -466,6 +486,42 @@ export function createEngineStorage(
       );
   }
 
+  // -- The Ear's history + the Shelf (optimisation wave) ----------
+  // Same discipline as the behaviour log: outcomes append with an
+  // auto-increment key and prune to the behaviour cap; shelf
+  // state is one keyed document per personality mode.
+
+  async function appendOutcome(outcome: TransitionOutcome): Promise<void> {
+    await resolved.add("outcomes", outcome);
+    const all = await resolved.entries("outcomes");
+    const excess = all.length - BEHAVIOUR_CAP;
+    for (let i = 0; i < excess; i += 1) {
+      await resolved.delete("outcomes", all[i].key);
+    }
+  }
+
+  async function listOutcomes(): Promise<TransitionOutcome[]> {
+    const all = await resolved.entries("outcomes");
+    return all
+      .map((entry) => entry.value)
+      .filter(
+        (value): value is TransitionOutcome =>
+          typeof value === "object" && value !== null,
+      );
+  }
+
+  async function getShelfState(mode: string): Promise<ShelfState | null> {
+    const raw = await resolved.get("shelf", mode);
+    if (!raw || typeof raw !== "object") return null;
+    const state = raw as ShelfState;
+    if (state.mode !== mode) return null;
+    return state;
+  }
+
+  async function putShelfState(state: ShelfState): Promise<void> {
+    await resolved.put("shelf", state.mode, state);
+  }
+
   // -- The attribution bridge -------------------------------------
   // Gates mirror the other stores' discipline: an entry is served
   // only when its envelope key, its trackId and a non-empty string
@@ -520,6 +576,8 @@ export function createEngineStorage(
     await resolved.clear("pairSets");
     await resolved.clear("behaviour");
     await resolved.clear("trackHashes");
+    await resolved.clear("outcomes");
+    await resolved.clear("shelf");
   }
 
   return {
@@ -530,6 +588,10 @@ export function createEngineStorage(
     getPairSet,
     appendBehaviour,
     listBehaviour,
+    appendOutcome,
+    listOutcomes,
+    getShelfState,
+    putShelfState,
     recordTrackHash,
     getTrackHash,
     listTrackHashes,
@@ -576,6 +638,22 @@ export function appendBehaviour(record: BehaviourRecord): Promise<void> {
 
 export function listBehaviour(): Promise<BehaviourRecord[]> {
   return defaultStorage.listBehaviour();
+}
+
+export function appendOutcome(outcome: TransitionOutcome): Promise<void> {
+  return defaultStorage.appendOutcome(outcome);
+}
+
+export function listOutcomes(): Promise<TransitionOutcome[]> {
+  return defaultStorage.listOutcomes();
+}
+
+export function getShelfState(mode: string): Promise<ShelfState | null> {
+  return defaultStorage.getShelfState(mode);
+}
+
+export function putShelfState(state: ShelfState): Promise<void> {
+  return defaultStorage.putShelfState(state);
 }
 
 export function recordTrackHash(

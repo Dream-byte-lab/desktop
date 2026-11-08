@@ -135,6 +135,36 @@ export const BEHAVIOUR_REASONS: readonly BehaviourReason[] = [
   "supply-contribution-failed",
 ];
 
+/**
+ * Provenance stamp (optimisation wave item 4 — Receipts;
+ * ADAPTATION A3). Every join record answers "whose idea was
+ * this?" with a small, load-bearing stamp: the source that put
+ * the winning candidate on the slate (or the ladder rung that
+ * landed the join when no authored candidate performed), the
+ * candidate's position in the final slate, the ladder rung that
+ * performed it, and the crate-table version that weighted the
+ * draw. Optional on the record: records written before the wave
+ * (and by test doubles that replace the brain wholesale) carry
+ * no stamp rather than a fabricated one.
+ */
+export type ProvenanceSource =
+  | "planner"
+  | "taste"
+  | "guest"
+  | "user-act"
+  | `personality:${string}`
+  | `ladder-rung:${number}`;
+
+export interface ProvenanceStamp {
+  source: ProvenanceSource;
+  /** 1-based position in the final slate at draw time; null when no slate existed. */
+  slatePosition: number | null;
+  /** Ladder rung that performed the join (1–4); null when not ladder-landed. */
+  ladderRung: number | null;
+  /** Crate table version that weighted the draw; null when unweighted. */
+  cratesVersion: string | null;
+}
+
 export interface BehaviourRecord {
   /** Epoch milliseconds when the join/fallback happened. */
   at: number;
@@ -149,6 +179,8 @@ export interface BehaviourRecord {
   /** Size of the draw pool the pick came from (0 when none). */
   poolSize: number;
   reason: BehaviourReason;
+  /** Wave item 4: whose idea this join was (see ProvenanceStamp). */
+  provenance?: ProvenanceStamp;
 }
 
 /** The injected persistence seam for the behaviour log. */
@@ -197,6 +229,7 @@ export interface BehaviourLog {
     pairTrackIds: [string, string];
     suitability: number | null;
     poolSize: number;
+    provenance?: ProvenanceStamp;
     at?: number;
   }): void;
   /** Append a fallback / degradation / non-draw outcome. */
@@ -208,6 +241,7 @@ export interface BehaviourLog {
     suitability: number | null;
     poolSize: number;
     reason: Exclude<BehaviourReason, "performed">;
+    provenance?: ProvenanceStamp;
     at?: number;
   }): void;
   /** All records, oldest first (the design's getBehaviourLog read API). */
@@ -234,6 +268,7 @@ export function createBehaviourLog(
         suitability: input.suitability,
         poolSize: input.poolSize,
         reason: input.reason,
+        provenance: input.provenance,
       });
     },
 
@@ -247,6 +282,7 @@ export function createBehaviourLog(
         suitability: input.suitability,
         poolSize: input.poolSize,
         reason: "performed",
+        provenance: input.provenance,
       });
     },
 
@@ -260,6 +296,7 @@ export function createBehaviourLog(
         suitability: input.suitability,
         poolSize: input.poolSize,
         reason: input.reason,
+        provenance: input.provenance,
       });
     },
 

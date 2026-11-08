@@ -29,7 +29,13 @@ import {
   tempoFit,
   trackEnergyLevel,
 } from "./kernel";
-import type { PerformanceMemory } from "./memory";
+import type { PerformanceMemory, ProvenanceSource } from "./memory";
+import {
+  drawFromSlate,
+  slateCandidateId,
+  Slate,
+  type SlateCandidate,
+} from "./slate";
 import type { FxKind, JoinRecipe, ScratchTechnique } from "./recipe";
 import type { Shaping } from "./shaping";
 
@@ -159,7 +165,23 @@ export interface AssembledSet {
 export interface Brain {
   suitability(candidate: JoinRecipe): number;
   consider(args: ConsiderArgs): ConsiderResult | null;
+  /**
+   * Wave item 3: assemble the transition's Slate — the same
+   * ranked/pruned/authored pool consider() draws from, as an
+   * explicit candidate list (source "planner", weight preset to
+   * suitability²) for the session's editors and ladder. Returns
+   * null when the pool is empty. Optional on the interface so
+   * test doubles that replace the brain wholesale keep compiling;
+   * the production brain always implements it.
+   */
+  assembleSlate?(args: ConsiderArgs): Slate | null;
   assembleSet(factsList: TrackFacts[], shaping: Shaping): AssembledSet;
+  /**
+   * The brain's own random source, exposed so the session's
+   * ladder draw consumes the SAME stream the brain's draw has
+   * always used (seeded in tests, Math.random by default).
+   */
+  readonly rng?: () => number;
 }
 
 export function createBrain(deps: BrainDeps): Brain {
@@ -169,10 +191,19 @@ export function createBrain(deps: BrainDeps): Brain {
     return suitabilityOf(candidate);
   }
 
-  function consider(args: ConsiderArgs): ConsiderResult | null {
+  // The ranked/pruned/authored pool, shared by consider() and
+  // assembleSlate(): one pool builder, so the slate the session
+  // edits is exactly the pool the draw has always run over.
+  interface PoolEntry {
+    trackB: TrackFacts;
+    recipe: JoinRecipe;
+    suitability: number;
+  }
+
+  function buildPool(args: ConsiderArgs): PoolEntry[] {
     const { factsA, shaping } = args;
     const arcPosition = clamp01(args.arcPosition);
-    if (args.optionsB.length === 0) return null;
+    if (args.optionsB.length === 0) return [];
 
     // Rank options by track fit; prune by the tolerance-bent
     // threshold and by the freedom-bent option cap. The single best
@@ -196,12 +227,6 @@ export function createBrain(deps: BrainDeps): Brain {
       .slice(0, maxOptions);
 
     // One joint pool of (track, candidate) across all kept options.
-    interface PoolEntry {
-      trackB: TrackFacts;
-      recipe: JoinRecipe;
-      suitability: number;
-      weight: number;
-    }
     const pool: PoolEntry[] = [];
     for (const { factsB } of kept) {
       const { candidates } = authorCandidates(factsA, factsB, {
@@ -211,28 +236,56 @@ export function createBrain(deps: BrainDeps): Brain {
       for (const recipe of candidates) {
         const score = suitabilityOf(recipe);
         if (score < POOL_MIN_SUITABILITY) continue;
-        const affinity = shaping.affinity(
-          isFxDressed(recipe) ? "fx" : recipe.family,
-        );
-        const memoryFactor = args.memory
-          ? args.memory.factorFor({
-              family: recipe.family,
-              technique: recipe.technique,
-              fxKinds: fxKindsOfRecipe(recipe),
-            })
-          : 1;
-        pool.push({
-          trackB: factsB,
-          recipe,
-          suitability: score,
-          weight: score * score * affinity * memoryFactor,
-        });
+        pool.push({ trackB: factsB, recipe, suitability: score });
       }
     }
+    return pool;
+  }
+
+  function assembleSlate(args: ConsiderArgs): Slate | null {
+    const pool = buildPool(args);
     if (pool.length === 0) return null;
-    // The pool summaries ride along on every return path so the
-    // session can expose a nextJoinPreview (pick + pool + evidence).
-    const poolSummaries: ConsiderPoolEntry[] = pool.map((entry) => ({
+    const source: ProvenanceSource = "planner";
+    return new Slate(
+      pool.map((entry): SlateCandidate => ({
+        id: slateCandidateId(entry.trackB.trackId, entry.recipe.id),
+        trackB: entry.trackB,
+        recipe: entry.recipe,
+        suitability: entry.suitability,
+        source,
+        weight: entry.suitability * entry.suitability,
+        crateWeight: 1,
+        autonomousExcluded: null,
+      })),
+    );
+  }
+
+  function consider(args: ConsiderArgs): ConsiderResult | null {
+    const { shaping } = args;
+    const slate = assembleSlate(args);
+    if (!slate) return null;
+    // The shipped scoring composition, unchanged: probability ∝
+    // suitability² × shaping affinity (the candidate's family, or
+    // "fx" when it carries an fx dressing) × the performance-
+    // memory factor. In the session this same composition is
+    // applied by the Hands modules (item 6) over the edited
+    // slate; consider() is the unedited composition, kept so the
+    // brain's contract stands alone.
+    for (const entry of slate.entries()) {
+      const affinity = shaping.affinity(
+        isFxDressed(entry.recipe) ? "fx" : entry.recipe.family,
+      );
+      const memoryFactor = args.memory
+        ? args.memory.factorFor({
+            family: entry.recipe.family,
+            technique: entry.recipe.technique,
+            fxKinds: fxKindsOfRecipe(entry.recipe),
+          })
+        : 1;
+      entry.weight =
+        entry.suitability * entry.suitability * affinity * memoryFactor;
+    }
+    const poolSummaries: ConsiderPoolEntry[] = slate.entries().map((entry) => ({
       trackId: entry.trackB.trackId,
       family: entry.recipe.family,
       technique: entry.recipe.technique,
@@ -240,28 +293,15 @@ export function createBrain(deps: BrainDeps): Brain {
       suitability: entry.suitability,
       evidence: { ...entry.recipe.authored.evidence },
     }));
-    const toResult = (entry: PoolEntry): ConsiderResult => ({
-      trackB: entry.trackB,
-      recipe: entry.recipe,
-      suitability: entry.suitability,
-      poolSize: pool.length,
+    const pick = drawFromSlate(slate, rng);
+    if (!pick) return null;
+    return {
+      trackB: pick.trackB,
+      recipe: pick.recipe,
+      suitability: pick.suitability,
+      poolSize: slate.size(),
       pool: poolSummaries,
-    });
-    if (pool.length === 1) {
-      return toResult(pool[0]);
-    }
-    const totalWeight = pool.reduce((sum, entry) => sum + entry.weight, 0);
-    if (!(totalWeight > 0)) {
-      return toResult(pool[0]);
-    }
-    let draw = rng() * totalWeight;
-    for (const entry of pool) {
-      draw -= entry.weight;
-      if (draw <= 0) {
-        return toResult(entry);
-      }
-    }
-    return toResult(pool[pool.length - 1]);
+    };
   }
 
   function assembleSet(
@@ -329,5 +369,5 @@ export function createBrain(deps: BrainDeps): Brain {
     return { orderedIds: ordered.map((facts) => facts.trackId), joins };
   }
 
-  return { suitability, consider, assembleSet };
+  return { suitability, consider, assembleSlate, assembleSet, rng };
 }

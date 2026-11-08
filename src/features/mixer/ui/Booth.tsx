@@ -50,6 +50,7 @@ import {
   isFallbackReason,
   moveLabel,
   personalityColour,
+  provenanceLabel,
   useSessionView,
 } from "./sessionView";
 
@@ -552,6 +553,9 @@ export function Booth({
                             ? ` · ${Math.round(record.suitability * 100)}%`
                             : ""}{" "}
                           · pool {record.poolSize}
+                          {provenanceLabel(record)
+                            ? ` · ${provenanceLabel(record)}`
+                            : ""}
                         </span>
                       </li>
                     ))}

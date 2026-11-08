@@ -105,8 +105,29 @@ import {
   type Brain,
   type ConsiderResult,
 } from "./brain";
+import {
+  CooldownShelf,
+  createInMemoryShelfStore,
+  techniqueKeyOf,
+  type ShelfState,
+  type ShelfStore,
+} from "./cooldown";
+import { CRATES_VERSION } from "./crates";
+import {
+  createInMemoryOutcomeStore,
+  TransitionEar,
+  type OutcomeStore,
+  type TransitionOutcome,
+} from "./ear";
 import { buildTrackFacts, type TrackFacts, type TrackRead } from "./facts";
+import {
+  applyHandEdits,
+  applyHandScores,
+  resolveHands,
+  type HandsConfig,
+} from "./hands";
 import { trackEnergyLevel } from "./kernel";
+import { proveLadder, transitionBudgetMs } from "./ladder";
 import {
   createBehaviourLog,
   createPerformanceMemory,
@@ -114,6 +135,7 @@ import {
   type BehaviourRecord,
   type BehaviourReason,
   type PerformanceMemory,
+  type ProvenanceStamp,
 } from "./memory";
 import { LiveRavePerformer, type DeckSnapshot } from "./performer";
 import {
@@ -124,13 +146,21 @@ import {
 } from "./party";
 import { validateRecipe, type JoinRecipe } from "./recipe";
 import { NEUTRAL_SHAPING, type Shaping } from "./shaping";
+import type { Slate } from "./slate";
 import {
   createTrackSource,
   type DecodeContext,
   type TrackSource,
   type TrackSourceDeps,
 } from "./source";
-import { appendBehaviour, listBehaviour } from "./storage";
+import {
+  appendBehaviour,
+  appendOutcome,
+  getShelfState,
+  listBehaviour,
+  listOutcomes,
+  putShelfState,
+} from "./storage";
 import { useDjSettings } from "./settings";
 import {
   createServerClient,
@@ -365,6 +395,12 @@ export interface SessionDeps {
   clock?: SessionClock;
   rng?: () => number;
   party?: PartyScheduler;
+  /** The Ear's outcome store (wave item 5); in-memory when absent. */
+  outcomeStore?: OutcomeStore;
+  /** The Cooldown Shelf's store (wave item 8); in-memory when absent. */
+  shelfStore?: ShelfStore;
+  /** Hand-module switches (wave item 6); all modules on when absent. */
+  handsConfig?: HandsConfig;
   /** Master-tap registration; default registers with the greeting registry. */
   registerMasterTap?: (
     performer: PerformerLike,
@@ -528,6 +564,17 @@ export interface LiveRaveSession extends DjTransport {
   /** Played energies + upcoming prepared energies (the §10 skyline). */
   setArc(): { played: number[]; upcoming: number[] };
   getBehaviourLog(): BehaviourRecord[];
+  /**
+   * Wave item 5: join records (supply records excluded), each
+   * with the Ear's labelled outcomes for that transition
+   * attached. Optional on the interface so UI test doubles keep
+   * compiling; the production session implements it.
+   */
+  getTransitionHistory?(): (BehaviourRecord & {
+    outcomes: TransitionOutcome[];
+  })[];
+  /** Wave item 8: the Cooldown Shelf's readable state lines. */
+  cooldownState?(): string[];
   // Party seam (see party.ts).
   submitGuestRequest(track: Track, guestId?: string): GuestRequest;
   evaluateRequests(): GuestRequest[];
@@ -612,6 +659,8 @@ interface ActiveJoin {
   poolSize: number;
   /** "user-act" when a person (not the draw) chose this join. */
   recordMode: "auto" | "user-act";
+  /** The receipts stamp this join will be recorded with (wave item 4). */
+  provenance: ProvenanceStamp | null;
   untrusted: boolean;
   /** A-position (nominal) at which the overlap has fully played. */
   overlapEndPosMs: number;
@@ -629,6 +678,27 @@ interface BuyTimeState {
 /** How often buy-time may force another preparation attempt. */
 export const BUY_TIME_PREP_RETRY_MS = 2_000;
 
+/** The primary artist name a track carries, or null when blank. */
+function artistNameOf(track: Track): string | null {
+  const name = typeof track.artists === "string" ? track.artists.trim() : "";
+  return name ? name : null;
+}
+
+/**
+ * The default receipts stamp for joins landed outside the wave
+ * decision path (user acts, deck moves, buy-time commits): the
+ * decider was the planner machinery or the person, no slate
+ * position or ladder rung applies.
+ */
+function defaultProvenance(recordMode: "auto" | "user-act"): ProvenanceStamp {
+  return {
+    source: recordMode === "user-act" ? "user-act" : "planner",
+    slatePosition: null,
+    ladderRung: null,
+    cratesVersion: null,
+  };
+}
+
 // ---------------------------------------------------------------------
 // The session implementation
 // ---------------------------------------------------------------------
@@ -644,6 +714,22 @@ class LiveRaveSessionImpl implements LiveRaveSession {
   private performer: PerformerLike | null = null;
   private masterTapRegistered = false;
   private shaping: Shaping = NEUTRAL_SHAPING;
+
+  // The optimisation wave's instruments (items 5 + 8): the Ear
+  // labels outcomes against stamped transitions; the Cooldown
+  // Shelf benches artists / techniques / tracks per mode. Both
+  // are constructed over injectable stores (in-memory by
+  // default, storage-backed in the shipped wiring).
+  private readonly ear: TransitionEar;
+  private readonly shelf: CooldownShelf;
+  /** Join-record timestamp → its cooldown technique key. */
+  private readonly techniqueKeyByRecordAt = new Map<number, string>();
+  /** Track id → the record timestamp of its last landed join-in. */
+  private readonly lastInboundRecordAt = new Map<string, number>();
+  /** Join-record timestamp → its [from, to] pair, for replay labels. */
+  private readonly pairByRecordAt = new Map<number, [string, string]>();
+  /** Timestamp of the most recent recordJoin, read by landing paths. */
+  private lastJoinRecordAt: number | null = null;
 
   private running = false;
   private pausedFlag = false;
@@ -726,6 +812,21 @@ class LiveRaveSessionImpl implements LiveRaveSession {
     this.clock = deps.clock ?? realClock;
     this.party =
       deps.party ?? createPartyScheduler({ now: () => this.clock.now() });
+    this.shelf = new CooldownShelf(
+      deps.shelfStore ?? createInMemoryShelfStore(),
+      this.shaping.personalityId,
+    );
+    const outcomeBase = deps.outcomeStore ?? createInMemoryOutcomeStore();
+    this.ear = new TransitionEar(
+      {
+        append: (outcome) => {
+          outcomeBase.append(outcome);
+          this.onOutcomeRecorded(outcome);
+        },
+        list: () => outcomeBase.list(),
+      },
+      () => this.clock.now(),
+    );
     // Volume follows the player store for the session's whole life;
     // the performer applies it whenever one exists.
     this.deps.player.subscribe(() => {
@@ -824,13 +925,17 @@ class LiveRaveSessionImpl implements LiveRaveSession {
     >;
     userAct?: boolean;
     untrusted?: boolean;
+    /** The receipts stamp (wave item 4); unstamped callers stay unstamped. */
+    provenance?: ProvenanceStamp;
   }): BehaviourReason {
     let reason: BehaviourReason = "performed";
     if (input.fallback) reason = input.fallback;
     else if (input.userAct) reason = "user-act";
     else if (input.untrusted) reason = "degraded-untrusted";
+    const at = this.clock.now();
+    this.lastJoinRecordAt = at;
     this.deps.behaviourLog.record({
-      at: this.clock.now(),
+      at,
       family: input.family,
       technique: input.technique,
       fxKinds: input.fxKinds ?? [],
@@ -838,7 +943,15 @@ class LiveRaveSessionImpl implements LiveRaveSession {
       suitability: input.suitability,
       poolSize: input.poolSize,
       reason,
+      provenance: input.provenance,
     });
+    if (input.family !== null) {
+      const key = techniqueKeyOf({
+        family: input.family,
+        technique: input.technique,
+      });
+      if (key) this.techniqueKeyByRecordAt.set(at, key);
+    }
     if (reason === "fallback-unprepared" || reason === "fallback-invalid") {
       this.fallbackCountValue += 1;
       this.degradedFlag = true;
@@ -856,6 +969,58 @@ class LiveRaveSessionImpl implements LiveRaveSession {
       });
     }
     return reason;
+  }
+
+  /**
+   * The Ear → Shelf feedback wire (wave items 5 + 8): a
+   * skip-in-blend benches the transition's technique on the long
+   * failure cooldown; a completion marks its success. Fires from
+   * the Ear's store append, so every labelled outcome counts,
+   * whichever session path produced it.
+   */
+  private onOutcomeRecorded(outcome: TransitionOutcome): void {
+    const key = this.techniqueKeyByRecordAt.get(outcome.recordAt);
+    if (!key) return;
+    if (outcome.label === "skip-in-blend") {
+      this.shelf.noteJoinFailure(key);
+    } else if (outcome.label === "completion") {
+      this.shelf.noteJoinSuccess(key);
+    }
+  }
+
+  /**
+   * A join (authored or plain) has LANDED: feed the Ear (which
+   * closes the previous transition's judgement) and the Shelf
+   * (which stamps this transition's artist / technique / track).
+   * Called by exactly the paths that change the current track —
+   * completeJoin and plainStart — never by record-only paths.
+   */
+  private noteJoinLanded(input: {
+    pairTrackIds: [string, string];
+    family: JoinRecipe["family"] | null;
+    technique?: JoinRecipe["technique"];
+    incoming: Track;
+  }): void {
+    const recordAt = this.lastJoinRecordAt;
+    if (recordAt === null) return;
+    this.lastInboundRecordAt.set(input.incoming.id, recordAt);
+    this.pairByRecordAt.set(recordAt, input.pairTrackIds);
+    this.ear.joinLanded({
+      recordAt,
+      pairTrackIds: input.pairTrackIds,
+      incomingTrackId: input.incoming.id,
+    });
+    this.shelf.noteTransition({
+      artist: artistNameOf(input.incoming),
+      techniqueKey:
+        input.family !== null
+          ? techniqueKeyOf({
+              family: input.family,
+              technique: input.technique,
+            })
+          : null,
+      trackId: input.incoming.id,
+    });
   }
 
   private setBlending(value: boolean): void {
@@ -1174,6 +1339,9 @@ class LiveRaveSessionImpl implements LiveRaveSession {
 
   setShaping(shaping: Shaping): void {
     this.shaping = shaping;
+    // The Shelf is per-mode: a personality switch moves the
+    // session to that mode's persisted counters (wave item 8).
+    this.shelf.setMode(shaping.personalityId);
   }
 
   setControlLevel(level: ControlLevel): void {
@@ -1840,6 +2008,9 @@ class LiveRaveSessionImpl implements LiveRaveSession {
   private stopInternal(reason: SessionEndReason): void {
     const wasRunning = this.running;
     const wasPreparing = this.phase === "preparing";
+    // The set is over: the Ear forgets its open transition
+    // without judging it (wave item 5).
+    this.ear.close();
     // Publish the settled position/duration before the decks stop
     // and `current` clears; the settled status ("paused" — the
     // player is left paused on the current track) lands below,
@@ -1995,131 +2166,15 @@ class LiveRaveSessionImpl implements LiveRaveSession {
     this.deciding = true;
     const generation = this.generation;
     try {
-      // JOINABLE MEANS BUFFER IN HAND (fix2-0119): the draw runs
-      // over entries that can actually sound — facts AND the
-      // decoded buffer. A facts-ready entry whose buffer never
-      // landed is excluded here, its exclusion narrated once and
-      // a repair re-preparation kicked, instead of being drawn
-      // and degrading at commit time. (In the shipped source the
-      // buffer lands with the resolve, before facts — so this is
-      // a belt over the seam: candidacy can no longer outrun the
-      // audio by construction.)
-      const ready = this.readyEntries();
-      const joinable: PreparedEntry[] = [];
-      for (const entry of ready) {
-        if (entry.buffer) {
-          this.bufferlessExcluded.delete(entry.track.id);
-          joinable.push(entry);
-        } else {
-          this.excludeBufferless(entry);
-        }
+      // The wave path (slate → hands → ladder) runs whenever the
+      // brain can assemble a slate; brains without it (test
+      // doubles that implement only consider()) take the legacy
+      // path below, unchanged.
+      if (this.deps.brain.assembleSlate) {
+        await this.decideWave(generation);
+      } else {
+        await this.decideLegacy(generation);
       }
-      if (joinable.length === 0) return; // still preparing, or nothing joinable left
-      const factsA = this.current.facts;
-      this.narrate(
-        "authoring",
-        `Authoring the next join from "${this.current.track.title}" — ${joinable.length} prepared option${joinable.length === 1 ? "" : "s"}`,
-      );
-      let result = this.deps.brain.consider({
-        factsA,
-        optionsB: joinable.map((entry) => entry.facts as TrackFacts),
-        arcPosition: this.arcPosition(),
-        shaping: this.shaping,
-        memory: this.deps.memory,
-      });
-      if (!result) {
-        // The brain found no candidate above its suitability
-        // floor in a NON-EMPTY joinable pool. That outcome used
-        // to be silent — the window just passed. Narrate it
-        // (once per current track) so a quiet window is a
-        // explained window (fix2-0119).
-        if (this.noCandidateNarratedFor !== this.current.track.id) {
-          this.noCandidateNarratedFor = this.current.track.id;
-          this.narrate(
-            "authoring",
-            `No join drawn into the next track — ${joinable.length} prepared option${joinable.length === 1 ? "" : "s"} scored below the brain's suitability floor this window`,
-          );
-        }
-        return;
-      }
-      if (generation !== this.generation || !this.running) return;
-      this.setPreview(result);
-      this.narrate(
-        "drawn",
-        `Drew ${result.recipe.family}${result.recipe.technique ? ` (${result.recipe.technique})` : ""} into "${this.titleOf(result.trackB.trackId)}" — suitability ${result.suitability.toFixed(2)}, pool of ${result.poolSize}`,
-      );
-
-      // Structural validation: a drawn recipe that fails is
-      // discarded and re-drawn ONCE from the remaining pool; a
-      // second failure is a plain cut, recorded fallback-invalid.
-      const errors = validateRecipe(result.recipe, factsA, result.trackB);
-      if (errors.length > 0) {
-        const invalid = result;
-        this.narrate(
-          "degraded",
-          `Drawn ${invalid.recipe.family} recipe failed structural validation (${errors.join("; ")}) — re-drawing once`,
-          "fallback-invalid",
-        );
-        const rest = joinable.filter(
-          (entry) => entry.track.id !== invalid.trackB.trackId,
-        );
-        let second: ConsiderResult | null = null;
-        if (rest.length > 0) {
-          second = this.deps.brain.consider({
-            factsA,
-            optionsB: rest.map((entry) => entry.facts as TrackFacts),
-            arcPosition: this.arcPosition(),
-            shaping: this.shaping,
-            memory: this.deps.memory,
-          });
-        }
-        if (
-          second &&
-          validateRecipe(second.recipe, factsA, second.trackB).length === 0
-        ) {
-          result = second;
-          this.setPreview(result);
-          this.narrate(
-            "drawn",
-            `Re-drew ${result.recipe.family} into "${this.titleOf(result.trackB.trackId)}"`,
-          );
-        } else {
-          const target = this.firstReadyWithBuffer();
-          this.preview = null;
-          if (target) {
-            this.plainStart(target, {
-              fallback: "fallback-invalid",
-              recipe: invalid.recipe,
-              suitability: invalid.suitability,
-              poolSize: invalid.poolSize,
-            });
-          } else {
-            this.recordJoin({
-              family: invalid.recipe.family,
-              technique: invalid.recipe.technique,
-              fxKinds: fxKindsOfRecipe(invalid.recipe),
-              pairTrackIds: [this.current.track.id, invalid.trackB.trackId],
-              suitability: invalid.suitability,
-              poolSize: invalid.poolSize,
-              fallback: "fallback-invalid",
-            });
-            void this.handleExhaustion();
-          }
-          return;
-        }
-      }
-
-      // Buy-time: the drawn track has facts but no decoded buffer.
-      // Unreachable from the autonomous draw since fix2-0119 (the
-      // draw only runs over joinable entries, and nothing clears
-      // a buffer once landed) — kept as the commit-time safety
-      // net the seam always had.
-      const entryB = this.prepared.get(result.trackB.trackId);
-      if (!entryB || !entryB.buffer) {
-        this.startBuyTime(result);
-        return;
-      }
-      await this.commitJoin(result, "auto");
     } finally {
       this.deciding = false;
       // A deck end deferred while this decision committed (see
@@ -2138,6 +2193,404 @@ class LiveRaveSessionImpl implements LiveRaveSession {
         void this.handleDeckEnd();
       }
     }
+  }
+
+  /** The pre-wave decision path: consider() and commit, as shipped. */
+  private async decideLegacy(generation: number): Promise<void> {
+    if (!this.current) return;
+    // JOINABLE MEANS BUFFER IN HAND (fix2-0119): the draw runs
+    // over entries that can actually sound — facts AND the
+    // decoded buffer. A facts-ready entry whose buffer never
+    // landed is excluded here, its exclusion narrated once and
+    // a repair re-preparation kicked, instead of being drawn
+    // and degrading at commit time. (In the shipped source the
+    // buffer lands with the resolve, before facts — so this is
+    // a belt over the seam: candidacy can no longer outrun the
+    // audio by construction.)
+    const ready = this.readyEntries();
+    const joinable: PreparedEntry[] = [];
+    for (const entry of ready) {
+      if (entry.buffer) {
+        this.bufferlessExcluded.delete(entry.track.id);
+        joinable.push(entry);
+      } else {
+        this.excludeBufferless(entry);
+      }
+    }
+    if (joinable.length === 0) return; // still preparing, or nothing joinable left
+    const factsA = this.current.facts;
+    this.narrate(
+      "authoring",
+      `Authoring the next join from "${this.current.track.title}" — ${joinable.length} prepared option${joinable.length === 1 ? "" : "s"}`,
+    );
+    let result = this.deps.brain.consider({
+      factsA,
+      optionsB: joinable.map((entry) => entry.facts as TrackFacts),
+      arcPosition: this.arcPosition(),
+      shaping: this.shaping,
+      memory: this.deps.memory,
+    });
+    if (!result) {
+      // The brain found no candidate above its suitability
+      // floor in a NON-EMPTY joinable pool. That outcome used
+      // to be silent — the window just passed. Narrate it
+      // (once per current track) so a quiet window is a
+      // explained window (fix2-0119).
+      if (this.noCandidateNarratedFor !== this.current.track.id) {
+        this.noCandidateNarratedFor = this.current.track.id;
+        this.narrate(
+          "authoring",
+          `No join drawn into the next track — ${joinable.length} prepared option${joinable.length === 1 ? "" : "s"} scored below the brain's suitability floor this window`,
+        );
+      }
+      return;
+    }
+    if (generation !== this.generation || !this.running) return;
+    this.setPreview(result);
+    this.narrate(
+      "drawn",
+      `Drew ${result.recipe.family}${result.recipe.technique ? ` (${result.recipe.technique})` : ""} into "${this.titleOf(result.trackB.trackId)}" — suitability ${result.suitability.toFixed(2)}, pool of ${result.poolSize}`,
+    );
+
+    // Structural validation: a drawn recipe that fails is
+    // discarded and re-drawn ONCE from the remaining pool; a
+    // second failure is a plain cut, recorded fallback-invalid.
+    const errors = validateRecipe(result.recipe, factsA, result.trackB);
+    if (errors.length > 0) {
+      const invalid = result;
+      this.narrate(
+        "degraded",
+        `Drawn ${invalid.recipe.family} recipe failed structural validation (${errors.join("; ")}) — re-drawing once`,
+        "fallback-invalid",
+      );
+      const rest = joinable.filter(
+        (entry) => entry.track.id !== invalid.trackB.trackId,
+      );
+      let second: ConsiderResult | null = null;
+      if (rest.length > 0) {
+        second = this.deps.brain.consider({
+          factsA,
+          optionsB: rest.map((entry) => entry.facts as TrackFacts),
+          arcPosition: this.arcPosition(),
+          shaping: this.shaping,
+          memory: this.deps.memory,
+        });
+      }
+      if (
+        second &&
+        validateRecipe(second.recipe, factsA, second.trackB).length === 0
+      ) {
+        result = second;
+        this.setPreview(result);
+        this.narrate(
+          "drawn",
+          `Re-drew ${result.recipe.family} into "${this.titleOf(result.trackB.trackId)}"`,
+        );
+      } else {
+        const target = this.firstReadyWithBuffer();
+        this.preview = null;
+        if (target) {
+          this.plainStart(target, {
+            fallback: "fallback-invalid",
+            recipe: invalid.recipe,
+            suitability: invalid.suitability,
+            poolSize: invalid.poolSize,
+          });
+        } else {
+          this.recordJoin({
+            family: invalid.recipe.family,
+            technique: invalid.recipe.technique,
+            fxKinds: fxKindsOfRecipe(invalid.recipe),
+            pairTrackIds: [this.current.track.id, invalid.trackB.trackId],
+            suitability: invalid.suitability,
+            poolSize: invalid.poolSize,
+            fallback: "fallback-invalid",
+          });
+          void this.handleExhaustion();
+        }
+        return;
+      }
+    }
+
+    // Buy-time: the drawn track has facts but no decoded buffer.
+    // Unreachable from the autonomous draw since fix2-0119 (the
+    // draw only runs over joinable entries, and nothing clears
+    // a buffer once landed) — kept as the commit-time safety
+    // net the seam always had.
+    const entryB = this.prepared.get(result.trackB.trackId);
+    if (!entryB || !entryB.buffer) {
+      this.startBuyTime(result);
+      return;
+    }
+    await this.commitJoin(result, "auto");
+  }
+
+  /**
+   * The wave decision path (items 1–4 + 6–8): the brain
+   * assembles the Slate, the guest editor and the Hands edit and
+   * score it, and the Ladder proves the transition inside the
+   * time budget the outgoing track leaves. Every landing carries
+   * its receipts stamp; every degradation is a named rung, never
+   * a silent death. Runs only when the brain implements
+   * assembleSlate (the production brain always does).
+   */
+  private async decideWave(generation: number): Promise<void> {
+    const ready = this.readyEntries();
+    const joinable: PreparedEntry[] = [];
+    for (const entry of ready) {
+      if (entry.buffer) {
+        this.bufferlessExcluded.delete(entry.track.id);
+        joinable.push(entry);
+      } else {
+        this.excludeBufferless(entry);
+      }
+    }
+    if (joinable.length === 0) return;
+    const current = this.current;
+    if (!current) return;
+    const factsA = current.facts;
+    this.narrate(
+      "authoring",
+      `Authoring the next join from "${current.track.title}" — ${joinable.length} prepared option${joinable.length === 1 ? "" : "s"}`,
+    );
+    const arcPosition = this.arcPosition();
+    const slate = this.deps.brain.assembleSlate!({
+      factsA,
+      optionsB: joinable.map((entry) => entry.facts as TrackFacts),
+      arcPosition,
+      shaping: this.shaping,
+      memory: this.deps.memory,
+    });
+    if (!slate) {
+      if (this.noCandidateNarratedFor !== current.track.id) {
+        this.noCandidateNarratedFor = current.track.id;
+        this.narrate(
+          "authoring",
+          `No join drawn into the next track — ${joinable.length} prepared option${joinable.length === 1 ? "" : "s"} scored below the brain's suitability floor this window`,
+        );
+      }
+      return;
+    }
+
+    // Editors, in order: the guest editor, then the Hands.
+    this.applyGuestEdits(slate);
+    const hands = resolveHands(this.shaping, {
+      memory: this.deps.memory,
+      shelf: this.shelf,
+      artistByTrackId: this.artistByTrackId(),
+      techniqueKeyOfCandidate: (candidate) => techniqueKeyOf(candidate.recipe),
+      config: this.deps.handsConfig,
+    });
+    const handContext = {
+      factsA,
+      arcPosition,
+      shaping: this.shaping,
+      transitionIndex: this.shelf.transitionIndex,
+    };
+    applyHandEdits(slate, hands, handContext);
+    applyHandScores(slate, hands, handContext);
+
+    const drawRng = this.deps.rng ?? this.deps.brain.rng ?? Math.random;
+    const positionA = this.performer?.positionMs("A") ?? 0;
+    const durationA = factsA.durationMs;
+    const secondsToMixOut =
+      durationA !== null ? Math.max(0, (durationA - positionA) / 1000) : null;
+    const budgetMs = transitionBudgetMs(secondsToMixOut);
+    const prove = () =>
+      proveLadder({
+        slate,
+        factsA,
+        rng: drawRng,
+        now: () => this.clock.now(),
+        budgetMs,
+      });
+    let outcome = prove();
+
+    // Authored landings, with the shipped structural referee
+    // kept: a recipe that fails validation is vetoed on the
+    // slate and the ladder re-proves ONCE; a second failure
+    // takes the fallback-invalid landing, stamped with the rung
+    // that produced it.
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      if (outcome.kind !== "authored") break;
+      const candidate = outcome.candidate;
+      const errors = validateRecipe(candidate.recipe, factsA, candidate.trackB);
+      if (errors.length === 0) {
+        if (generation !== this.generation || !this.running) return;
+        const result: ConsiderResult = {
+          trackB: candidate.trackB,
+          recipe: candidate.recipe,
+          suitability: candidate.suitability,
+          poolSize: slate.size(),
+          pool: slate.entries().map((entry) => ({
+            trackId: entry.trackB.trackId,
+            family: entry.recipe.family,
+            technique: entry.recipe.technique,
+            fxKinds: fxKindsOfRecipe(entry.recipe),
+            suitability: entry.suitability,
+            evidence: { ...entry.recipe.authored.evidence },
+          })),
+        };
+        this.setPreview(result);
+        this.narrate(
+          "drawn",
+          `Drew ${candidate.recipe.family}${candidate.recipe.technique ? ` (${candidate.recipe.technique})` : ""} into "${this.titleOf(candidate.trackB.trackId)}" — suitability ${candidate.suitability.toFixed(2)}, pool of ${slate.size()}`,
+        );
+        const entryB = this.prepared.get(candidate.trackB.trackId);
+        if (!entryB || !entryB.buffer) {
+          this.startBuyTime(result);
+          return;
+        }
+        await this.commitJoin(result, "auto", {
+          provenance: {
+            source: candidate.source,
+            slatePosition: slate.positionOf(candidate.id),
+            ladderRung: outcome.rung,
+            cratesVersion: CRATES_VERSION,
+          },
+          forceUntrusted: outcome.degraded,
+        });
+        return;
+      }
+      slate.veto(
+        candidate.id,
+        "referee",
+        `recipe failed structural validation (${errors.join("; ")})`,
+      );
+      this.narrate(
+        "degraded",
+        `Drawn ${candidate.recipe.family} recipe failed structural validation (${errors.join("; ")}) — re-proving down the ladder`,
+        "fallback-invalid",
+      );
+      if (attempt === 0) outcome = prove();
+    }
+
+    if (outcome.kind === "authored") {
+      const candidate = outcome.candidate;
+      const target = this.firstReadyWithBuffer();
+      this.preview = null;
+      const stamp: ProvenanceStamp = {
+        source: candidate.source,
+        slatePosition: slate.positionOf(candidate.id),
+        ladderRung: outcome.rung,
+        cratesVersion: CRATES_VERSION,
+      };
+      if (target) {
+        this.plainStart(target, {
+          fallback: "fallback-invalid",
+          recipe: candidate.recipe,
+          suitability: candidate.suitability,
+          poolSize: slate.size(),
+          provenance: stamp,
+        });
+      } else {
+        this.recordJoin({
+          family: candidate.recipe.family,
+          technique: candidate.recipe.technique,
+          fxKinds: fxKindsOfRecipe(candidate.recipe),
+          pairTrackIds: [current.track.id, candidate.trackB.trackId],
+          suitability: candidate.suitability,
+          poolSize: slate.size(),
+          fallback: "fallback-invalid",
+          provenance: stamp,
+        });
+        void this.handleExhaustion();
+      }
+      return;
+    }
+
+    if (outcome.kind === "cut") {
+      const entry = this.prepared.get(outcome.trackB.trackId);
+      if (entry && entry.buffer && entry.facts) {
+        this.narrate(
+          "drawn",
+          `Ladder rung 3 — no blend proved into "${entry.track.title}", so the join lands as a clean phrase-boundary cut (exit ${Math.round(outcome.proof.margins.exitPhraseAtMs ?? 0)} ms → entry ${Math.round(outcome.proof.margins.entryPhraseAtMs ?? 0)} ms)`,
+        );
+        this.plainStart(entry, {
+          suitability: null,
+          poolSize: slate.size(),
+          provenance: {
+            source: "ladder-rung:3",
+            slatePosition: null,
+            ladderRung: 3,
+            cratesVersion: CRATES_VERSION,
+          },
+        });
+        return;
+      }
+      // The cut's track lost its buffer between proving and
+      // landing: fall through to the guaranteed rung.
+    }
+
+    // Rung 4: the guaranteed plain crossfade — the old
+    // fallback-unprepared landing, now the named bottom rung.
+    const target = this.firstReadyWithBuffer();
+    this.preview = null;
+    const rung4Stamp: ProvenanceStamp = {
+      source: "ladder-rung:4",
+      slatePosition: null,
+      ladderRung: 4,
+      cratesVersion: CRATES_VERSION,
+    };
+    if (target) {
+      this.narrate(
+        "fallback",
+        `Ladder rung 4 — no proven blend or cut inside the budget, so the guaranteed plain crossfade lands into "${target.track.title}"`,
+        "fallback-unprepared",
+      );
+      this.plainStart(target, {
+        fallback: "fallback-unprepared",
+        provenance: rung4Stamp,
+      });
+    } else {
+      this.recordJoin({
+        family: null,
+        pairTrackIds: [current.track.id, current.track.id],
+        suitability: null,
+        poolSize: 0,
+        fallback: "fallback-unprepared",
+        provenance: rung4Stamp,
+      });
+      void this.handleExhaustion();
+    }
+  }
+
+  /**
+   * The guest editor (wave item 3): a scheduled party request
+   * whose track made the slate has its candidates re-authored
+   * "guest" and its best one moved to the front of the slate —
+   * a named editor like any other, its edits in the slate's log.
+   */
+  private applyGuestEdits(slate: Slate): void {
+    for (const request of this.evaluateRequests()) {
+      if (request.status !== "scheduled") continue;
+      const mine = slate
+        .entries()
+        .filter((entry) => entry.trackB.trackId === request.track.id);
+      if (mine.length === 0) continue;
+      for (const entry of mine) {
+        slate.replace({ ...entry, source: "guest" }, "guest");
+      }
+      const best = mine.reduce((a, z) =>
+        z.suitability > a.suitability ? z : a,
+      );
+      slate.unshift({ ...best, source: "guest" }, "guest");
+    }
+  }
+
+  /** Track id → primary artist, across everything the night knows. */
+  private artistByTrackId(): ReadonlyMap<string, string | null> {
+    const map = new Map<string, string | null>();
+    const all = [
+      ...this.history,
+      ...(this.current ? [this.current.track] : []),
+      ...this.upcoming,
+      ...this.queue,
+    ];
+    for (const track of all) {
+      if (!map.has(track.id)) map.set(track.id, artistNameOf(track));
+    }
+    return map;
   }
 
   /**
@@ -2163,6 +2616,11 @@ class LiveRaveSessionImpl implements LiveRaveSession {
   private async commitJoin(
     result: ConsiderResult,
     recordMode: "auto" | "user-act",
+    opts: {
+      provenance?: ProvenanceStamp;
+      /** The ladder's degraded lane: perform in degraded form. */
+      forceUntrusted?: boolean;
+    } = {},
   ): Promise<void> {
     if (!this.current || !this.performer) return;
     const entryB = this.prepared.get(result.trackB.trackId);
@@ -2175,9 +2633,9 @@ class LiveRaveSessionImpl implements LiveRaveSession {
       buffer: entryB.buffer,
       facts: entryB.facts,
     });
-    const untrusted = !(
-      factsA.beatmatchTrusted && result.trackB.beatmatchTrusted
-    );
+    const untrusted =
+      !(factsA.beatmatchTrusted && result.trackB.beatmatchTrusted) ||
+      opts.forceUntrusted === true;
     if (untrusted) {
       this.narrate(
         "degraded",
@@ -2205,6 +2663,7 @@ class LiveRaveSessionImpl implements LiveRaveSession {
       suitability: result.suitability,
       poolSize: result.poolSize,
       recordMode,
+      provenance: opts.provenance ?? defaultProvenance(recordMode),
       untrusted,
       overlapEndPosMs,
     };
@@ -2251,6 +2710,13 @@ class LiveRaveSessionImpl implements LiveRaveSession {
       poolSize: join.poolSize,
       userAct: join.recordMode === "user-act",
       untrusted: join.untrusted,
+      provenance: join.provenance ?? undefined,
+    });
+    this.noteJoinLanded({
+      pairTrackIds: [outgoing.track.id, join.trackB.id],
+      family: join.recipe.family,
+      technique: join.recipe.technique,
+      incoming: join.trackB,
     });
     this.preview = null;
     this.narrate(
@@ -2273,6 +2739,8 @@ class LiveRaveSessionImpl implements LiveRaveSession {
       recipe?: JoinRecipe | null;
       suitability?: number | null;
       poolSize?: number;
+      /** The receipts stamp (wave item 4); ladder landings pass theirs. */
+      provenance?: ProvenanceStamp;
     } = {},
   ): void {
     if (!this.current || !this.performer || !entry.buffer || !entry.facts) {
@@ -2313,6 +2781,15 @@ class LiveRaveSessionImpl implements LiveRaveSession {
       poolSize: opts.poolSize ?? 0,
       fallback: opts.fallback,
       userAct: opts.userAct,
+      provenance:
+        opts.provenance ??
+        defaultProvenance(opts.userAct ? "user-act" : "auto"),
+    });
+    this.noteJoinLanded({
+      pairTrackIds: [outgoing.track.id, entry.track.id],
+      family: opts.recipe?.family ?? null,
+      technique: opts.recipe?.technique,
+      incoming: entry.track,
     });
     if (opts.fallback) {
       this.narrate(
@@ -2520,6 +2997,26 @@ class LiveRaveSessionImpl implements LiveRaveSession {
     }
     if (!this.current) return;
     this.narrate("user-act", "Skip next (user act — the floor does not bind)");
+    if (this.activeJoin) {
+      // Skipping THROUGH a sounding blend: the join completes
+      // early by the user's act, and the Ear labels the skip
+      // against that join's record — skip-in-blend, a transition
+      // failure, not a track event (wave item 5).
+      const join = this.activeJoin;
+      const positionInJoin = Math.max(
+        0,
+        (this.performer?.positionMs("A") ?? 0) -
+          join.recipe.outgoing.exitAnchorMs,
+      );
+      join.recordMode = "user-act";
+      this.completeJoin();
+      this.ear.skipInBlend(positionInJoin);
+      return;
+    }
+    // Every other skip leaves the current track after its join:
+    // a track event, labelled before the next landing can close
+    // the open record as a completion.
+    this.ear.skipAfter(this.performer?.positionMs("A") ?? null);
     if (this.buyTime) {
       const buyTime = this.buyTime;
       this.buyTime = null;
@@ -2539,13 +3036,6 @@ class LiveRaveSessionImpl implements LiveRaveSession {
       } else {
         void this.handleDeckEnd();
       }
-      return;
-    }
-    if (this.activeJoin) {
-      // A decision is committed: perform it immediately by
-      // completing the join now.
-      this.activeJoin.recordMode = "user-act";
-      this.completeJoin();
       return;
     }
     const target = this.firstReadyWithBuffer();
@@ -2578,15 +3068,25 @@ class LiveRaveSessionImpl implements LiveRaveSession {
     }
     const previous = this.history[this.history.length - 2];
     const entry = this.prepared.get(previous.id);
+    // Leaving the current track is a track event for the Ear;
+    // landing back on a played track is a replay (wave item 5).
+    this.ear.skipAfter(this.performer?.positionMs("A") ?? null);
+    const landBack = (landed: PreparedEntry): void => {
+      this.plainStart(landed, { userAct: true });
+      const recordAt = this.lastInboundRecordAt.get(previous.id);
+      const pair =
+        recordAt !== undefined ? this.pairByRecordAt.get(recordAt) : undefined;
+      if (recordAt !== undefined && pair) this.ear.replay(recordAt, pair);
+    };
     if (entry && entry.buffer && entry.facts) {
       // History is a play log: going back is a new play of it.
       this.history.pop(); // drop the current play; plainStart re-appends
-      this.plainStart(entry, { userAct: true });
+      landBack(entry);
     } else if (entry) {
       void this.prepTrack(previous, "fast").then(() => {
         const refreshed = this.prepared.get(previous.id);
         if (refreshed && refreshed.buffer && refreshed.facts && this.running) {
-          this.plainStart(refreshed, { userAct: true });
+          landBack(refreshed);
         }
       });
     }
@@ -2676,6 +3176,10 @@ class LiveRaveSessionImpl implements LiveRaveSession {
 
   seekTo(positionMs: number): void {
     if (!this.running || !this.performer) return;
+    // For the Ear's replay detection: where the listener was
+    // before the jump (a return to the start from deep in the
+    // track is a replay of the track that is playing).
+    const positionBeforeSeek = this.performer.positionMs("A");
     if (this.activeJoin) {
       // SIMPLIFICATION (named in the header): a sounding join does
       // not survive a seek — the incoming deck is cancelled back
@@ -2713,6 +3217,20 @@ class LiveRaveSessionImpl implements LiveRaveSession {
     // store at the pre-seek position until the next tick (a paused
     // session has no next tick coming).
     this.publishPositionDuration();
+    // Replay (wave item 5): back to the start from past the
+    // track's midpoint — the listener chose to hear it again.
+    const durationMs = this.current?.facts.durationMs ?? null;
+    if (
+      positionMs <= 1000 &&
+      durationMs !== null &&
+      positionBeforeSeek > durationMs / 2 &&
+      this.current
+    ) {
+      const recordAt = this.lastInboundRecordAt.get(this.current.track.id);
+      const pair =
+        recordAt !== undefined ? this.pairByRecordAt.get(recordAt) : undefined;
+      if (recordAt !== undefined && pair) this.ear.replay(recordAt, pair);
+    }
   }
 
   // -- manual moves (the ONLY manual-move path, §4 invariant 7) -----------------------
@@ -2951,6 +3469,22 @@ class LiveRaveSessionImpl implements LiveRaveSession {
     return this.deps.behaviourLog.getBehaviourLog();
   }
 
+  getTransitionHistory(): (BehaviourRecord & {
+    outcomes: TransitionOutcome[];
+  })[] {
+    return this.deps.behaviourLog
+      .getBehaviourLog()
+      .filter((record) => !record.reason.startsWith("supply-"))
+      .map((record) => ({
+        ...record,
+        outcomes: this.ear.outcomesFor(record.at),
+      }));
+  }
+
+  cooldownState(): string[] {
+    return this.shelf.inspect().lines;
+  }
+
   // -- party seam -------------------------------------------------------------------------
 
   submitGuestRequest(track: Track, guestId = "guest"): GuestRequest {
@@ -3061,6 +3595,81 @@ export function createStorageBehaviourLog(): BehaviourLog {
       return [...records];
     },
   });
+}
+
+/**
+ * The Ear's outcome store over storage.ts (wave item 5): the
+ * same adapter discipline as the behaviour log — an authoritative
+ * in-memory list, fire-and-forget IndexedDB appends, and a
+ * best-effort hydration merge keyed by (recordAt, label, at) so
+ * a late hydration never duplicates or drops an outcome.
+ */
+export function createStorageOutcomeStore(): OutcomeStore {
+  const outcomes: TransitionOutcome[] = [];
+  const keyOf = (o: TransitionOutcome): string =>
+    `${o.recordAt}|${o.label}|${o.at}`;
+  void listOutcomes()
+    .then((stored) => {
+      if (stored.length === 0) return;
+      const seen = new Set(outcomes.map(keyOf));
+      const merged = [
+        ...stored.filter((o) => !seen.has(keyOf(o))),
+        ...outcomes,
+      ].sort((a, z) => a.at - z.at);
+      outcomes.length = 0;
+      outcomes.push(...merged.slice(-400));
+    })
+    .catch(() => {
+      // Persistence is a mirror, not a dependency of the night.
+    });
+  return {
+    append(outcome: TransitionOutcome): void {
+      outcomes.push(outcome);
+      while (outcomes.length > 400) outcomes.shift();
+      void appendOutcome(outcome).catch(() => {
+        // Same discipline: a failed write loses the mirror only.
+      });
+    },
+    list(): TransitionOutcome[] {
+      return [...outcomes];
+    },
+  };
+}
+
+/**
+ * The Cooldown Shelf's store over storage.ts (wave item 8): the
+ * ShelfStore seam is synchronous, so this adapter keeps an
+ * authoritative in-memory cache per mode, mirrors every save to
+ * IndexedDB fire-and-forget, and hydrates a mode's state lazily
+ * on first load (a hydration that lands after the shelf already
+ * holds fresher state for the mode never overwrites it).
+ */
+export function createStorageShelfStore(): ShelfStore {
+  const cache = new Map<string, ShelfState>();
+  const hydrating = new Set<string>();
+  return {
+    load(mode: string) {
+      const cached = cache.get(mode);
+      if (cached) return cached;
+      if (!hydrating.has(mode)) {
+        hydrating.add(mode);
+        void getShelfState(mode)
+          .then((stored) => {
+            if (stored && !cache.has(mode)) cache.set(mode, stored);
+          })
+          .catch(() => {
+            // The mirror is best-effort; the night does not wait.
+          });
+      }
+      return null;
+    },
+    save(state: ShelfState): void {
+      cache.set(state.mode, state);
+      void putShelfState(state).catch(() => {
+        // Same discipline: a failed write loses the mirror only.
+      });
+    },
+  };
 }
 
 /**
@@ -3232,6 +3841,8 @@ function buildDefaultSession(): LiveRaveSession {
     brain: createBrain({ rng: Math.random }),
     memory: createPerformanceMemory(),
     behaviourLog,
+    outcomeStore: createStorageOutcomeStore(),
+    shelfStore: createStorageShelfStore(),
     player: createPlayerAccess(),
   });
 }

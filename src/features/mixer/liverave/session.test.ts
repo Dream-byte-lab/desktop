@@ -2361,3 +2361,148 @@ describe("autonomous acceptance — the photographed configuration (fix2-0119)",
     expect(pushed.session.fallbackCount).toBe(0);
   });
 });
+
+// ---------------------------------------------------------------------
+// Optimisation wave — session integration (items 1–8 wired)
+// ---------------------------------------------------------------------
+
+describe("optimisation wave — slate, ladder, receipts, ear, shelf", () => {
+  const ids = ["a", "b", "c", "d", "e", "f"];
+
+  function waveHarness(
+    tracks: Track[],
+    opts: { reads?: Map<string, TrackRead | null>; seed?: number } = {},
+  ): Harness {
+    const h = buildHarness(tracks, {
+      brain: createBrain({ rng: mulberry32(opts.seed ?? 7) }),
+      reads: opts.reads,
+    });
+    h.session.setShaping(resolveShaping("autonomous", NEUTRAL_SLIDERS));
+    return h;
+  }
+
+  /** Drive one decision + completion cycle with distinct record times. */
+  async function driveJoin(h: Harness): Promise<void> {
+    h.clock.advance(60_000);
+    h.performer.setPosition(200_000);
+    h.clock.tick();
+    await flush();
+    h.clock.advance(60_000);
+    h.performer.setPosition(239_999);
+    h.clock.tick();
+    await flush();
+  }
+
+  it("a wave-path join performs with its receipts stamp: planner, slate position, rung 1, crates version", async () => {
+    const h = waveHarness(ids.map((id) => makeTrack(id)));
+    await startInHorizon(h);
+    await driveJoin(h);
+    const log = h.behaviourLog.getBehaviourLog();
+    const last = log.at(-1);
+    expect(last?.reason).toBe("performed");
+    expect(last?.provenance).toBeDefined();
+    expect(last?.provenance?.source).toBe("planner");
+    expect(last?.provenance?.ladderRung).toBe(1);
+    expect(last?.provenance?.cratesVersion).toBe("crates-v1");
+    expect(last?.provenance?.slatePosition).not.toBeNull();
+    expect(last?.provenance?.slatePosition ?? 0).toBeGreaterThanOrEqual(1);
+    expect(h.session.fallbackCount).toBe(0);
+    // The transition history seam serves the same record.
+    const history = h.session.getTransitionHistory?.() ?? [];
+    expect(history.at(-1)?.pairTrackIds).toEqual(last?.pairTrackIds);
+    expect(history.at(-1)?.outcomes).toEqual([]);
+  });
+
+  it("the shelf benches the just-played track and says so readably", async () => {
+    const h = waveHarness(ids.map((id) => makeTrack(id)));
+    await startInHorizon(h);
+    await driveJoin(h);
+    const lines = h.session.cooldownState?.() ?? [];
+    expect(lines.length).toBeGreaterThan(0);
+    expect(lines.some((line) => line.includes("BENCHED NOW"))).toBe(true);
+    expect(lines.some((line) => line.startsWith("track"))).toBe(true);
+  });
+
+  it("skipping through a sounding blend labels the join skip-in-blend (a transition failure)", async () => {
+    const h = waveHarness(ids.map((id) => makeTrack(id)));
+    await startInHorizon(h);
+    h.clock.advance(60_000);
+    h.performer.setPosition(200_000);
+    h.clock.tick();
+    await flush();
+    expect(h.performer.performedRecipes.length).toBeGreaterThanOrEqual(1);
+    expect(h.session.blending).toBe(true);
+    h.session.skipNext();
+    await flush();
+    const history = h.session.getTransitionHistory?.() ?? [];
+    const joinRecord = history.at(-1);
+    expect(joinRecord?.reason).toBe("user-act");
+    const labels = (joinRecord?.outcomes ?? []).map((o) => o.label);
+    expect(labels).toContain("skip-in-blend");
+    const skip = joinRecord?.outcomes.find((o) => o.label === "skip-in-blend");
+    expect(skip?.positionMs).not.toBeNull();
+  });
+
+  it("skipping a track well after its join labels skip-after, distinct from skip-in-blend", async () => {
+    const h = waveHarness(ids.map((id) => makeTrack(id)));
+    await startInHorizon(h);
+    await driveJoin(h);
+    const landedPair = h.behaviourLog.getBehaviourLog().at(-1)?.pairTrackIds;
+    h.performer.setPosition(100_000);
+    h.session.skipNext();
+    await flush();
+    const history = h.session.getTransitionHistory?.() ?? [];
+    const record = history.find(
+      (r) =>
+        r.pairTrackIds[0] === landedPair?.[0] &&
+        r.pairTrackIds[1] === landedPair?.[1],
+    );
+    const labels = (record?.outcomes ?? []).map((o) => o.label);
+    expect(labels).toContain("skip-after");
+    expect(labels).not.toContain("skip-in-blend");
+  });
+
+  it("when every option is untrusted, the join degrades through the ladder's degraded lane, stamped rung 2 — never a silent death", async () => {
+    const tracks = [makeTrack("a"), makeTrack("b"), makeTrack("c")];
+    const h = waveHarness(tracks, {
+      reads: new Map<string, TrackRead | null>([
+        ["b", untrustedRead()],
+        ["c", untrustedRead()],
+      ]),
+      seed: 42,
+    });
+    await startInHorizon(h);
+    await driveJoin(h);
+    const log = h.behaviourLog.getBehaviourLog();
+    const pairRecord = log.find(
+      (r) => r.pairTrackIds[1] === "b" || r.pairTrackIds[1] === "c",
+    );
+    expect(pairRecord).toBeDefined();
+    expect(pairRecord?.reason).toBe("degraded-untrusted");
+    expect(pairRecord?.provenance?.ladderRung).toBe(2);
+    expect(pairRecord?.provenance?.cratesVersion).toBe("crates-v1");
+    expect(h.session.isRunning).toBe(true);
+  });
+
+  it("a scheduled guest request's winning join is stamped guest", async () => {
+    const tracks = ids.map((id) => makeTrack(id));
+    // rng () => 0 makes the ladder's weighted draw take the first
+    // eligible candidate in slate order — which, after the guest
+    // editor's unshift, is the guest's candidate.
+    const h = buildHarness(tracks, {
+      brain: createBrain({ rng: () => 0 }),
+    });
+    h.session.setShaping(resolveShaping("autonomous", NEUTRAL_SLIDERS));
+    await h.session.start(tracks, 0);
+    await flush();
+    const request = h.session.submitGuestRequest(tracks[1]);
+    expect(request.track.id).toBe("b");
+    const evaluated = h.session.evaluateRequests();
+    expect(evaluated.find((r) => r.track.id === "b")?.status).toBe("scheduled");
+    await driveJoin(h);
+    const log = h.behaviourLog.getBehaviourLog();
+    const guestRecord = log.find((r) => r.pairTrackIds[1] === "b");
+    expect(guestRecord).toBeDefined();
+    expect(guestRecord?.provenance?.source).toBe("guest");
+  });
+});

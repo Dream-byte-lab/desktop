@@ -186,6 +186,25 @@ export function isFallbackReason(reason: string): boolean {
   return reason === "fallback-unprepared" || reason === "fallback-invalid";
 }
 
+/**
+ * The receipts stamp as one short line (wave item 4): who chose
+ * this join, where it sat on the slate, which ladder rung landed
+ * it, and the crates table version in force — e.g.
+ * "planner · slate #2 · rung 1 · crates-v1". Records written
+ * before the wave carry no stamp and render nothing.
+ */
+export function provenanceLabel(
+  record: Pick<BehaviourRecord, "provenance">,
+): string {
+  const stamp = record.provenance;
+  if (!stamp) return "";
+  const parts: string[] = [stamp.source];
+  if (stamp.slatePosition !== null) parts.push(`slate #${stamp.slatePosition}`);
+  if (stamp.ladderRung !== null) parts.push(`rung ${stamp.ladderRung}`);
+  if (stamp.cratesVersion !== null) parts.push(stamp.cratesVersion);
+  return parts.join(" · ");
+}
+
 // ---------------------------------------------------------------------
 // Personalities (§10.3 tiles) — signature colour + one-line behaviour
 // from PERSONALITY-TARGETS as summarised in shaping.ts's own header.
