@@ -8,7 +8,21 @@ export async function resolveSoundCloudUrl(
   if (!url.startsWith("http://") && !url.startsWith("https://")) {
     url = `https://${url}`;
   }
-  if (url.includes("on.soundcloud.com") || !url.includes("soundcloud.com/")) {
+  let host = "";
+  let path = "";
+  try {
+    const parsed = new URL(url);
+    host = parsed.hostname;
+    path = parsed.pathname;
+  } catch {
+    host = "";
+    path = "";
+  }
+  const isShortLink = host === "on.soundcloud.com";
+  const isSoundCloudHost =
+    host === "soundcloud.com" || host.endsWith(".soundcloud.com");
+  const isCanonical = isSoundCloudHost && path.length > 1;
+  if (isShortLink || !isCanonical) {
     try {
       const response = await fetch(url, { redirect: "follow", signal });
       if (response.url) url = response.url;

@@ -47,11 +47,22 @@ export function loadArtistAvatar(artistId: string): Promise<string | null> {
   return request;
 }
 
-const GOOGLE_IMAGE_HOST = /[a-zA-Z0-9_-]+\.(?:googleusercontent|ggpht)\.com/i;
-const GOOGLE_SIZE_SUFFIX = /=(?:w\d+-h\d+|s\d+)(?:-[a-zA-Z0-9_-]+)*$/;
+// Anchored to a parsed hostname: dot-separated labels, so the match is
+// linear and lookalike hosts (googleusercontent.com.evil.com) fail.
+const GOOGLE_IMAGE_HOST =
+  /^[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:googleusercontent|ggpht)\.com$/i;
+// Size-suffix tokens never contain "-", so excluding it from the token
+// class keeps the repetition unambiguous (no super-linear backtracking).
+const GOOGLE_SIZE_SUFFIX = /=(?:w\d+-h\d+|s\d+)(?:-[a-zA-Z0-9_]+)*$/;
 
 export function sizedAvatarUrl(url: string, size: number): string {
-  if (!GOOGLE_IMAGE_HOST.test(url)) return url;
+  let host: string;
+  try {
+    host = new URL(url).hostname;
+  } catch {
+    return url;
+  }
+  if (!GOOGLE_IMAGE_HOST.test(host)) return url;
   const suffix = `=s${size}-c`;
   return GOOGLE_SIZE_SUFFIX.test(url)
     ? url.replace(GOOGLE_SIZE_SUFFIX, suffix)
