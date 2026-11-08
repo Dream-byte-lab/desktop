@@ -30,7 +30,35 @@ Everything below is additive. With the DJ switched off, playback is the upstream
 
 ## Preview
 
-_No screenshots are available. The app has changed a great deal and is still being worked on: the redesign is not finished, and not close to finished, to the state it is meant to reach — so screenshots are not expected anytime soon._
+_The current build (0.1.19) — the fork's own surfaces: the liveRave DJ, a Home and For You feed built only from your own listening, the capsule player, and party mode with guest requests._
+
+**The DJ stage (Pro)** — the Booth mid-join: two live decks, the drawn join and the reasons on its cards.
+
+![DJ stage (Pro)](docs/preview/01-dj-stage-pro.png)
+
+**DJ Simple** — the Performance Ribbon: what is playing, what is next, and the night so far.
+
+![DJ Simple](docs/preview/02-dj-simple.png)
+
+**Home** — personal from the first run: this space is assembled only from your own listening, never from global charts.
+
+![Home](docs/preview/03-home.png)
+
+**For You** — a feed that grows from your own taste, on-device.
+
+![For You](docs/preview/04-for-you.png)
+
+**The capsule player**, during playback.
+
+![Capsule player](docs/preview/05-player.png)
+
+**Party mode** — guests request from their phones; the brain judges each request against the night's arc. This one didn't fit.
+
+![Party panel](docs/preview/06-party-panel.png)
+
+**Your library on this device** — local tracks live alongside streamed ones.
+
+![Library](docs/preview/07-library.png)
 
 ---
 
