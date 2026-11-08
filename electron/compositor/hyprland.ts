@@ -63,10 +63,15 @@ export async function activeHyprWindow(): Promise<string | null> {
 
 // Window addresses come from the compositor's IPC replies, i.e. from
 // outside this process, and are interpolated into dispatch commands and
-// a generated Lua body below. Hyprland addresses are "0x" + hex; refuse
-// anything else so the interpolated values can never break out of
-// either command language.
-const HYPRLAND_ADDRESS_RE = /^0x[0-9a-fA-F]+$/;
+// a generated Lua body below. Hyprland addresses are "0x" + hex; the
+// value that reaches those command strings is REBUILT from the matched
+// hex digits, never the original string, so an interpolated value can
+// never break out of either command language.
+function hyprlandAddress(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const match = /^0x([0-9a-fA-F]+)$/.exec(value);
+  return match ? `0x${match[1]}` : null;
+}
 
 export async function placeHyprlandWindow(
   request: PlacementRequest,
@@ -77,14 +82,12 @@ export async function placeHyprlandWindow(
     focusedWorkArea(),
   ]);
   if (!client || !area) return false;
-  if (!HYPRLAND_ADDRESS_RE.test(client.address)) return false;
-  const focusAddress =
-    previousFocus && HYPRLAND_ADDRESS_RE.test(previousFocus)
-      ? previousFocus
-      : null;
+  const address = hyprlandAddress(client.address);
+  if (!address) return false;
+  const focusAddress = hyprlandAddress(previousFocus);
   const { x, y } = overlayOrigin(area, request);
-  const target = `address:${client.address}`;
-  const refocus = focusAddress && focusAddress !== client.address;
+  const target = `address:${address}`;
+  const refocus = focusAddress && focusAddress !== address;
 
   if (await isLuaMode()) {
     const sel = `window = ${luaString(target)}`;
