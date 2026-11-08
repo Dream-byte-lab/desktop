@@ -128,11 +128,27 @@ function continuesWithSimilar(state: PlayerState): boolean {
   return state.autoplaySimilar && state.repeat === "off";
 }
 
+let fallbackIdCounter = 0;
+
+// Random tail for generated ids when crypto.randomUUID is unavailable.
+// Uses crypto.getRandomValues so the ids stay unguessable; the counter
+// tail runs only when no CSPRNG exists at all and just keeps ids unique.
+function randomIdToken(): string {
+  const c = globalThis.crypto;
+  if (c && "getRandomValues" in c) {
+    const bytes = new Uint8Array(9);
+    c.getRandomValues(bytes);
+    return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+  }
+  fallbackIdCounter += 1;
+  return `${Date.now().toString(36)}-${fallbackIdCounter.toString(36)}`;
+}
+
 function newRadioWaveId(): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
     return crypto.randomUUID();
   }
-  return `wave-${Date.now().toString(36)}-${Math.floor(Math.random() * 0xffffffff).toString(36)}`;
+  return `wave-${Date.now().toString(36)}-${randomIdToken()}`;
 }
 
 type LyricsHint = { title: string; artist: string; durationMs?: number };
@@ -180,7 +196,7 @@ class PlaybackTelemetryTracker {
       this.listeningSessionId =
         typeof crypto !== "undefined" && "randomUUID" in crypto
           ? crypto.randomUUID()
-          : `ls_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+          : `ls_${Date.now()}_${randomIdToken()}`;
     }
     this.lastActivityTime = now;
     return this.listeningSessionId;
@@ -189,7 +205,7 @@ class PlaybackTelemetryTracker {
   private generatePlaybackSessionId(): string {
     return typeof crypto !== "undefined" && "randomUUID" in crypto
       ? crypto.randomUUID()
-      : `ps_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+      : `ps_${Date.now()}_${randomIdToken()}`;
   }
 
   public startTrack(track: Track, contextStr: string | null) {

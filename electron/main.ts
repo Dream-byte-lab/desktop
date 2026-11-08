@@ -937,7 +937,15 @@ if (!gotTheLock) {
             requestHeaders[name] = value;
           }
         }
-        const origin = details.url.includes("music.apple.com/")
+        let appleMusicHost = false;
+        try {
+          const host = new URL(details.url).hostname;
+          appleMusicHost =
+            host === "music.apple.com" || host.endsWith(".music.apple.com");
+        } catch {
+          appleMusicHost = false;
+        }
+        const origin = appleMusicHost
           ? "https://music.apple.com"
           : youtubeOriginFor(details.url);
         requestHeaders["Origin"] = origin;

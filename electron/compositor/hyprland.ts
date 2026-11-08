@@ -61,6 +61,18 @@ export async function activeHyprWindow(): Promise<string | null> {
   return active?.address ?? null;
 }
 
+// Window addresses come from the compositor's IPC replies, i.e. from
+// outside this process, and are interpolated into dispatch commands and
+// a generated Lua body below. Hyprland addresses are "0x" + hex; the
+// value that reaches those command strings is REBUILT from the matched
+// hex digits, never the original string, so an interpolated value can
+// never break out of either command language.
+function hyprlandAddress(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const match = /^0x([0-9a-fA-F]+)$/.exec(value);
+  return match ? `0x${match[1]}` : null;
+}
+
 export async function placeHyprlandWindow(
   request: PlacementRequest,
   previousFocus: string | null,
@@ -70,9 +82,12 @@ export async function placeHyprlandWindow(
     focusedWorkArea(),
   ]);
   if (!client || !area) return false;
+  const address = hyprlandAddress(client.address);
+  if (!address) return false;
+  const focusAddress = hyprlandAddress(previousFocus);
   const { x, y } = overlayOrigin(area, request);
-  const target = `address:${client.address}`;
-  const refocus = previousFocus && previousFocus !== client.address;
+  const target = `address:${address}`;
+  const refocus = focusAddress && focusAddress !== address;
 
   if (await isLuaMode()) {
     const sel = `window = ${luaString(target)}`;
@@ -90,9 +105,7 @@ export async function placeHyprlandWindow(
           `hl.dsp.window.set_prop({ prop = "${prop}", value = ${value}, ${sel} })`,
       ),
       ...(refocus
-        ? [
-            `hl.dsp.focus({ window = ${luaString(`address:${previousFocus}`)} })`,
-          ]
+        ? [`hl.dsp.focus({ window = ${luaString(`address:${focusAddress}`)} })`]
         : []),
     ];
     const body = steps.map((step) => `hl.dispatch(${step})`).join("; ");
@@ -107,7 +120,7 @@ export async function placeHyprlandWindow(
     `dispatch setprop ${target} noshadow 1`,
     `dispatch setprop ${target} rounding 0`,
     `dispatch setprop ${target} noblur 1`,
-    ...(refocus ? [`dispatch focuswindow address:${previousFocus}`] : []),
+    ...(refocus ? [`dispatch focuswindow address:${focusAddress}`] : []),
   ];
   await hyprRequest(`[[BATCH]]${commands.join(";")}`);
   return true;

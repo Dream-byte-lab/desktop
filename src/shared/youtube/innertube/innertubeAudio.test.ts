@@ -64,7 +64,12 @@ function playerResponse(formats: unknown[], status = "OK") {
 type FetchInput = Parameters<typeof fetch>[0];
 
 function isStreamProbe(input: FetchInput): boolean {
-  return String(input).includes("googlevideo.com/");
+  try {
+    const host = new URL(String(input)).hostname;
+    return host === "googlevideo.com" || host.endsWith(".googlevideo.com");
+  } catch {
+    return false;
+  }
 }
 
 function mockPlayerApi(
