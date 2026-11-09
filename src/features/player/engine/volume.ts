@@ -1,3 +1,5 @@
+import { stepVolumeLevel } from "@/features/shortcuts/utils/volumeStep";
+
 // user volume spans gain 0..5: the slider can push past 100% up to 500%
 export const MAX_USER_VOLUME = 5;
 
@@ -49,4 +51,12 @@ export function toVolumeGain(level: number): number {
     ) *
       (MAX_USER_VOLUME - 1)
   );
+}
+
+export function stepVolumeGain(
+  gain: number,
+  direction: 1 | -1,
+  step: number,
+): number {
+  return toVolumeGain(stepVolumeLevel(toVolumeLevel(gain), direction, step));
 }

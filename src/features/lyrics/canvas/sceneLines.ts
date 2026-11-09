@@ -91,11 +91,13 @@ export function paintLine(frame: SceneFrame, layout: LineLayout) {
       dpr,
       now,
       scene.display.highlight,
+      scene.timed,
     );
   };
 }
 
-function litState(layout: LineLayout, timeMs: number): string {
+function litState(layout: LineLayout, timeMs: number, timed: boolean) {
+  if (!timed) return "static";
   if (timeMs >= lineExitMs(layout.line)) return "done";
   return String(
     layout.tokens.filter((placed) => placed.token.startMs <= timeMs).length,
@@ -116,8 +118,10 @@ export function visibleLines(frame: SceneFrame): VisibleLine[] {
     // over time, so it is never "live": its bitmap stays stable and
     // the frame loop drops to its poll demand. Instrumental breaks
     // keep animating (their dots are a progress display, not lyric
-    // emphasis).
+    // emphasis). Untimed lines are never live either: with no timing
+    // there is nothing to animate.
     const live =
+      scene.timed &&
       isLineAnimating(layout.line, timeMs, now) &&
       (highlight || layout.line.instrumental);
     const moving = offset !== 0 || motion.isWheelMoving();
@@ -127,7 +131,7 @@ export function visibleLines(frame: SceneFrame): VisibleLine[] {
       top: moving ? exact : Math.round(exact * dpr) / dpr,
       key: live
         ? `live:${now}`
-        : `still:${scene.version}:${highlight ? litState(layout, timeMs) : "even"}`,
+        : `still:${scene.version}:${highlight ? litState(layout, timeMs, scene.timed) : "even"}`,
       live,
       fading: live && timeMs >= lineExitMs(layout.line),
       moving,

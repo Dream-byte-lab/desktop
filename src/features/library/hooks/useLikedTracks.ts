@@ -1,6 +1,7 @@
 import { useEffect, useSyncExternalStore } from "react";
 import { api, getAuthSession, toClientTrack } from "@/shared/api";
 import type { Track } from "@/shared/types";
+import { notifyLibraryChanged } from "./usePlaylists";
 
 type LikedData = { tracks: Track[]; total: number };
 const EMPTY: LikedData = { tracks: [], total: 0 };
@@ -241,11 +242,123 @@ export function applyOptimisticUnlike(trackId: string): () => void {
   return beginOptimisticUnlike(trackId).settleFailed;
 }
 
+/**
+ * Desired-state like sync (upstream LIN-334): rapid toggles record the
+ * state the user last asked for, and one sync loop per track walks the
+ * server to that state — intermediate clicks never race each other, and
+ * when the last click already matches the in-flight request no extra
+ * call is sent. Callers who need per-intent results keep using the
+ * mutation hooks, which send every intent in order; this path is for
+ * fire-and-forget toggles where only the final state matters.
+ */
+const desiredLikes = new Map<string, boolean>();
+const syncingLikes = new Set<string>();
+const likeWaiters = new Map<
+  string,
+  Array<{ resolve: () => void; reject: (error: unknown) => void }>
+>();
+
+export function isTrackLikedNow(trackId: string): boolean {
+  const override = optimisticOverrides.get(trackId);
+  if (override !== undefined) return override.liked;
+  return cache.tracks.some((t) => t.id === trackId);
+}
+
+function settleLikeWaiters(trackId: string, error?: unknown) {
+  const waiters = likeWaiters.get(trackId) ?? [];
+  likeWaiters.delete(trackId);
+  for (const waiter of waiters) {
+    if (error === undefined) waiter.resolve();
+    else waiter.reject(error);
+  }
+}
+
+function dropLikeSyncState() {
+  for (const trackId of [...likeWaiters.keys()]) {
+    settleLikeWaiters(
+      trackId,
+      new Error("Account changed before this change was sent"),
+    );
+  }
+  desiredLikes.clear();
+}
+
+async function syncTrackLike(trackId: string, confirmed: boolean) {
+  syncingLikes.add(trackId);
+  const accountKey = currentLikedAccountKey();
+  let serverLiked = confirmed;
+  let sent = false;
+  let failure: unknown;
+  try {
+    for (;;) {
+      const wanted = desiredLikes.get(trackId);
+      if (wanted === undefined || wanted === serverLiked) break;
+      // Never send one account's intent in another account's name:
+      // re-check immediately before each call, like the mutation queue.
+      if (currentLikedAccountKey() !== accountKey) {
+        throw new Error("Account changed before this change was sent");
+      }
+      sent = true;
+      if (wanted) await api.likeTrack(trackId);
+      else await api.unlikeTrack(trackId);
+      serverLiked = wanted;
+    }
+  } catch (error) {
+    failure = error ?? new Error("like sync failed");
+  }
+  desiredLikes.delete(trackId);
+  syncingLikes.delete(trackId);
+  // The visible state settles on the last confirmed server state. The
+  // fresh sequence keeps this settle newer than any load that started
+  // before it, so a stale refetch cannot speak over it; a load that
+  // starts after it may drop the override and speak for the track.
+  const entry = optimisticOverrides.get(trackId);
+  if (entry && entry.accountKey === accountKey) {
+    optimisticOverrides.set(trackId, {
+      liked: serverLiked,
+      seq: ++overrideSeq,
+      pending: 0,
+      accountKey,
+    });
+  }
+  emit(false);
+  settleLikeWaiters(trackId, failure);
+  if (sent) notifyLibraryChanged();
+}
+
+export function setTrackLiked(trackId: string, liked: boolean): Promise<void> {
+  const settled = new Promise<void>((resolve, reject) => {
+    const waiters = likeWaiters.get(trackId) ?? [];
+    waiters.push({ resolve, reject });
+    likeWaiters.set(trackId, waiters);
+  });
+  const confirmed = isTrackLikedNow(trackId);
+  desiredLikes.set(trackId, liked);
+  optimisticOverrides.set(trackId, {
+    liked,
+    seq: ++overrideSeq,
+    pending: 1,
+    accountKey: currentLikedAccountKey(),
+  });
+  emit(false);
+  if (!syncingLikes.has(trackId)) void syncTrackLike(trackId, confirmed);
+  return settled;
+}
+
+export function toggleTrackLike(trackId: string): {
+  liked: boolean;
+  settled: Promise<void>;
+} {
+  const liked = !isTrackLikedNow(trackId);
+  return { liked, settled: setTrackLiked(trackId, liked) };
+}
+
 function resetForSignedOut() {
   cache = EMPTY;
   loaded = false;
   fetchedFromServer = false;
   optimisticOverrides.clear();
+  dropLikeSyncState();
   lastKnownAccountKey = null;
   accountKeyKnown = true;
   emit(false);
@@ -275,6 +388,7 @@ if (typeof window !== "undefined") {
       fetchedFromServer = false;
       loadFailed = false;
       optimisticOverrides.clear();
+      dropLikeSyncState();
       lastKnownAccountKey = accountKey;
       emit(false);
     }

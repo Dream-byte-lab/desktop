@@ -1,6 +1,6 @@
 import { drawToken, white } from "./drawWord";
 import { backgroundFont, mainFont, subtitleFont } from "./fonts";
-import { tokenHighlight } from "./timing";
+import { tokenHighlight, type TokenHighlight } from "./timing";
 import type { LineLayout, LyricsTypography } from "./types";
 
 const INACTIVE_ALPHA = 0.3;
@@ -11,6 +11,12 @@ const BACKGROUND_RATIO = 0.78;
 const EVEN_ALPHA = 0.62;
 const SUBTITLE_ALPHA = 0.6;
 const REM_PX = 16;
+const UNTIMED_HIGHLIGHT: TokenHighlight = {
+  opacity: 1,
+  solid: 1.4,
+  clear: 1.4,
+  glowRem: 0,
+};
 
 export function drawLine(
   ctx: CanvasRenderingContext2D,
@@ -21,6 +27,7 @@ export function drawLine(
   dpr: number,
   now: number,
   highlight: boolean,
+  timed = true,
 ) {
   const { line } = layout;
   ctx.direction = line.rtl ? "rtl" : "ltr";
@@ -43,7 +50,11 @@ export function drawLine(
         dpr,
       },
       placed,
-      highlight ? tokenHighlight(placed.token, line, timeMs, now) : null,
+      timed
+        ? highlight
+          ? tokenHighlight(placed.token, line, timeMs, now)
+          : null
+        : UNTIMED_HIGHLIGHT,
     );
   }
   if (layout.subtitle.length === 0) return;

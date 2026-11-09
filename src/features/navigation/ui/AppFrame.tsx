@@ -19,6 +19,7 @@ import { FullscreenRouteContext } from "../fullscreenRouteContext";
 import DynamicBlurBackground from "./DynamicBlurBackground";
 import { useGlobalShortcuts } from "../hooks/useGlobalShortcuts";
 import { useDisableButtonFocus } from "../hooks/useDisableButtonFocus";
+import { useWindowPresence } from "../hooks/useWindowPresence";
 import { useWindowState } from "../hooks/useWindowState";
 import {
   FullscreenPlayer,
@@ -253,6 +254,7 @@ export default function AppFrame({ children }: AppFrameProps) {
   }, [setProOpen]);
 
   useDisableButtonFocus();
+  useWindowPresence();
 
   useGlobalShortcuts({
     openSearchPage,

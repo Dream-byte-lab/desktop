@@ -16,8 +16,7 @@ import { playerEngine } from "../engine/playerEngine";
 import {
   usePlaylistsList,
   useAddPlaylistTracks,
-  useLikeTrack,
-  useUnlikeTrack,
+  useToggleTrackLike,
   useIsTrackLiked,
   useModalStore,
 } from "@/features/library";
@@ -80,19 +79,14 @@ export function useSongMenuItems(ctx: SongMenuContext): DropdownMenuItem[] {
 
   const addPlaylistTrack = useAddPlaylistTracks();
 
-  const likeMutation = useLikeTrack();
-  const unlikeMutation = useUnlikeTrack();
+  const toggleLike = useToggleTrackLike();
 
   const liked = useIsTrackLiked(id);
 
-  const handleLike = useCallback(async () => {
+  const handleLike = useCallback(() => {
     if (!id) return;
-    if (liked) {
-      unlikeMutation.mutate(id);
-    } else {
-      likeMutation.mutate(id);
-    }
-  }, [id, liked, likeMutation, unlikeMutation]);
+    toggleLike(id);
+  }, [id, toggleLike]);
 
   const handleShare = useCallback(() => {
     if (!id) return;

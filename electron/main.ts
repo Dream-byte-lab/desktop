@@ -70,6 +70,11 @@ import {
   restoreUnderCursor,
 } from "./window-drag.js";
 import {
+  createWindowStateStore,
+  restorableBounds,
+  type WindowSnapshot,
+} from "./window-state.js";
+import {
   isWindows11,
   loadSnapPreviewAddon,
   NativeSnapPreview,
@@ -140,6 +145,22 @@ let keepPlaying: ReturnType<typeof createKeepPlayingController> | null = null;
 let lineraveBundles: LineraveBundleChannel | null = null;
 let discordRpcManager: DiscordRpcManager | null = null;
 let poTokenService: PoTokenService | null = null;
+let windowStateStore: ReturnType<typeof createWindowStateStore> | null = null;
+
+function getWindowStateStore() {
+  windowStateStore ??= createWindowStateStore(
+    path.join(app.getPath("userData"), "window-state.json"),
+  );
+  return windowStateStore;
+}
+
+function mainWindowSnapshot(): WindowSnapshot | null {
+  if (!mainWindow || mainWindow.isDestroyed()) return null;
+  return {
+    bounds: mainWindow.getNormalBounds(),
+    maximized: mainWindow.isMaximized(),
+  };
+}
 
 // every helper process we spawn (tracert, icon cache refresh, ...) is tracked so
 // quitting can kill whatever is still running instead of leaving orphans behind
@@ -217,6 +238,7 @@ const shutdown = createShutdown({
       }
       spawnedChildren.clear();
     },
+    () => windowStateStore?.flush(mainWindowSnapshot),
     () => {
       // destroy() skips close handlers, so a hidden or stuck window cannot veto the quit
       for (const win of BrowserWindow.getAllWindows()) {
@@ -258,11 +280,19 @@ const MIN_WINDOW_WIDTH = 1100;
 const MIN_WINDOW_HEIGHT = 705;
 
 function createWindow() {
+  const windowState = getWindowStateStore();
+  const restoredBounds = restorableBounds(
+    windowState.get(),
+    screen.getAllDisplays().map((display) => display.workArea),
+    { width: MIN_WINDOW_WIDTH, height: MIN_WINDOW_HEIGHT },
+  );
   mainWindow = new BrowserWindow({
     title: "Liner",
     icon: path.join(process.env.VITE_PUBLIC!, "icon.png"),
-    width: DEFAULT_WINDOW_WIDTH,
-    height: DEFAULT_WINDOW_HEIGHT,
+    ...(restoredBounds ?? {
+      width: DEFAULT_WINDOW_WIDTH,
+      height: DEFAULT_WINDOW_HEIGHT,
+    }),
     minWidth: MIN_WINDOW_WIDTH,
     minHeight: MIN_WINDOW_HEIGHT,
     // macos only reveals the menu bar on hover in native fullscreen for titled windows,
@@ -293,6 +323,7 @@ function createWindow() {
   // the custom window controls replace the native traffic lights
   if (process.platform === "darwin")
     mainWindow.setWindowButtonVisibility(false);
+  mainWindow.on("focus", () => poTokenService?.warm());
 
   // sync window state changes to renderer
   const broadcastWindowState = () => {
@@ -402,6 +433,16 @@ function createWindow() {
     screen.off("display-removed", onDisplayGeometryChanged);
   });
   keepInsideWorkArea();
+  if (restoredBounds && windowState.get().maximized) {
+    mainWindow.maximize();
+    syncResizable();
+  }
+  const trackWindowState = () => windowState.track(mainWindowSnapshot);
+  mainWindow.on("resize", trackWindowState);
+  mainWindow.on("move", trackWindowState);
+  mainWindow.on("maximize", trackWindowState);
+  mainWindow.on("unmaximize", trackWindowState);
+  mainWindow.on("close", () => windowState.flush(mainWindowSnapshot));
   mainWindow.on("minimize", () => {
     broadcastWindowState();
     if (!mainWindow || mainWindow.isDestroyed()) return;
@@ -658,6 +699,9 @@ if (!gotTheLock) {
           // guards a hypothetical sync that lacks the field.
           keepPlayingEnabled: state.keepPlayingWhenScreenOff !== false,
         });
+        poTokenService?.setPlaybackActive(
+          state.status === "playing" || state.status === "loading",
+        );
         thumbar?.update(state);
       },
     );
@@ -699,6 +743,11 @@ if (!gotTheLock) {
 
     discordRpcManager = new DiscordRpcManager();
     poTokenService = new PoTokenService(path.join(__dirname, "preload.cjs"));
+    onTrusted("window:presence", (event) => {
+      if (event.sender !== mainWindow?.webContents) return;
+      overlayManager?.noteMainPresence();
+      poTokenService?.warm();
+    });
 
     const isHyprland = Boolean(
       process.env.HYPRLAND_INSTANCE_SIGNATURE ||
@@ -757,6 +806,19 @@ if (!gotTheLock) {
 
     handleTrusted("window:is-fullscreen", () => {
       return mainWindow?.isFullScreen() ?? false;
+    });
+
+    handleTrusted("window:get-remember-bounds", () =>
+      getWindowStateStore().remembers(),
+    );
+
+    handleTrusted("window:set-remember-bounds", (_event, enabled: unknown) => {
+      const remember = enabled === true;
+      getWindowStateStore().setRemember(
+        remember,
+        remember ? mainWindowSnapshot() : null,
+      );
+      return remember;
     });
 
     handleTrusted("app:get-version", () => {

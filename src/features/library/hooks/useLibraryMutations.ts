@@ -5,6 +5,7 @@ import {
   beginOptimisticLike,
   beginOptimisticUnlike,
   currentLikedAccountKey,
+  toggleTrackLike,
 } from "./useLikedTracks";
 
 type Options = {
@@ -242,4 +243,29 @@ export function useLikeTrack() {
 
 export function useUnlikeTrack() {
   return useTrackLikeMutation("unlike");
+}
+
+/**
+ * Fire-and-forget toggle for menus and buttons that only need the
+ * resulting state: flips optimistically and lets the desired-state
+ * sync in useLikedTracks walk the server to the last click.
+ */
+export function useToggleTrackLike() {
+  return useCallback(
+    (
+      trackId: string,
+      options?: {
+        onSuccess?: (liked: boolean) => void;
+        onError?: (error: unknown) => void;
+      },
+    ): boolean => {
+      const { liked, settled } = toggleTrackLike(trackId);
+      settled.then(
+        () => options?.onSuccess?.(liked),
+        (error) => options?.onError?.(error),
+      );
+      return liked;
+    },
+    [],
+  );
 }

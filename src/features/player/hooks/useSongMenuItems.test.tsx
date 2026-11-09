@@ -22,6 +22,7 @@ vi.mock("@/features/library", () => ({
   useAddPlaylistTracks: () => ({ mutateAsync: mocks.mutateAsync }),
   useLikeTrack: () => ({ mutate: vi.fn() }),
   useUnlikeTrack: () => ({ mutate: vi.fn() }),
+  useToggleTrackLike: () => vi.fn(),
   useIsTrackLiked: () => false,
   useModalStore: {
     getState: () => ({

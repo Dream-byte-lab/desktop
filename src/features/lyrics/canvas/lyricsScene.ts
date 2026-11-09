@@ -18,6 +18,7 @@ const TOP_INSET = 32;
 export class LyricsScene {
   lines: LyricLineModel[] = [];
   shiftMs = 0;
+  timed = true;
   layouts: LineLayout[] = [];
   width = 0;
   height = 0;
@@ -118,6 +119,7 @@ export class LyricsScene {
     });
     this.lines = model.lines;
     this.shiftMs = model.shiftMs;
+    this.timed = model.timed;
   }
 
   setSize(width: number, height: number) {
