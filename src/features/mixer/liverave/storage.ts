@@ -53,6 +53,16 @@ export const LIVERAVE_DB_NAME = "liverave-engine-v1";
  */
 export const LIVERAVE_DB_VERSION = 3;
 export const BEHAVIOUR_CAP = 400;
+/**
+ * The bound on a single engine-DB open. An unblocked open settles in
+ * well under a second in every harness run; 5 s leaves generous
+ * headroom for a slow device while staying at a sixth of the
+ * session's 30 s preparing decision bound — so a blocked open (an
+ * older window/instance still holding the previous DB version)
+ * surfaces as a named failure inside the same start attempt instead
+ * of silently outliving it (the 0.1.20 field failure, arm G).
+ */
+export const LIVERAVE_DB_OPEN_TIMEOUT_MS = 5_000;
 
 export type EngineStoreName =
   "reads" | "pairSets" | "behaviour" | "trackHashes" | "outcomes" | "shelf";
@@ -216,6 +226,25 @@ class IndexedDbEngineStorageBackend implements EngineStorageBackend {
   private open(): Promise<IDBDatabase> {
     if (!this.dbPromise) {
       this.dbPromise = new Promise((resolve, reject) => {
+        let settled = false;
+        let timer: ReturnType<typeof setTimeout>;
+        const fail = (error: unknown) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          // Never cache a failed open: the next caller retries
+          // against whatever connections exist then — the blocker
+          // may be gone (e.g. the old window has since closed).
+          this.dbPromise = null;
+          reject(error instanceof Error ? error : new Error(String(error)));
+        };
+        timer = setTimeout(() => {
+          fail(
+            new Error(
+              `opening ${LIVERAVE_DB_NAME} timed out after ${LIVERAVE_DB_OPEN_TIMEOUT_MS} ms`,
+            ),
+          );
+        }, LIVERAVE_DB_OPEN_TIMEOUT_MS);
         const request = indexedDB.open(LIVERAVE_DB_NAME, LIVERAVE_DB_VERSION);
         request.onupgradeneeded = () => {
           const db = request.result;
@@ -238,8 +267,43 @@ class IndexedDbEngineStorageBackend implements EngineStorageBackend {
             db.createObjectStore("shelf");
           }
         };
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = () => reject(request.error);
+        request.onsuccess = () => {
+          if (settled) {
+            // The open already failed (blocked / timed out) and the
+            // caller moved on; do not leak the late handle.
+            try {
+              request.result.close();
+            } catch {
+              // Closing a late handle is best-effort.
+            }
+            return;
+          }
+          settled = true;
+          clearTimeout(timer);
+          const db = request.result;
+          // If a newer instance ever needs a version change, this
+          // connection releases the DB instead of blocking that
+          // open indefinitely — the stale-holder half of the arm-G
+          // field failure. The cached promise is dropped with it so
+          // later calls re-open rather than use a closed handle.
+          db.onversionchange = () => {
+            try {
+              db.close();
+            } catch {
+              // Best-effort release.
+            }
+            this.dbPromise = null;
+          };
+          resolve(db);
+        };
+        request.onerror = () => fail(request.error);
+        request.onblocked = () => {
+          fail(
+            new Error(
+              `opening ${LIVERAVE_DB_NAME} is blocked by another open connection`,
+            ),
+          );
+        };
       });
     }
     return this.dbPromise;

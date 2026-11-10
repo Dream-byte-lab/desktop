@@ -32,7 +32,10 @@
 
 import type { Track } from "@/shared/types";
 import { linerDb } from "@/shared/storage";
-import { resolvePlaybackStream } from "@/features/player/engine/streamResolver";
+import {
+  RESOLVE_TIMEOUT_MS,
+  resolvePlaybackStream,
+} from "@/features/player/engine/streamResolver";
 import { audioFingerprint, mixdownToMono } from "./analyse";
 import { recordTrackHash } from "./storage";
 
@@ -96,14 +99,33 @@ export async function fetchTrackBytes(
     // A cache failure must not lose the stream path.
   }
   try {
-    const stream = await resolvePlaybackStream(track);
+    // Mirror the player's own call exactly: progressive resolution,
+    // which carries the resolver's 25 s bound (withResolveTimeout).
+    // The DJ used to resolve non-progressively with no bound at
+    // all, so a streamed preparation could wait forever where plain
+    // playback would have failed, named, in 25 s.
+    const stream = await resolvePlaybackStream(track, undefined, {
+      progressive: true,
+    });
     if (stream.blob) {
       return await stream.blob.arrayBuffer();
     }
     if (stream.url) {
-      const response = await fetch(stream.url);
-      if (!response.ok) return null;
-      return await response.arrayBuffer();
+      // The whole-file fetch gets the same bound as the resolve:
+      // a streamed preparation either completes inside it or
+      // settles as a (named, upstream) resolution failure — it
+      // never hangs unbounded.
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), RESOLVE_TIMEOUT_MS);
+      try {
+        const response = await fetch(stream.url, {
+          signal: controller.signal,
+        });
+        if (!response.ok) return null;
+        return await response.arrayBuffer();
+      } finally {
+        clearTimeout(timer);
+      }
     }
   } catch {
     return null;
@@ -164,8 +186,21 @@ export function createTrackSource(deps: TrackSourceDeps): TrackSource {
       audioHash = "";
     }
     if (audioHash) {
+      // Fire-and-forget, deliberately NOT awaited: the bridge write
+      // is bookkeeping, never a precondition of the audio. Awaiting
+      // it put preparation at the mercy of the engine DB open, which
+      // blocks indefinitely when another window/instance holds an
+      // older DB version — in the 0.1.20 field failure that hung
+      // open stalled every preparation and the DJ start died
+      // silently at its 30 s bound. The behaviour/outcome/shelf
+      // adapters already treat their writes this way; a hung or
+      // failed bridge write now degrades attribution only.
       try {
-        await recordAttribution(track.id, audioHash);
+        void Promise.resolve(recordAttribution(track.id, audioHash)).catch(
+          () => {
+            // A bridge failure loses the attribution, never the audio.
+          },
+        );
       } catch {
         // A bridge failure loses the attribution, never the audio.
       }

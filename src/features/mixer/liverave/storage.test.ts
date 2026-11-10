@@ -1,8 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ANALYSIS_VERSION } from "./analyse";
 import type { TrackRead } from "./facts";
 import {
   BEHAVIOUR_CAP,
+  LIVERAVE_DB_OPEN_TIMEOUT_MS,
   MemoryEngineStorageBackend,
   createEngineStorage,
   pairStoreKey,
@@ -263,5 +264,120 @@ describe("storage — behaviour log", () => {
     expect(await storage.getPairSet("hash-a", "hash-b")).toBeNull();
     expect(await storage.listBehaviour()).toEqual([]);
     expect(await storage.listTrackHashes()).toEqual(new Map());
+  });
+});
+
+// ---------------------------------------------------------------------
+// The IndexedDB open itself (0.1.21): a blocked or hung open must
+// reject, named and bounded — never hang silently. Driven against a
+// stubbed global indexedDB; jsdom provides none of its own.
+// ---------------------------------------------------------------------
+
+class FakeResultRequest {
+  result: unknown = undefined;
+  error: unknown = null;
+  onerror: (() => void) | null = null;
+  onblocked: (() => void) | null = null;
+  onupgradeneeded: (() => void) | null = null;
+  private successHandler: (() => void) | null = null;
+  set onsuccess(handler: (() => void) | null) {
+    this.successHandler = handler;
+    if (handler) queueMicrotask(() => handler());
+  }
+  get onsuccess(): (() => void) | null {
+    return this.successHandler;
+  }
+}
+
+class FakeOpenRequest {
+  result: unknown = undefined;
+  error: unknown = null;
+  onsuccess: (() => void) | null = null;
+  onerror: (() => void) | null = null;
+  onblocked: (() => void) | null = null;
+  onupgradeneeded: (() => void) | null = null;
+}
+
+function makeFakeDb() {
+  const store = {
+    get: () => new FakeResultRequest(),
+    put: () => new FakeResultRequest(),
+    add: () => new FakeResultRequest(),
+    delete: () => new FakeResultRequest(),
+    clear: () => new FakeResultRequest(),
+    getAllKeys: () => new FakeResultRequest(),
+    getAll: () => new FakeResultRequest(),
+  };
+  const db = {
+    objectStoreNames: { contains: () => true },
+    createObjectStore: () => ({}),
+    close: vi.fn(),
+    onversionchange: null as (() => void) | null,
+    transaction: () => ({
+      objectStore: () => store,
+      set oncomplete(handler: (() => void) | null) {
+        if (handler) queueMicrotask(() => handler());
+      },
+      onerror: null,
+      onabort: null,
+    }),
+  };
+  return db;
+}
+
+describe("storage — the IndexedDB open is bounded and surfaces blocks", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  function stubIndexedDb(open: () => FakeOpenRequest) {
+    vi.stubGlobal("indexedDB", { open });
+  }
+
+  it("rejects, named, when another connection blocks the open — and a later call retries", async () => {
+    const requests: FakeOpenRequest[] = [];
+    stubIndexedDb(() => {
+      const request = new FakeOpenRequest();
+      requests.push(request);
+      return request;
+    });
+    const storage = createEngineStorage();
+    const attempt = storage.getTrackHash("track-x");
+    expect(requests).toHaveLength(1);
+    requests[0].onblocked?.();
+    await expect(attempt).rejects.toThrow(/blocked by another open connection/);
+    // The failed open is not cached: the next call opens afresh.
+    const retry = storage.getTrackHash("track-x");
+    expect(requests).toHaveLength(2);
+    requests[1].onblocked?.();
+    await expect(retry).rejects.toThrow(/blocked/);
+  });
+
+  it("rejects, named, when the open never settles inside the bound", async () => {
+    vi.useFakeTimers();
+    stubIndexedDb(() => new FakeOpenRequest());
+    const storage = createEngineStorage();
+    const attempt = storage.getTrackHash("track-x");
+    const expectation = expect(attempt).rejects.toThrow(
+      new RegExp(`timed out after ${LIVERAVE_DB_OPEN_TIMEOUT_MS} ms`),
+    );
+    await vi.advanceTimersByTimeAsync(LIVERAVE_DB_OPEN_TIMEOUT_MS);
+    await expectation;
+  });
+
+  it("an established connection closes itself on versionchange", async () => {
+    const db = makeFakeDb();
+    stubIndexedDb(() => {
+      const request = new FakeOpenRequest();
+      request.result = db;
+      queueMicrotask(() => request.onsuccess?.());
+      return request;
+    });
+    const storage = createEngineStorage();
+    await expect(storage.getTrackHash("track-x")).resolves.toBeNull();
+    expect(typeof db.onversionchange).toBe("function");
+    db.onversionchange?.();
+    expect(db.close).toHaveBeenCalledTimes(1);
   });
 });

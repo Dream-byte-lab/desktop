@@ -2,10 +2,21 @@
 // No network, no real decoding: the context and the byte fetcher
 // are the injected seams the module is built around.
 
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Track } from "@/shared/types";
+import { linerDb } from "@/shared/storage";
+import { resolvePlaybackStream } from "@/features/player/engine/streamResolver";
 import { audioFingerprint } from "./analyse";
-import { createTrackSource, samplesOfBuffer } from "./source";
+import { createTrackSource, fetchTrackBytes, samplesOfBuffer } from "./source";
+
+vi.mock("@/shared/storage", () => ({
+  linerDb: { getAudio: vi.fn(async () => null) },
+}));
+
+vi.mock("@/features/player/engine/streamResolver", () => ({
+  RESOLVE_TIMEOUT_MS: 25_000,
+  resolvePlaybackStream: vi.fn(),
+}));
 
 function track(id: string): Track {
   return {
@@ -145,6 +156,27 @@ describe("createTrackSource — the attribution bridge write", () => {
     expect(resolved?.audioHash).toBe(audioFingerprint(mono, 22_050));
   });
 
+  it("a bridge write that never settles never stalls the resolution (0.1.21)", async () => {
+    const mono = new Float32Array([0.25, -0.25]);
+    const source = createTrackSource({
+      getContext: () => fakeContext(fakeBuffer([mono])),
+      fetchBytes: vi.fn(async () => new ArrayBuffer(4)),
+      recordAttribution: vi.fn(() => new Promise<void>(() => {})),
+    });
+    const outcome = await Promise.race([
+      source
+        .resolveTrackAudio(track("bridge-hang"))
+        .then((resolved) => ({ settled: true as const, resolved })),
+      new Promise<{ settled: false }>((resolveRace) =>
+        setTimeout(() => resolveRace({ settled: false }), 500),
+      ),
+    ]);
+    expect(outcome.settled).toBe(true);
+    if (outcome.settled) {
+      expect(outcome.resolved?.audioHash).toBe(audioFingerprint(mono, 22_050));
+    }
+  });
+
   it("records nothing when the track never resolves", async () => {
     const recordAttribution = vi.fn(async () => {});
     const source = createTrackSource({
@@ -156,6 +188,73 @@ describe("createTrackSource — the attribution bridge write", () => {
       source.resolveTrackAudio(track("bridge-3")),
     ).resolves.toBeNull();
     expect(recordAttribution).not.toHaveBeenCalled();
+  });
+});
+
+describe("fetchTrackBytes — the streamed path mirrors the player (0.1.21)", () => {
+  const getAudio = vi.mocked(linerDb.getAudio);
+  const resolveStream = vi.mocked(resolvePlaybackStream);
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.clearAllMocks();
+    getAudio.mockResolvedValue(null);
+  });
+
+  it("serves a cached audio blob without touching the resolver", async () => {
+    const bytes = new Uint8Array([7, 8, 9]).buffer;
+    getAudio.mockResolvedValue({
+      blob: {
+        size: 3,
+        type: "audio/mpeg",
+        arrayBuffer: async () => bytes,
+      },
+    } as unknown as Awaited<ReturnType<typeof linerDb.getAudio>>);
+    await expect(fetchTrackBytes(track("cached-1"))).resolves.toBe(bytes);
+    expect(resolveStream).not.toHaveBeenCalled();
+  });
+
+  it("resolves progressively (the player's call) and fetches under an abort signal", async () => {
+    getAudio.mockResolvedValue(null);
+    const bytes = new Uint8Array([1, 2, 3, 4]).buffer;
+    resolveStream.mockResolvedValue({
+      url: "https://streams.invalid/track.audio",
+    } as unknown as Awaited<ReturnType<typeof resolvePlaybackStream>>);
+    const fetchStub = vi.fn(async () => ({
+      ok: true,
+      arrayBuffer: async () => bytes,
+    }));
+    vi.stubGlobal("fetch", fetchStub);
+    await expect(fetchTrackBytes(track("streamed-1"))).resolves.toBe(bytes);
+    expect(resolveStream).toHaveBeenCalledWith(track("streamed-1"), undefined, {
+      progressive: true,
+    });
+    expect(fetchStub).toHaveBeenCalledTimes(1);
+    const [calledUrl, calledInit] = fetchStub.mock.calls[0] as unknown as [
+      string,
+      { signal?: unknown },
+    ];
+    expect(calledUrl).toBe("https://streams.invalid/track.audio");
+    expect(calledInit.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("returns the stream blob directly when the resolver delivers one", async () => {
+    getAudio.mockResolvedValue(null);
+    const bytes = new Uint8Array([5, 6]).buffer;
+    resolveStream.mockResolvedValue({
+      blob: {
+        size: 2,
+        type: "audio/mpeg",
+        arrayBuffer: async () => bytes,
+      },
+    } as unknown as Awaited<ReturnType<typeof resolvePlaybackStream>>);
+    await expect(fetchTrackBytes(track("streamed-2"))).resolves.toBe(bytes);
+  });
+
+  it("settles null (never throws) when resolution is refused", async () => {
+    getAudio.mockResolvedValue(null);
+    resolveStream.mockRejectedValue(new Error("resolution refused"));
+    await expect(fetchTrackBytes(track("streamed-3"))).resolves.toBeNull();
   });
 });
 
