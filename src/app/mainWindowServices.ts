@@ -1,4 +1,5 @@
 import { initBackgroundStorageAnalytics } from "@/shared/utils/cacheManager";
+import { api, initEdgeKey } from "@/shared/api";
 import { initClientVisitorSession } from "@/shared/youtube";
 import { initBundleStampLog } from "@/shared/utils/bundleStampLog";
 import { initSavedTracks } from "@/features/library/saved";
@@ -10,4 +11,5 @@ export function initMainWindowServices() {
   initBundleStampLog();
   initOfflineMode();
   initSavedTracks();
+  initEdgeKey(() => api.fetchEdgeKey());
 }
